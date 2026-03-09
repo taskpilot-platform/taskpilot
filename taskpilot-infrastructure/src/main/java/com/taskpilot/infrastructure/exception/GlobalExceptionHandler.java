@@ -30,8 +30,10 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(NoHandlerFoundException.class)
     public ResponseEntity<ApiResponse<Void>> handleNotFoundException(NoHandlerFoundException ex) {
+        String path = ex.getHttpMethod() + " " + ex.getRequestURL();
+        String errorMessage = "API endpoint not found: " + path;
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(ApiResponse.error(HttpStatus.NOT_FOUND.value(), "API endpoint not found!"));
+                .body(ApiResponse.error(HttpStatus.NOT_FOUND.value(), errorMessage));
     }
 
     @ExceptionHandler(Exception.class)
