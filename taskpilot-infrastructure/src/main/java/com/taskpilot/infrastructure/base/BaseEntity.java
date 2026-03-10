@@ -8,6 +8,7 @@ import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.Instant;
+
 @Getter
 @Setter
 @MappedSuperclass
@@ -22,6 +23,6 @@ public abstract class BaseEntity {
     private Instant createdAt;
 
     @LastModifiedDate
-    @Column(name = "updated_at", insertable = false)
+    @Column(name = "updated_at")
     private Instant updatedAt;
 }
