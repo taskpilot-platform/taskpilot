@@ -1,0 +1,22 @@
+server:
+  port: 8080
+
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+
+  flyway:
+    fail-on-missing-locations: true
+
+management:
+  server:
+    port: 8081
+  endpoints:
+    web:
+      exposure:
+        include: "health"
+  endpoint:
+    health:
+      show-details: never

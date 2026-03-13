@@ -22,9 +22,8 @@ public class SecurityConfig {
             throws Exception {
         http.csrf(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/v1/auth/**").permitAll()
-                        .anyRequest().authenticated()
-                );
+                        .requestMatchers("/api/v1/auth/**", "/actuator/**").permitAll()
+                        .anyRequest().authenticated());
         return http.build();
     }
 }
