@@ -7,13 +7,16 @@ import org.springframework.boot.persistence.autoconfigure.EntityScan;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 
+import java.io.File;
+
 @EnableJpaAuditing
 @SpringBootApplication(scanBasePackages = "com.taskpilot")
 @EnableJpaRepositories(basePackages = "com.taskpilot")
 @EntityScan(basePackages = "com.taskpilot")
 public class TaskPilotApplication {
     public static void main(String[] args) {
-        Dotenv dotenv = Dotenv.configure().directory("..").ignoreIfMissing().load();
+        String envDir = new File(".env").exists() ? "./" : "../";
+        Dotenv dotenv = Dotenv.configure().directory(envDir).ignoreIfMissing().load();
         dotenv.entries().forEach(entry -> {
             System.setProperty(entry.getKey(), entry.getValue());
         });
