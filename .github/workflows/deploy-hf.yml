@@ -1,0 +1,46 @@
+name: Sync to Hugging Face Hub
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "temurin"
+          cache: "maven"
+
+      - name: Run Maven Tests
+        run: mvn clean test
+
+  sync-to-hub:
+    needs: build-and-test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for git info
+
+      - name: Push to Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+          git remote add hf https://<Leminion>:$HF_TOKEN@huggingface.co/spaces/<Leminion>/taskpilot
+
+          git push -f hf main
