@@ -36,10 +36,10 @@ public class AuthService {
 
     public AuthResponse login(LoginRequest request) {
         UserEntity user = userRepository.findByEmail(request.email())
-                .orElseThrow(() -> new RuntimeException("Invalid email or password"));
+                .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "Invalid email or password"));
 
         if (!passwordEncoder.matches(request.password(), user.getPassword())) {
-            throw new RuntimeException("Invalid email or password");
+            throw new BusinessException(HttpStatus.UNAUTHORIZED.value(), "Invalid email or password");
         }
         String token = jwtService.generateToken(user.getEmail(), user.getRole().name());
 
