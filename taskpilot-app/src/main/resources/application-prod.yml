@@ -11,12 +11,11 @@ spring:
     fail-on-missing-locations: true
 
 management:
-  server:
-    port: 8081
   endpoints:
     web:
       exposure:
-        include: "health"
+        include: "*"
   endpoint:
     health:
-      show-details: never
+      show-details: when-authorized
+      roles: ADMIN
