@@ -3,6 +3,7 @@ package com.taskpilot.users.auth.controller;
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import com.taskpilot.users.auth.dto.AuthResponse;
 import com.taskpilot.users.auth.dto.LoginRequest;
+import com.taskpilot.users.auth.dto.RefreshTokenRequest;
 import com.taskpilot.users.auth.dto.RegisterRequest;
 import com.taskpilot.users.auth.service.AuthService;
 import jakarta.validation.Valid;
@@ -32,6 +33,24 @@ public class AuthController {
         return ApiResponse.success(HttpStatus.OK.value(),
                 "User logged in successfully!",
                 authResponse
+        );
+    }
+
+    @PostMapping("/refresh")
+    public ApiResponse<AuthResponse> refreshToken(@Valid @RequestBody RefreshTokenRequest request) {
+        AuthResponse authResponse = authService.refreshToken(request);
+        return ApiResponse.success(HttpStatus.OK.value(),
+                "Token refreshed successfully!",
+                authResponse
+        );
+    }
+
+    @PostMapping("/logout")
+    public ApiResponse<Void> logout(@Valid @RequestBody RefreshTokenRequest request) {
+        authService.logout(request);
+        return ApiResponse.success(HttpStatus.OK.value(),
+                "User logged out successfully!",
+                null
         );
     }
 }
