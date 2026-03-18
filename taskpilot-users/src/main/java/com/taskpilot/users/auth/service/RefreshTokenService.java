@@ -42,7 +42,8 @@ public class RefreshTokenService {
     public RefreshTokenEntity verifyExpiration(RefreshTokenEntity token) {
         if (token.isExpired()) {
             refreshTokenRepository.delete(token);
-            throw new BusinessException(HttpStatus.UNAUTHORIZED.value(), "Refresh token was expired. Please make a new signin request");
+            throw new BusinessException(HttpStatus.UNAUTHORIZED.value(),
+                    "Refresh token was expired. Please make a new signin request");
         }
         return token;
     }
@@ -50,5 +51,10 @@ public class RefreshTokenService {
     @Transactional
     public void deleteByUser(UserEntity user) {
         refreshTokenRepository.deleteByUser(user);
+    }
+
+    @Transactional
+    public void delete(RefreshTokenEntity token) {
+        refreshTokenRepository.delete(token);
     }
 }
