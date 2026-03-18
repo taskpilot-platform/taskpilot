@@ -3,24 +3,41 @@ package com.taskpilot.users.auth.service;
 import com.taskpilot.infrastructure.config.security.JwtService;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.users.auth.dto.AuthResponse;
+import com.taskpilot.users.auth.dto.ForgotPasswordRequest;
 import com.taskpilot.users.auth.dto.LoginRequest;
 import com.taskpilot.users.auth.dto.RefreshTokenRequest;
 import com.taskpilot.users.auth.dto.RegisterRequest;
+import com.taskpilot.users.auth.dto.ResetPasswordRequest;
+import com.taskpilot.users.auth.service.email.EmailService;
+import com.taskpilot.users.entity.PasswordResetTokenEntity;
 import com.taskpilot.users.entity.RefreshTokenEntity;
 import com.taskpilot.users.entity.UserEntity;
+import com.taskpilot.users.repository.PasswordResetTokenRepository;
 import com.taskpilot.users.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.Instant;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class AuthService {
+    @Value("${application.security.password-reset.expiration:900000}")
+    private long passwordResetExpirationMs;
+
     private final UserRepository userRepository;
+    private final PasswordResetTokenRepository passwordResetTokenRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final RefreshTokenService refreshTokenService;
+    private final EmailService emailService;
 
     public void register(RegisterRequest request) {
         if (userRepository.existsByEmail(request.email())) {
@@ -58,11 +75,61 @@ public class AuthService {
                     String token = jwtService.generateToken(user.getEmail(), user.getRole().name());
                     return new AuthResponse(token, request.refreshToken(), "Bearer", jwtService.getJwtExpiration());
                 })
-                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Refresh token is not in database!"));
+                .orElseThrow(
+                        () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Refresh token is not in database!"));
     }
 
     public void logout(RefreshTokenRequest request) {
-        refreshTokenService.findByToken(request.refreshToken())
-                .ifPresent(token -> refreshTokenService.deleteByUser(token.getUser()));
+        RefreshTokenEntity refreshToken = refreshTokenService.findByToken(request.refreshToken())
+                .orElse(null);
+
+        if (refreshToken == null) {
+            log.debug("Logout called with non-existing refresh token");
+            return;
+        }
+
+        refreshTokenService.delete(refreshToken);
+    }
+
+    @Transactional
+    public void forgotPassword(ForgotPasswordRequest request) {
+        userRepository.findByEmail(request.email())
+                .ifPresent(this::issuePasswordResetTokenAndNotify);
+    }
+
+    @Transactional
+    public void resetPassword(ResetPasswordRequest request) {
+        PasswordResetTokenEntity tokenEntity = passwordResetTokenRepository.findByToken(request.token())
+                .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST.value(), "Invalid reset token"));
+
+        if (tokenEntity.isUsed() || tokenEntity.isExpired()) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Reset token is invalid or expired");
+        }
+
+        UserEntity user = tokenEntity.getUser();
+        user.setPassword(passwordEncoder.encode(request.newPassword()));
+
+        tokenEntity.setUsed(true);
+
+        refreshTokenService.deleteByUser(user);
+    }
+
+    private void issuePasswordResetTokenAndNotify(UserEntity user) {
+        passwordResetTokenRepository.deleteByUser(user);
+
+        PasswordResetTokenEntity resetToken = PasswordResetTokenEntity.builder()
+                .user(user)
+                .token(UUID.randomUUID().toString())
+                .expiryDate(Instant.now().plusMillis(passwordResetExpirationMs))
+                .used(false)
+                .build();
+
+        PasswordResetTokenEntity savedToken = passwordResetTokenRepository.save(resetToken);
+
+        try {
+            emailService.sendPasswordResetEmail(user.getEmail(), savedToken.getToken());
+        } catch (Exception ex) {
+            log.error("Failed to send password reset email to {}", user.getEmail(), ex);
+        }
     }
 }
