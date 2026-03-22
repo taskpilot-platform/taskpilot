@@ -12,7 +12,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
-@Tag(name = "User Profile", description = "APIs for managing user profile")
+@Tag(name = "2. User Profile", description = "APIs for managing user profile")
 @RestController
 @RequestMapping("/api/v1/users/me")
 @RequiredArgsConstructor
