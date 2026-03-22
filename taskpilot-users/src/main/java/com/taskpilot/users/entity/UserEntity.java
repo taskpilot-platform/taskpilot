@@ -23,12 +23,28 @@ public class UserEntity extends BaseEntity {
     @Column(name = "full_name", nullable = false)
     private String fullName;
 
+    @Column(name = "avatar_url", columnDefinition = "TEXT")
+    private String avatarUrl;
+
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
     @Enumerated(EnumType.STRING)
     private UserRole role;
 
+    @Builder.Default
+    @JdbcTypeCode(SqlTypes.NAMED_ENUM)
+    @Enumerated(EnumType.STRING)
+    private UserStatus status = UserStatus.AVAILABLE;
+
+    @Builder.Default
+    @Column(name = "current_workload")
+    private Integer currentWorkload = 0;
+
     public enum UserRole {
         ADMIN, USER
+    }
+
+    public enum UserStatus {
+        AVAILABLE, BUSY, OOO
     }
 
 }
