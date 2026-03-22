@@ -33,3 +33,8 @@ application:
       frontend-reset-url: ${PASSWORD_RESET_FRONTEND_URL:http://localhost:3000/reset-password}
   mail:
     from: ${MAIL_FROM:no-reply@taskpilot.local}
+
+springdoc:
+  swagger-ui:
+    tags-sorter: alpha
+    operations-sorter: method

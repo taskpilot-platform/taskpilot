@@ -53,7 +53,8 @@ public class ProfileService {
 
     public void deleteAccount() {
         UserEntity user = getCurrentUser();
-        user.setStatus(UserEntity.UserStatus.OOO); // Soft delete via OOO status
+        user.setStatus(UserEntity.UserStatus.DEACTIVATED);
+        user.setEmail(user.getEmail() + "_deleted_" + System.currentTimeMillis());
         userRepository.save(user);
 
         // Revoke refresh token to force logout

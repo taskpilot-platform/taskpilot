@@ -44,8 +44,7 @@ public class UserEntity extends BaseEntity {
     }
 
     public enum UserStatus {
-        AVAILABLE, BUSY, OOO
+        AVAILABLE, OOO, BUSY, DEACTIVATED
     }
 
 }
-
