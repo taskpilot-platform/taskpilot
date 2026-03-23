@@ -9,18 +9,17 @@ COPY taskpilot-ai/pom.xml taskpilot-ai/
 COPY taskpilot-projects/pom.xml taskpilot-projects/
 COPY taskpilot-app/pom.xml taskpilot-app/
 
-# Download dependencies (this step will be cached unless pom.xml changes)
-RUN mvn dependency:go-offline -B
+RUN mvn dependency:resolve -B 
 
-# Copy the entire source code
 COPY taskpilot-infrastructure/src taskpilot-infrastructure/src
 COPY taskpilot-users/src taskpilot-users/src
 COPY taskpilot-ai/src taskpilot-ai/src
 COPY taskpilot-projects/src taskpilot-projects/src
 COPY taskpilot-app/src taskpilot-app/src
 
-RUN mvn clean package -DskipTests
+RUN mvn clean package -DskipTests -B 
 
+# Stage 2: Runtime
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 
@@ -34,4 +33,4 @@ COPY --chown=appuser:appgroup --from=build /app/taskpilot-app/target/*-SNAPSHOT.
 
 EXPOSE 7860
 
-ENTRYPOINT ["java", "-jar", "app.jar"]
+ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75.0", "-jar", "app.jar"]
