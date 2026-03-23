@@ -17,4 +17,10 @@ public class SkillEntity {
 
     @Column(unique = true, nullable = false)
     private String name;
+
+    private String description;
+
+    @Builder.Default
+    @Column(name = "is_active")
+    private Boolean isActive = true;
 }
