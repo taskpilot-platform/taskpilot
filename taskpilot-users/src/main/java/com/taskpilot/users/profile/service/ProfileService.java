@@ -2,9 +2,9 @@ package com.taskpilot.users.profile.service;
 
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.users.entity.UserEntity;
-import com.taskpilot.users.profile.dto.ChangePasswordRequestDTO;
-import com.taskpilot.users.profile.dto.UpdateProfileRequestDTO;
-import com.taskpilot.users.profile.dto.UserProfileResponseDTO;
+import com.taskpilot.users.profile.dto.ChangePasswordRequest;
+import com.taskpilot.users.profile.dto.UpdateProfileRequest;
+import com.taskpilot.users.profile.dto.UserProfileResponse;
 import com.taskpilot.users.repository.UserRepository;
 import com.taskpilot.users.auth.service.RefreshTokenService;
 import lombok.RequiredArgsConstructor;
@@ -27,12 +27,12 @@ public class ProfileService {
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
     }
 
-    public UserProfileResponseDTO getProfile() {
+    public UserProfileResponse getProfile() {
         UserEntity user = getCurrentUser();
-        return UserProfileResponseDTO.fromEntity(user);
+        return UserProfileResponse.fromEntity(user);
     }
 
-    public UserProfileResponseDTO updateProfile(UpdateProfileRequestDTO request) {
+    public UserProfileResponse updateProfile(UpdateProfileRequest request) {
         UserEntity user = getCurrentUser();
         user.setFullName(request.fullName());
         if (request.avatarUrl() != null) {
@@ -42,7 +42,7 @@ public class ProfileService {
         return getProfile();
     }
 
-    public void changePassword(ChangePasswordRequestDTO request) {
+    public void changePassword(ChangePasswordRequest request) {
         UserEntity user = getCurrentUser();
         if (!passwordEncoder.matches(request.oldPassword(), user.getPassword())) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Old password does not match");

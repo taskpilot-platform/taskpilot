@@ -2,7 +2,7 @@ package com.taskpilot.users.profile.dto;
 
 import jakarta.validation.constraints.NotBlank;
 
-public record ChangePasswordRequestDTO(
+public record ChangePasswordRequest(
         @NotBlank(message = "Old password cannot be blank") 
         String oldPassword,
 

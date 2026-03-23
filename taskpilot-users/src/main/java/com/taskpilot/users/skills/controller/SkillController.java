@@ -1,9 +1,9 @@
 package com.taskpilot.users.skills.controller;
 
 import com.taskpilot.infrastructure.dto.ApiResponse;
-import com.taskpilot.users.skills.dto.AddSkillRequestDTO;
-import com.taskpilot.users.skills.dto.UpdateSkillRequestDTO;
-import com.taskpilot.users.skills.dto.UserSkillResponseDTO;
+import com.taskpilot.users.skills.dto.AddSkillRequest;
+import com.taskpilot.users.skills.dto.UpdateSkillRequest;
+import com.taskpilot.users.skills.dto.UserSkillResponse;
 import com.taskpilot.users.skills.service.SkillService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -24,13 +24,13 @@ public class SkillController {
 
     @Operation(summary = "View List", description = "Get all skills of the current user.")
     @GetMapping
-    public ApiResponse<List<UserSkillResponseDTO>> getMySkills() {
+    public ApiResponse<List<UserSkillResponse>> getMySkills() {
         return ApiResponse.success(HttpStatus.OK.value(), "Skills retrieved successfully", skillService.getMySkills());
     }
 
     @Operation(summary = "View Detail", description = "Get detail of a specific skill for the current user.")
     @GetMapping("/{skill_id}")
-    public ApiResponse<UserSkillResponseDTO> getSkillDetail(@PathVariable("skill_id")
+    public ApiResponse<UserSkillResponse> getSkillDetail(@PathVariable("skill_id")
     Long skillId) {
         return ApiResponse.success(HttpStatus.OK.value(), "Skill retrieved successfully",
                 skillService.getSkillDetail(skillId));
@@ -40,7 +40,7 @@ public class SkillController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<Void> addSkill(@Valid @RequestBody
-    AddSkillRequestDTO request) {
+    AddSkillRequest request) {
         skillService.addSkill(request);
         return ApiResponse.success(HttpStatus.CREATED.value(), "Skill added successfully", null);
     }
@@ -49,7 +49,7 @@ public class SkillController {
     @PutMapping("/{skill_id}")
     public ApiResponse<Void> updateSkill(@PathVariable("skill_id")
     Long skillId, @Valid @RequestBody
-    UpdateSkillRequestDTO request) {
+    UpdateSkillRequest request) {
         skillService.updateSkill(skillId, request);
         return ApiResponse.success(HttpStatus.OK.value(), "Skill updated successfully", null);
     }
