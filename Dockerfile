@@ -9,7 +9,7 @@ COPY taskpilot-ai/pom.xml taskpilot-ai/
 COPY taskpilot-projects/pom.xml taskpilot-projects/
 COPY taskpilot-app/pom.xml taskpilot-app/
 
-RUN mvn dependency:resolve -B 
+RUN mvn dependency:resolve -B || true
 
 COPY taskpilot-infrastructure/src taskpilot-infrastructure/src
 COPY taskpilot-users/src taskpilot-users/src
