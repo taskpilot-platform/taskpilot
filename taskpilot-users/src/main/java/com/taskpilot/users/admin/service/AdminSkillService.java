@@ -7,7 +7,9 @@ import com.taskpilot.users.entity.SkillEntity;
 import com.taskpilot.users.repository.SkillRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,19 +21,37 @@ public class AdminSkillService {
     private final SkillRepository skillRepository;
 
     public Page<AdminSkillResponse> getAllSkills(String keyword, Pageable pageable) {
+        Pageable safePageable = buildSafePageable(pageable, "id", "name", "description", "isActive");
+
         Page<SkillEntity> skills;
         if (keyword != null && !keyword.isBlank()) {
-            skills = skillRepository.findByNameContainingIgnoreCase(keyword, pageable);
+            skills = skillRepository.findByNameContainingIgnoreCase(keyword, safePageable);
         } else {
-            skills = skillRepository.findAll(pageable);
+            skills = skillRepository.findAll(safePageable);
         }
         return skills.map(AdminSkillResponse::fromEntity);
+    }
+
+    private Pageable buildSafePageable(Pageable pageable, String... allowedFields) {
+        if (!pageable.getSort().isSorted()) {
+            return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), Sort.by(Sort.Direction.ASC, "id"));
+        }
+
+        java.util.Set<String> allowed = java.util.Set.of(allowedFields);
+        for (Sort.Order order : pageable.getSort()) {
+            if (!allowed.contains(order.getProperty())) {
+                return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
+                        Sort.by(Sort.Direction.ASC, "id"));
+            }
+        }
+        return pageable;
     }
 
     @Transactional
     public AdminSkillResponse createSkill(AdminSkillRequest request) {
         if (skillRepository.existsByNameIgnoreCase(request.name())) {
-            throw new BusinessException(HttpStatus.CONFLICT.value(), "Skill with name '" + request.name() + "' already exists");
+            throw new BusinessException(HttpStatus.CONFLICT.value(),
+                    "Skill with name '" + request.name() + "' already exists");
         }
 
         SkillEntity skill = SkillEntity.builder()
@@ -52,7 +72,8 @@ public class AdminSkillService {
         skillRepository.findByName(request.name())
                 .ifPresent(existing -> {
                     if (!existing.getId().equals(id)) {
-                        throw new BusinessException(HttpStatus.CONFLICT.value(), "Skill with name '" + request.name() + "' already exists");
+                        throw new BusinessException(HttpStatus.CONFLICT.value(),
+                                "Skill with name '" + request.name() + "' already exists");
                     }
                 });
 
