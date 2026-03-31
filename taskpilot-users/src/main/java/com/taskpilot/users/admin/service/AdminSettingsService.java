@@ -30,6 +30,8 @@ public class AdminSettingsService {
         SystemSettingEntity setting = systemSettingRepository.findById(request.keyName())
                 .orElseGet(() -> SystemSettingEntity.builder()
                         .keyName(request.keyName())
+                        .valueJson(request.valueJson())
+                        .description(request.description())
                         .build());
 
         setting.setValueJson(request.valueJson());
@@ -37,7 +39,7 @@ public class AdminSettingsService {
             setting.setDescription(request.description());
         }
 
-        systemSettingRepository.save(setting);
-        return SystemSettingResponse.fromEntity(setting);
+        SystemSettingEntity saved = systemSettingRepository.save(setting);
+        return SystemSettingResponse.fromEntity(saved);
     }
 }
