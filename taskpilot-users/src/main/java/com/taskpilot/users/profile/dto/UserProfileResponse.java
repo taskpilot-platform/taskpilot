@@ -5,7 +5,7 @@ import com.taskpilot.users.entity.UserEntity.UserRole;
 import com.taskpilot.users.entity.UserEntity.UserStatus;
 import java.time.Instant;
 
-public record UserProfileResponseDTO(
+public record UserProfileResponse(
         Long id,
         String email,
         String fullName,
@@ -16,8 +16,8 @@ public record UserProfileResponseDTO(
         Instant createdAt,
         Instant updatedAt
 ) {
-    public static UserProfileResponseDTO fromEntity(UserEntity entity) {
-        return new UserProfileResponseDTO(
+    public static UserProfileResponse fromEntity(UserEntity entity) {
+        return new UserProfileResponse(
                 entity.getId(),
                 entity.getEmail(),
                 entity.getFullName(),

@@ -2,13 +2,13 @@ package com.taskpilot.users.skills.dto;
 
 import com.taskpilot.users.entity.UserSkillEntity;
 
-public record UserSkillResponseDTO(
+public record UserSkillResponse(
         Long skillId,
         String name,
         Integer level
 ) {
-    public static UserSkillResponseDTO fromEntity(UserSkillEntity userSkill) {
-        return new UserSkillResponseDTO(
+    public static UserSkillResponse fromEntity(UserSkillEntity userSkill) {
+        return new UserSkillResponse(
                 userSkill.getSkill().getId(),
                 userSkill.getSkill().getName(),
                 userSkill.getLevel()

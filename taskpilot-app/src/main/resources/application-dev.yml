@@ -17,6 +17,11 @@ spring:
   flyway:
     fail-on-missing-locations: false
 
+logging:
+  level:
+    org.springframework.security: DEBUG
+    com.taskpilot: DEBUG
+
 management:
   endpoints:
     web:

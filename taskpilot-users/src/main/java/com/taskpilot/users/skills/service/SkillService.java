@@ -8,9 +8,9 @@ import com.taskpilot.users.entity.UserSkillId;
 import com.taskpilot.users.repository.SkillRepository;
 import com.taskpilot.users.repository.UserRepository;
 import com.taskpilot.users.repository.UserSkillRepository;
-import com.taskpilot.users.skills.dto.AddSkillRequestDTO;
-import com.taskpilot.users.skills.dto.UpdateSkillRequestDTO;
-import com.taskpilot.users.skills.dto.UserSkillResponseDTO;
+import com.taskpilot.users.skills.dto.AddSkillRequest;
+import com.taskpilot.users.skills.dto.UpdateSkillRequest;
+import com.taskpilot.users.skills.dto.UserSkillResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -34,23 +34,23 @@ public class SkillService {
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
     }
 
-    public List<UserSkillResponseDTO> getMySkills() {
+    public List<UserSkillResponse> getMySkills() {
         UserEntity user = getCurrentUser();
         return userSkillRepository.findByIdUserId(user.getId()).stream()
-                .map(UserSkillResponseDTO::fromEntity)
+                .map(UserSkillResponse::fromEntity)
                 .collect(Collectors.toList());
     }
 
-    public UserSkillResponseDTO getSkillDetail(Long skillId) {
+    public UserSkillResponse getSkillDetail(Long skillId) {
         UserEntity user = getCurrentUser();
         UserSkillId id = new UserSkillId(user.getId(), skillId);
         UserSkillEntity us = userSkillRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Skill not found for user"));
-        return UserSkillResponseDTO.fromEntity(us);
+        return UserSkillResponse.fromEntity(us);
     }
 
     @Transactional
-    public void addSkill(AddSkillRequestDTO request) {
+    public void addSkill(AddSkillRequest request) {
         UserEntity user = getCurrentUser();
 
         SkillEntity skill = skillRepository.findByName(request.name())
@@ -75,7 +75,7 @@ public class SkillService {
     }
 
     @Transactional
-    public void updateSkill(Long skillId, UpdateSkillRequestDTO request) {
+    public void updateSkill(Long skillId, UpdateSkillRequest request) {
         UserEntity user = getCurrentUser();
         UserSkillId id = new UserSkillId(user.getId(), skillId);
         UserSkillEntity us = userSkillRepository.findById(id)

@@ -1,9 +1,9 @@
 package com.taskpilot.users.profile.controller;
 
 import com.taskpilot.infrastructure.dto.ApiResponse;
-import com.taskpilot.users.profile.dto.ChangePasswordRequestDTO;
-import com.taskpilot.users.profile.dto.UpdateProfileRequestDTO;
-import com.taskpilot.users.profile.dto.UserProfileResponseDTO;
+import com.taskpilot.users.profile.dto.ChangePasswordRequest;
+import com.taskpilot.users.profile.dto.UpdateProfileRequest;
+import com.taskpilot.users.profile.dto.UserProfileResponse;
 import com.taskpilot.users.profile.service.ProfileService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -22,15 +22,15 @@ public class ProfileController {
 
     @Operation(summary = "View Profile", description = "Get current user profile information.")
     @GetMapping
-    public ApiResponse<UserProfileResponseDTO> getProfile() {
+    public ApiResponse<UserProfileResponse> getProfile() {
         return ApiResponse.success(HttpStatus.OK.value(), "Profile retrieved successfully",
                 profileService.getProfile());
     }
 
     @Operation(summary = "Update Info", description = "Update user full name and avatar.")
     @PutMapping
-    public ApiResponse<UserProfileResponseDTO> updateProfile(@Valid @RequestBody
-    UpdateProfileRequestDTO request) {
+    public ApiResponse<UserProfileResponse> updateProfile(@Valid @RequestBody
+    UpdateProfileRequest request) {
         return ApiResponse.success(HttpStatus.OK.value(), "Profile updated successfully",
                 profileService.updateProfile(request));
     }
@@ -38,7 +38,7 @@ public class ProfileController {
     @Operation(summary = "Change Password", description = "Change the password for the current user.")
     @PutMapping("/password")
     public ApiResponse<Void> changePassword(@Valid @RequestBody
-    ChangePasswordRequestDTO request) {
+    ChangePasswordRequest request) {
         profileService.changePassword(request);
         return ApiResponse.success(HttpStatus.OK.value(), "Password changed successfully", null);
     }
