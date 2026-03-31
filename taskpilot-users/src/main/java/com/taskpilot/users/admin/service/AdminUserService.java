@@ -8,7 +8,9 @@ import com.taskpilot.users.entity.UserEntity;
 import com.taskpilot.users.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -27,8 +29,25 @@ public class AdminUserService {
     private static final int DEFAULT_PASSWORD_LENGTH = 12;
 
     public Page<AdminUserResponse> getAllUsers(Pageable pageable) {
-        return userRepository.findAll(pageable)
+        Pageable safePageable = buildSafePageable(pageable, "id", "email", "fullName", "role", "status",
+                "currentWorkload", "createdAt", "updatedAt");
+        return userRepository.findAll(safePageable)
                 .map(AdminUserResponse::fromEntity);
+    }
+
+    private Pageable buildSafePageable(Pageable pageable, String... allowedFields) {
+        if (!pageable.getSort().isSorted()) {
+            return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), Sort.by(Sort.Direction.ASC, "id"));
+        }
+
+        java.util.Set<String> allowed = java.util.Set.of(allowedFields);
+        for (Sort.Order order : pageable.getSort()) {
+            if (!allowed.contains(order.getProperty())) {
+                return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
+                        Sort.by(Sort.Direction.ASC, "id"));
+            }
+        }
+        return pageable;
     }
 
     @Transactional
