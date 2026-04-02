@@ -14,6 +14,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Set;
+
 @Service
 @RequiredArgsConstructor
 public class AdminSkillService {
@@ -43,7 +45,7 @@ public class AdminSkillService {
             return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), Sort.by(Sort.Direction.ASC, "id"));
         }
 
-        java.util.Set<String> allowed = java.util.Set.of(allowedFields);
+        Set<String> allowed = Set.of(allowedFields);
         for (Sort.Order order : pageable.getSort()) {
             if (!allowed.contains(order.getProperty())) {
                 return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),

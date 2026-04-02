@@ -23,6 +23,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Set;
 
@@ -44,7 +45,7 @@ public class ProjectServiceImpl {
     public Page<MyProjectResponse> getMyProjects(String email, Pageable pageable) {
         Long userId = getCurrentUserIdByEmail(email);
         Pageable safePageable = buildSafePageable(pageable, "projectId", "userId", "joinedAt", "role");
-        
+
         return projectMemberRepository.findProjectsByUserId(userId, safePageable)
                 .map(member -> new MyProjectResponse(
                         member.getProject().getId(),
@@ -54,8 +55,7 @@ public class ProjectServiceImpl {
                         member.getRole(),
                         member.getProject().getStartDate(),
                         member.getProject().getEndDate(),
-                member.getJoinedAt() != null ? member.getJoinedAt() : member.getProject().getCreatedAt()
-                ));
+                        member.getJoinedAt() != null ? member.getJoinedAt() : member.getProject().getCreatedAt()));
     }
 
     /**
@@ -84,8 +84,8 @@ public class ProjectServiceImpl {
         ProjectEntity project = ProjectEntity.builder()
                 .name(request.name())
                 .description(request.description())
-                .heuristicMode(request.heuristicMode() != null ? 
-                        request.heuristicMode() : ProjectEntity.HeuristicMode.BALANCED)
+                .heuristicMode(request.heuristicMode() != null ? request.heuristicMode()
+                        : ProjectEntity.HeuristicMode.BALANCED)
                 .startDate(request.startDate())
                 .endDate(request.endDate())
                 .build();
@@ -94,10 +94,10 @@ public class ProjectServiceImpl {
 
         // Add creator as PROJECT_MANAGER
         ProjectMemberEntity member = ProjectMemberEntity.builder()
-            .projectId(project.getId())
+                .projectId(project.getId())
                 .project(project)
                 .userId(userId)
-            .role(MemberRole.MANAGER)
+                .role(MemberRole.MANAGER)
                 .build();
         projectMemberRepository.save(member);
 
@@ -115,8 +115,7 @@ public class ProjectServiceImpl {
 
         validateProjectDateRange(
                 request.startDate() != null ? request.startDate() : project.getStartDate(),
-                request.endDate() != null ? request.endDate() : project.getEndDate()
-        );
+                request.endDate() != null ? request.endDate() : project.getEndDate());
 
         if (request.name() != null && !request.name().isBlank()) {
             if (!request.name().equals(project.getName()) && projectRepository.existsByName(request.name())) {
@@ -162,7 +161,7 @@ public class ProjectServiceImpl {
 
         // New member
         ProjectMemberEntity member = ProjectMemberEntity.builder()
-            .projectId(project.getId())
+                .projectId(project.getId())
                 .project(project)
                 .userId(userId)
                 .role(MemberRole.MEMBER)
@@ -173,15 +172,15 @@ public class ProjectServiceImpl {
     }
 
     /**
-    * Leave a project (remove membership record)
+     * Leave a project (remove membership record)
      */
     @Transactional
     public void leaveProject(Long projectId, String email) {
         Long userId = getCurrentUserIdByEmail(email);
         findProjectById(projectId);
-        
+
         ProjectMemberEntity member = projectMemberRepository.findByProjectIdAndUserId(projectId, userId)
-                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), 
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(),
                         "You are not a member of this project"));
 
         // Check if user is the only MANAGER
@@ -190,7 +189,7 @@ public class ProjectServiceImpl {
                     .filter(m -> m.getRole() == MemberRole.MANAGER)
                     .count();
             if (pmCount == 1) {
-                throw new BusinessException(HttpStatus.BAD_REQUEST.value(), 
+                throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
                         "You are the only Project Manager. Please assign another PM before leaving.");
             }
         }
@@ -244,18 +243,18 @@ public class ProjectServiceImpl {
 
     private void validateUserIsMember(Long projectId, Long userId) {
         if (!projectMemberRepository.existsByProjectIdAndUserId(projectId, userId)) {
-            throw new BusinessException(HttpStatus.FORBIDDEN.value(), 
+            throw new BusinessException(HttpStatus.FORBIDDEN.value(),
                     "You are not a member of this project");
         }
     }
 
     private void validateUserIsProjectManager(Long projectId, Long userId) {
         ProjectMemberEntity member = projectMemberRepository.findByProjectIdAndUserId(projectId, userId)
-                .orElseThrow(() -> new BusinessException(HttpStatus.FORBIDDEN.value(), 
+                .orElseThrow(() -> new BusinessException(HttpStatus.FORBIDDEN.value(),
                         "You are not a member of this project"));
 
         if (member.getRole() != MemberRole.MANAGER) {
-            throw new BusinessException(HttpStatus.FORBIDDEN.value(), 
+            throw new BusinessException(HttpStatus.FORBIDDEN.value(),
                     "Only Project Manager can perform this action");
         }
     }
@@ -280,7 +279,7 @@ public class ProjectServiceImpl {
         }
     }
 
-    private void validateProjectDateRange(java.time.LocalDate startDate, java.time.LocalDate endDate) {
+    private void validateProjectDateRange(LocalDate startDate, LocalDate endDate) {
         if (startDate != null && endDate != null && endDate.isBefore(startDate)) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
                     "Project end date must be greater than or equal to start date");
@@ -289,7 +288,7 @@ public class ProjectServiceImpl {
 
     private Pageable buildSafePageable(Pageable pageable, String... allowedFields) {
         if (!pageable.getSort().isSorted()) {
-            return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), 
+            return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
                     Sort.by(Sort.Direction.DESC, "joinedAt"));
         }
 

@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
@@ -46,7 +47,7 @@ public class AdminUserService {
             return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), Sort.by(Sort.Direction.ASC, "id"));
         }
 
-        java.util.Set<String> allowed = java.util.Set.of(allowedFields);
+        Set<String> allowed = Set.of(allowedFields);
         for (Sort.Order order : pageable.getSort()) {
             if (!allowed.contains(order.getProperty())) {
                 return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
