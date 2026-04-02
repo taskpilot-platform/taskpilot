@@ -17,7 +17,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
-@Tag(name = "1. Authentication", description = "APIs for user authentication, registration, and token management")
+@Tag(name = "01. Authentication", description = "APIs for user authentication, registration, and token management")
 @RestController
 @RequestMapping("/api/v1/auth")
 @RequiredArgsConstructor

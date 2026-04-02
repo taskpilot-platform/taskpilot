@@ -12,7 +12,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
-@Tag(name = "2. User Profile", description = "APIs for managing user profile")
+@Tag(name = "02. User Profile", description = "APIs for managing user profile")
 @RestController
 @RequestMapping("/api/v1/users/me")
 @RequiredArgsConstructor
@@ -29,16 +29,14 @@ public class ProfileController {
 
     @Operation(summary = "Update Info", description = "Update user full name and avatar.")
     @PutMapping
-    public ApiResponse<UserProfileResponse> updateProfile(@Valid @RequestBody
-    UpdateProfileRequest request) {
+    public ApiResponse<UserProfileResponse> updateProfile(@Valid @RequestBody UpdateProfileRequest request) {
         return ApiResponse.success(HttpStatus.OK.value(), "Profile updated successfully",
                 profileService.updateProfile(request));
     }
 
     @Operation(summary = "Change Password", description = "Change the password for the current user.")
     @PutMapping("/password")
-    public ApiResponse<Void> changePassword(@Valid @RequestBody
-    ChangePasswordRequest request) {
+    public ApiResponse<Void> changePassword(@Valid @RequestBody ChangePasswordRequest request) {
         profileService.changePassword(request);
         return ApiResponse.success(HttpStatus.OK.value(), "Password changed successfully", null);
     }

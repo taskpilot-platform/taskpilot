@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
-@Tag(name = "3. Personal Skills", description = "APIs for managing user skills")
+@Tag(name = "03. Personal Skills", description = "APIs for managing user skills")
 @RestController
 @RequestMapping("/api/v1/users/me/skills")
 @RequiredArgsConstructor
@@ -30,8 +30,7 @@ public class SkillController {
 
     @Operation(summary = "View Detail", description = "Get detail of a specific skill for the current user.")
     @GetMapping("/{skill_id}")
-    public ApiResponse<UserSkillResponse> getSkillDetail(@PathVariable("skill_id")
-    Long skillId) {
+    public ApiResponse<UserSkillResponse> getSkillDetail(@PathVariable("skill_id") Long skillId) {
         return ApiResponse.success(HttpStatus.OK.value(), "Skill retrieved successfully",
                 skillService.getSkillDetail(skillId));
     }
@@ -39,25 +38,22 @@ public class SkillController {
     @Operation(summary = "Add Skill", description = "Add a new skill or existing skill for the current user.")
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public ApiResponse<Void> addSkill(@Valid @RequestBody
-    AddSkillRequest request) {
+    public ApiResponse<Void> addSkill(@Valid @RequestBody AddSkillRequest request) {
         skillService.addSkill(request);
         return ApiResponse.success(HttpStatus.CREATED.value(), "Skill added successfully", null);
     }
 
     @Operation(summary = "Update Skill", description = "Update the level of an existing user skill.")
     @PutMapping("/{skill_id}")
-    public ApiResponse<Void> updateSkill(@PathVariable("skill_id")
-    Long skillId, @Valid @RequestBody
-    UpdateSkillRequest request) {
+    public ApiResponse<Void> updateSkill(@PathVariable("skill_id") Long skillId,
+            @Valid @RequestBody UpdateSkillRequest request) {
         skillService.updateSkill(skillId, request);
         return ApiResponse.success(HttpStatus.OK.value(), "Skill updated successfully", null);
     }
 
     @Operation(summary = "Delete Skill", description = "Remove a skill from the current user.")
     @DeleteMapping("/{skill_id}")
-    public ApiResponse<Void> deleteSkill(@PathVariable("skill_id")
-    Long skillId) {
+    public ApiResponse<Void> deleteSkill(@PathVariable("skill_id") Long skillId) {
         skillService.deleteSkill(skillId);
         return ApiResponse.success(HttpStatus.OK.value(), "Skill deleted successfully", null);
     }

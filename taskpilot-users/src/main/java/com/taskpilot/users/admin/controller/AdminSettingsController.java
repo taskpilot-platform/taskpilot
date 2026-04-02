@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
-@Tag(name = "4. Admin - System Settings", description = "APIs for managing system configuration (Admin only)")
+@Tag(name = "04. Admin - System Settings", description = "APIs for managing system configuration (Admin only)")
 @RestController
 @RequestMapping("/api/v1/admin/settings")
 @RequiredArgsConstructor
@@ -36,8 +36,7 @@ public class AdminSettingsController {
 
     @Operation(summary = "Update Config", description = "Create or update a system setting.")
     @PutMapping
-    public ApiResponse<SystemSettingResponse> updateSetting(@Valid @RequestBody
-    SystemSettingUpdateRequest request) {
+    public ApiResponse<SystemSettingResponse> updateSetting(@Valid @RequestBody SystemSettingUpdateRequest request) {
         return ApiResponse.success(HttpStatus.OK.value(), "Setting updated successfully",
                 adminSettingsService.updateSetting(request));
     }

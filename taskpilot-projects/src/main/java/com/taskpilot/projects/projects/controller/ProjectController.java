@@ -22,85 +22,85 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
-@Tag(name = "1. Projects", description = "APIs for managing projects")
+@Tag(name = "07. Projects", description = "APIs for managing projects")
 @RestController
 @RequestMapping("/api/v1/projects")
 @RequiredArgsConstructor
 public class ProjectController {
 
-    private final ProjectServiceImpl projectService;
+        private final ProjectServiceImpl projectService;
 
-    @Operation(summary = "Get my projects", description = "Get list of projects the current user has joined")
-    @GetMapping("/my")
-    public ApiResponse<Page<MyProjectResponse>> getMyProjects(
+        @Operation(summary = "Get my projects", description = "Get list of projects the current user has joined")
+        @GetMapping("/my")
+        public ApiResponse<Page<MyProjectResponse>> getMyProjects(
                         Authentication authentication,
-            @PageableDefault(size = 10) Pageable pageable) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Projects retrieved successfully",
+                        @PageableDefault(size = 10) Pageable pageable) {
+                return ApiResponse.success(HttpStatus.OK.value(), "Projects retrieved successfully",
                                 projectService.getMyProjects(authentication.getName(), pageable));
-    }
+        }
 
-    @Operation(summary = "Get project detail", description = "Get detailed information of a specific project")
-    @GetMapping("/{projectId}")
-    public ApiResponse<ProjectResponse> getProjectDetail(
-            @PathVariable Long projectId,
+        @Operation(summary = "Get project detail", description = "Get detailed information of a specific project")
+        @GetMapping("/{projectId}")
+        public ApiResponse<ProjectResponse> getProjectDetail(
+                        @PathVariable Long projectId,
                         Authentication authentication) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Project retrieved successfully",
+                return ApiResponse.success(HttpStatus.OK.value(), "Project retrieved successfully",
                                 projectService.getProjectDetail(projectId, authentication.getName()));
-    }
+        }
 
-    @Operation(summary = "Create project", description = "Create a new project. Creator becomes Project Manager.")
-    @PostMapping
-    @ResponseStatus(HttpStatus.CREATED)
-    public ApiResponse<ProjectResponse> createProject(
-            @Valid @RequestBody CreateProjectRequest request,
+        @Operation(summary = "Create project", description = "Create a new project. Creator becomes Project Manager.")
+        @PostMapping
+        @ResponseStatus(HttpStatus.CREATED)
+        public ApiResponse<ProjectResponse> createProject(
+                        @Valid @RequestBody CreateProjectRequest request,
                         Authentication authentication) {
-        return ApiResponse.success(HttpStatus.CREATED.value(), "Project created successfully",
+                return ApiResponse.success(HttpStatus.CREATED.value(), "Project created successfully",
                                 projectService.createProject(request, authentication.getName()));
-    }
+        }
 
-    @Operation(summary = "Update project", description = "Update project information. Only Project Manager can update.")
-    @PutMapping("/{projectId}")
-    public ApiResponse<ProjectResponse> updateProject(
-            @PathVariable Long projectId,
-            @Valid @RequestBody UpdateProjectRequest request,
+        @Operation(summary = "Update project", description = "Update project information. Only Project Manager can update.")
+        @PutMapping("/{projectId}")
+        public ApiResponse<ProjectResponse> updateProject(
+                        @PathVariable Long projectId,
+                        @Valid @RequestBody UpdateProjectRequest request,
                         Authentication authentication) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Project updated successfully",
+                return ApiResponse.success(HttpStatus.OK.value(), "Project updated successfully",
                                 projectService.updateProject(projectId, request, authentication.getName()));
-    }
+        }
 
-    @Operation(summary = "Join project", description = "Join a project using invitation code")
-    @PostMapping("/join")
-    public ApiResponse<ProjectMemberResponse> joinProject(
-            @Valid @RequestBody JoinProjectRequest request,
-            Authentication authentication) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Joined project successfully",
-                projectService.joinProject(request, authentication.getName()));
-    }
-
-    @Operation(summary = "Leave project", description = "Leave a project (remove membership)")
-    @DeleteMapping("/{projectId}/leave")
-    public ApiResponse<Void> leaveProject(
-            @PathVariable Long projectId,
-            Authentication authentication) {
-        projectService.leaveProject(projectId, authentication.getName());
-        return ApiResponse.success(HttpStatus.OK.value(), "Left project successfully", null);
-    }
-
-    @Operation(summary = "Get project summary", description = "Get project statistics and summary report")
-    @GetMapping("/{projectId}/summary")
-    public ApiResponse<ProjectSummaryResponse> getProjectSummary(
-            @PathVariable Long projectId,
+        @Operation(summary = "Join project", description = "Join a project using invitation code")
+        @PostMapping("/join")
+        public ApiResponse<ProjectMemberResponse> joinProject(
+                        @Valid @RequestBody JoinProjectRequest request,
                         Authentication authentication) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Project summary retrieved successfully",
+                return ApiResponse.success(HttpStatus.OK.value(), "Joined project successfully",
+                                projectService.joinProject(request, authentication.getName()));
+        }
+
+        @Operation(summary = "Leave project", description = "Leave a project (remove membership)")
+        @DeleteMapping("/{projectId}/leave")
+        public ApiResponse<Void> leaveProject(
+                        @PathVariable Long projectId,
+                        Authentication authentication) {
+                projectService.leaveProject(projectId, authentication.getName());
+                return ApiResponse.success(HttpStatus.OK.value(), "Left project successfully", null);
+        }
+
+        @Operation(summary = "Get project summary", description = "Get project statistics and summary report")
+        @GetMapping("/{projectId}/summary")
+        public ApiResponse<ProjectSummaryResponse> getProjectSummary(
+                        @PathVariable Long projectId,
+                        Authentication authentication) {
+                return ApiResponse.success(HttpStatus.OK.value(), "Project summary retrieved successfully",
                                 projectService.getProjectSummary(projectId, authentication.getName()));
-    }
+        }
 
-    @Operation(summary = "Get project members", description = "Get all active members of a project")
-    @GetMapping("/{projectId}/members")
-    public ApiResponse<List<ProjectMemberResponse>> getProjectMembers(
-            @PathVariable Long projectId,
+        @Operation(summary = "Get project members", description = "Get all active members of a project")
+        @GetMapping("/{projectId}/members")
+        public ApiResponse<List<ProjectMemberResponse>> getProjectMembers(
+                        @PathVariable Long projectId,
                         Authentication authentication) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Project members retrieved successfully",
+                return ApiResponse.success(HttpStatus.OK.value(), "Project members retrieved successfully",
                                 projectService.getProjectMembers(projectId, authentication.getName()));
-    }
+        }
 }
