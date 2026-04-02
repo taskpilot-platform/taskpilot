@@ -4,8 +4,8 @@ setlocal
 set "SCRIPT_DIR=%~dp0"
 pushd "%SCRIPT_DIR%"
 
-echo [ra] Installing latest workspace modules for taskpilot-app...
-call "%SCRIPT_DIR%mvnw.cmd" -f "%SCRIPT_DIR%pom.xml" -pl taskpilot-app -am -DskipTests install
+echo [ra] Cleaning and installing latest workspace modules for taskpilot-app...
+call "%SCRIPT_DIR%mvnw.cmd" -f "%SCRIPT_DIR%pom.xml" -pl taskpilot-app -am -DskipTests clean install
 if errorlevel 1 (
 	set "EXIT_CODE=%ERRORLEVEL%"
 	popd
