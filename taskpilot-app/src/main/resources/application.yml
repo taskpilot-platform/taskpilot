@@ -23,11 +23,22 @@ spring:
         jdbc:
           "[time_zone]": UTC
 
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: ${REDIS_TIMEOUT:2s}
+      ssl:
+        enabled: ${REDIS_SSL:false}
+
 application:
   security:
     jwt:
       secret-key: ${JWT_SECRET}
       expiration: ${JWT_EXPIRATION}
+      blocklist:
+        provider: ${JWT_BLOCKLIST_PROVIDER:memory}
     password-reset:
       expiration: ${PASSWORD_RESET_EXPIRATION:900000}
       frontend-reset-url: ${PASSWORD_RESET_FRONTEND_URL:http://localhost:3000/reset-password}

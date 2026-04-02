@@ -26,6 +26,12 @@ spring:
   flyway:
     fail-on-missing-locations: true
 
+application:
+  security:
+    jwt:
+      blocklist:
+        provider: ${JWT_BLOCKLIST_PROVIDER:redis}
+
 management:
   endpoints:
     web:
