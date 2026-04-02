@@ -3,14 +3,17 @@ package com.taskpilot.infrastructure.config.security;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.SecretKey;
+import java.time.Instant;
 import java.util.Date;
 import java.util.function.Function;
 
 @Service
+@RequiredArgsConstructor
 public class JwtService {
 
     @Value("${application.security.jwt.secret-key}")
@@ -18,6 +21,8 @@ public class JwtService {
 
     @Value("${application.security.jwt.expiration}")
     private long jwtExpiration;
+
+    private final JwtTokenBlocklistService tokenBlocklistService;
 
     public long getJwtExpiration() {
         return jwtExpiration;
@@ -61,9 +66,21 @@ public class JwtService {
 
     public boolean isTokenValid(String token) {
         try {
-            return !extractClaim(token, Claims::getExpiration).before(new Date());
+            Date expiration = extractClaim(token, Claims::getExpiration);
+            if (expiration.before(new Date())) {
+                return false;
+            }
+            return !tokenBlocklistService.isRevoked(token);
         } catch (Exception e) {
             return false;
+        }
+    }
+
+    public void revokeToken(String token) {
+        try {
+            Date expiration = extractClaim(token, Claims::getExpiration);
+            tokenBlocklistService.revoke(token, Instant.ofEpochMilli(expiration.getTime()));
+        } catch (Exception ignored) {
         }
     }
 }

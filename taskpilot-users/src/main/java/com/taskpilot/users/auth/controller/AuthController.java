@@ -57,8 +57,10 @@ public class AuthController {
 
     @Operation(summary = "User Logout", description = "Revoke the user's refresh token and clear the authentication session. Requires Bearer Token.")
     @PostMapping("/logout")
-    public ApiResponse<Void> logout(@Valid @RequestBody RefreshTokenRequest request) {
-        authService.logout(request);
+    public ApiResponse<Void> logout(
+            @Valid @RequestBody RefreshTokenRequest request,
+            @RequestHeader(value = "Authorization", required = false) String authorizationHeader) {
+        authService.logout(request, authorizationHeader);
         return ApiResponse.success(HttpStatus.OK.value(),
                 "User logged out successfully!",
                 null);

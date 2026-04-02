@@ -79,7 +79,12 @@ public class AuthService {
                         () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Refresh token is not in database!"));
     }
 
-    public void logout(RefreshTokenRequest request) {
+    public void logout(RefreshTokenRequest request, String authorizationHeader) {
+        String accessToken = extractBearerToken(authorizationHeader);
+        if (accessToken != null) {
+            jwtService.revokeToken(accessToken);
+        }
+
         RefreshTokenEntity refreshToken = refreshTokenService.findByToken(request.refreshToken())
                 .orElse(null);
 
@@ -89,6 +94,13 @@ public class AuthService {
         }
 
         refreshTokenService.delete(refreshToken);
+    }
+
+    private String extractBearerToken(String authorizationHeader) {
+        if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer ")) {
+            return null;
+        }
+        return authorizationHeader.substring(7);
     }
 
     @Transactional

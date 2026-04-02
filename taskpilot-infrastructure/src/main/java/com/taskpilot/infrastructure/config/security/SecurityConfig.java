@@ -1,6 +1,8 @@
 package com.taskpilot.infrastructure.config.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
@@ -28,7 +30,9 @@ import java.util.List;
 @EnableMethodSecurity
 public class SecurityConfig {
         private final JwtAuthenticationFilter jwtAuthFilter;
-        private static final ObjectMapper objectMapper = new ObjectMapper();
+        private static final ObjectMapper objectMapper = new ObjectMapper()
+                        .registerModule(new JavaTimeModule())
+                        .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
         @Bean
         public PasswordEncoder passwordEncoder() {

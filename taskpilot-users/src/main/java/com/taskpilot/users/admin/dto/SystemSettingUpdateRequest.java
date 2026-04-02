@@ -4,11 +4,9 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
 public record SystemSettingUpdateRequest(
-        @NotBlank(message = "Key name cannot be blank")
-        String keyName,
+                @NotBlank(message = "Key name cannot be blank") String keyName,
 
-        @NotNull(message = "Value cannot be null")
-        Object valueJson,
+                @NotNull(message = "Value cannot be null") Object valueJson,
 
-        String description) {
+                String description) {
 }
