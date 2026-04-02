@@ -32,6 +32,13 @@ public class AdminSkillController {
                 adminSkillService.getAllSkills(keyword, pageable));
     }
 
+    @Operation(summary = "View Skill Detail", description = "Get detailed information of a system skill by id.")
+    @GetMapping("/{id}")
+    public ApiResponse<AdminSkillResponse> getSkillDetail(@PathVariable Long id) {
+        return ApiResponse.success(HttpStatus.OK.value(), "Skill retrieved successfully",
+                adminSkillService.getSkillDetail(id));
+    }
+
     @Operation(summary = "Add System Skill", description = "Add a new skill to the system directory.")
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)

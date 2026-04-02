@@ -32,6 +32,13 @@ public class AdminUserController {
                 adminUserService.getAllUsers(pageable));
     }
 
+    @Operation(summary = "View User Detail", description = "Get detailed information of a system user by id.")
+    @GetMapping("/{id}")
+    public ApiResponse<AdminUserResponse> getUserDetail(@PathVariable Long id) {
+        return ApiResponse.success(HttpStatus.OK.value(), "User retrieved successfully",
+                adminUserService.getUserDetail(id));
+    }
+
     @Operation(summary = "Add System User", description = "Create a new user with auto-generated password.")
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)

@@ -35,6 +35,12 @@ public class AdminUserService {
                 .map(AdminUserResponse::fromEntity);
     }
 
+    public AdminUserResponse getUserDetail(Long id) {
+        UserEntity user = userRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
+        return AdminUserResponse.fromEntity(user);
+    }
+
     private Pageable buildSafePageable(Pageable pageable, String... allowedFields) {
         if (!pageable.getSort().isSorted()) {
             return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), Sort.by(Sort.Direction.ASC, "id"));

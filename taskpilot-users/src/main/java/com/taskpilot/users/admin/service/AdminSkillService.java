@@ -32,6 +32,12 @@ public class AdminSkillService {
         return skills.map(AdminSkillResponse::fromEntity);
     }
 
+    public AdminSkillResponse getSkillDetail(Long id) {
+        SkillEntity skill = skillRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Skill not found"));
+        return AdminSkillResponse.fromEntity(skill);
+    }
+
     private Pageable buildSafePageable(Pageable pageable, String... allowedFields) {
         if (!pageable.getSort().isSorted()) {
             return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), Sort.by(Sort.Direction.ASC, "id"));
