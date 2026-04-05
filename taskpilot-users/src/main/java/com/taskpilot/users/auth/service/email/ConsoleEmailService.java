@@ -10,7 +10,7 @@ import org.springframework.stereotype.Service;
 @Slf4j
 public class ConsoleEmailService implements EmailService {
 
-   @Value("${application.security.password-reset.frontend-reset-url:http://localhost:3000/reset-password}")
+   @Value("${application.security.password-reset.frontend-reset-url:http://localhost:5173/reset-password}")
    private String frontendResetUrl;
 
    @Override
