@@ -19,6 +19,14 @@ public interface ProjectMemberRepository extends JpaRepository<ProjectMemberEnti
     @Query("SELECT pm FROM ProjectMemberEntity pm WHERE pm.userId = :userId")
     Page<ProjectMemberEntity> findProjectsByUserId(@Param("userId") Long userId, Pageable pageable);
 
+    @Query("SELECT pm FROM ProjectMemberEntity pm WHERE pm.userId = :userId " +
+            "AND (:keyword IS NULL OR LOWER(pm.project.name) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
+            "OR LOWER(pm.project.description) LIKE LOWER(CONCAT('%', :keyword, '%')))")
+    Page<ProjectMemberEntity> findProjectsByUserIdAndKeyword(
+            @Param("userId") Long userId,
+            @Param("keyword") String keyword,
+            Pageable pageable);
+
     @Query("SELECT pm FROM ProjectMemberEntity pm WHERE pm.projectId = :projectId")
     List<ProjectMemberEntity> findMembers(@Param("projectId") Long projectId);
 

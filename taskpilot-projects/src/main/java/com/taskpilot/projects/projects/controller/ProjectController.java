@@ -34,9 +34,10 @@ public class ProjectController {
         @GetMapping("/my")
         public ApiResponse<Page<MyProjectResponse>> getMyProjects(
                         Authentication authentication,
+                        @RequestParam(required = false) String keyword,
                         @PageableDefault(size = 10) Pageable pageable) {
                 return ApiResponse.success(HttpStatus.OK.value(), "Projects retrieved successfully",
-                                projectService.getMyProjects(authentication.getName(), pageable));
+                                projectService.getMyProjects(authentication.getName(), keyword, pageable));
         }
 
         @Operation(summary = "Get project detail", description = "Get detailed information of a specific project")

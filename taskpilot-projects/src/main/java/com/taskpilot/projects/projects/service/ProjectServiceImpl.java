@@ -42,12 +42,18 @@ public class ProjectServiceImpl {
     /**
      * Get all projects the user has joined
      */
-    public Page<MyProjectResponse> getMyProjects(String email, Pageable pageable) {
+    public Page<MyProjectResponse> getMyProjects(String email, String keyword, Pageable pageable) {
         Long userId = getCurrentUserIdByEmail(email);
         Pageable safePageable = buildSafePageable(pageable, "projectId", "userId", "joinedAt", "role");
 
-        return projectMemberRepository.findProjectsByUserId(userId, safePageable)
-                .map(member -> new MyProjectResponse(
+        Page<ProjectMemberEntity> page;
+        if (keyword != null && !keyword.isBlank()) {
+            page = projectMemberRepository.findProjectsByUserIdAndKeyword(userId, keyword.trim(), safePageable);
+        } else {
+            page = projectMemberRepository.findProjectsByUserId(userId, safePageable);
+        }
+
+        return page.map(member -> new MyProjectResponse(
                         member.getProject().getId(),
                         member.getProject().getName(),
                         member.getProject().getDescription(),
