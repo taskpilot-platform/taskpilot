@@ -19,8 +19,14 @@ public class AdminSettingsService {
 
     private final SystemSettingRepository systemSettingRepository;
 
-    public List<SystemSettingResponse> getAllSettings() {
-        return systemSettingRepository.findAll().stream()
+    public List<SystemSettingResponse> getAllSettings(String keyword) {
+        List<SystemSettingEntity> settings;
+        if (keyword != null && !keyword.isBlank()) {
+            settings = systemSettingRepository.findByKeyword(keyword.trim());
+        } else {
+            settings = systemSettingRepository.findAll();
+        }
+        return settings.stream()
                 .map(SystemSettingResponse::fromEntity)
                 .collect(Collectors.toList());
     }

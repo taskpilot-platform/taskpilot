@@ -24,9 +24,10 @@ public class AdminSettingsController {
 
     @Operation(summary = "View Config", description = "Get all system settings (AI heuristic weights, etc.)")
     @GetMapping
-    public ApiResponse<List<SystemSettingResponse>> getAllSettings() {
+    public ApiResponse<List<SystemSettingResponse>> getAllSettings(
+            @RequestParam(required = false) String keyword) {
         try {
-            List<SystemSettingResponse> settings = adminSettingsService.getAllSettings();
+            List<SystemSettingResponse> settings = adminSettingsService.getAllSettings(keyword);
             return ApiResponse.success(HttpStatus.OK.value(), "Settings retrieved successfully", settings);
         } catch (Exception e) {
             e.printStackTrace();
