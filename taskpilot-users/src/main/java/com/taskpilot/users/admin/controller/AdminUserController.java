@@ -24,12 +24,13 @@ public class AdminUserController {
 
     private final AdminUserService adminUserService;
 
-    @Operation(summary = "View Global User List", description = "Get all users with pagination.")
+    @Operation(summary = "View Global User List", description = "Get all users with pagination and optional keyword search.")
     @GetMapping
     public ApiResponse<Page<AdminUserResponse>> getAllUsers(
+            @RequestParam(required = false) String keyword,
             @PageableDefault(size = 10) Pageable pageable) {
         return ApiResponse.success(HttpStatus.OK.value(), "Users retrieved successfully",
-                adminUserService.getAllUsers(pageable));
+                adminUserService.getAllUsers(keyword, pageable));
     }
 
     @Operation(summary = "View User Detail", description = "Get detailed information of a system user by id.")
