@@ -41,7 +41,7 @@ application:
         provider: ${JWT_BLOCKLIST_PROVIDER:memory}
     password-reset:
       expiration: ${PASSWORD_RESET_EXPIRATION:900000}
-      frontend-reset-url: ${PASSWORD_RESET_FRONTEND_URL:http://localhost:3000/reset-password}
+      frontend-reset-url: ${PASSWORD_RESET_FRONTEND_URL:http://localhost:5173/reset-password}
   mail:
     from: ${MAIL_FROM:no-reply@taskpilot.local}
 

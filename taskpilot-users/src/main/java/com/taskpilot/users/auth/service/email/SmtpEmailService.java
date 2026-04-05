@@ -17,7 +17,7 @@ public class SmtpEmailService implements EmailService {
 
    private final JavaMailSender mailSender;
 
-   @Value("${application.security.password-reset.frontend-reset-url:http://localhost:3000/reset-password}")
+   @Value("${application.security.password-reset.frontend-reset-url:http://localhost:5173/reset-password}")
    private String frontendResetUrl;
 
    @Value("${application.mail.from:no-reply@taskpilot.local}")
