@@ -6,6 +6,12 @@ spring:
   output:
     ansi:
       enabled: always
+  task:
+    execution:
+      pool:
+        core-size: 4
+        max-size: 16
+        queue-capacity: 100
   flyway:
     enabled: true
     baseline-on-migrate: true
@@ -49,3 +55,22 @@ springdoc:
   swagger-ui:
     tags-sorter: alpha
     operations-sorter: method
+
+ai:
+  gemini:
+    api-key: ${GEMINI_API_KEY}
+    model-name: ${AI_GEMINI_MODEL:gemini-2.5-flash}
+
+  github:
+    token: ${GITHUB_TOKEN}
+    fallback-model: ${AI_GITHUB_FALLBACK_MODEL:gpt-4o}
+    reasoning-model: ${AI_GITHUB_REASONING_MODEL:DeepSeek-R1}
+
+  model:
+    timeout-seconds: ${AI_MODEL_TIMEOUT:60}
+
+  routing:
+    token-threshold: ${AI_TOKEN_THRESHOLD:6000}
+
+  chat:
+    history-size: ${AI_HISTORY_SIZE:20}
