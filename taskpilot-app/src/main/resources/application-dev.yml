@@ -30,3 +30,6 @@ management:
   endpoint:
     health:
       show-details: always
+
+  cors:
+  allowed-origins: http://localhost:*
