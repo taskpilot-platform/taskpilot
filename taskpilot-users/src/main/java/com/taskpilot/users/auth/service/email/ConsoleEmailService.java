@@ -14,8 +14,9 @@ public class ConsoleEmailService implements EmailService {
    private String frontendResetUrl;
 
    @Override
-   public void sendPasswordResetEmail(String recipientEmail, String resetToken) {
+   public void sendPasswordResetEmail(String recipientEmail, String resetToken, long expirationMs) {
       String resetLink = frontendResetUrl + "?token=" + resetToken;
-      log.info("Password reset link for {}: {}", recipientEmail, resetLink);
+      String expirationText = PasswordResetExpirationFormatter.toMinutesText(expirationMs);
+      log.info("Password reset link for {} (expires in {}): {}", recipientEmail, expirationText, resetLink);
    }
 }
