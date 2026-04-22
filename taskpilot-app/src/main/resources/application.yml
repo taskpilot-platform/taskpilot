@@ -2,7 +2,7 @@ spring:
   application:
     name: taskpilot-app
   profiles:
-    active: dev
+    active: prod
   output:
     ansi:
       enabled: always
@@ -48,6 +48,11 @@ application:
     password-reset:
       expiration: ${PASSWORD_RESET_EXPIRATION:900000}
       frontend-reset-url: ${PASSWORD_RESET_FRONTEND_URL:http://localhost:5173/reset-password}
+      rate-limit:
+        provider: ${PASSWORD_RESET_RATE_LIMIT_PROVIDER:${JWT_BLOCKLIST_PROVIDER:memory}}
+        cooldown-seconds: ${PASSWORD_RESET_COOLDOWN_SECONDS:60}
+        max-per-email-per-hour: ${PASSWORD_RESET_MAX_PER_EMAIL_PER_HOUR:5}
+        max-per-ip-per-hour: ${PASSWORD_RESET_MAX_PER_IP_PER_HOUR:20}
   mail:
     from: ${MAIL_FROM:no-reply@taskpilot.local}
 

@@ -36,11 +36,10 @@ public class AdminUserService {
     private final EmailService emailService;
     private final PasswordResetTokenRepository passwordResetTokenRepository;
 
-    @Value("${application.security.password-reset.expiration-ms:3600000}")
+    @Value("${application.security.password-reset.expiration:900000}")
     private long passwordResetExpirationMs;
 
-    private static final String DEFAULT_PASSWORD_CHARS =
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@#$!";
+    private static final String DEFAULT_PASSWORD_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@#$!";
     private static final int DEFAULT_PASSWORD_LENGTH = 12;
 
     public Page<AdminUserResponse> getAllUsers(String keyword, Pageable pageable) {
@@ -139,15 +138,15 @@ public class AdminUserService {
     private void issuePasswordResetAndNotify(UserEntity user) {
         passwordResetTokenRepository.deleteByUser(user);
 
-        PasswordResetTokenEntity resetToken =
-                PasswordResetTokenEntity.builder().user(user).token(UUID.randomUUID().toString())
-                        .expiryDate(Instant.now().plusMillis(passwordResetExpirationMs)).used(false)
-                        .build();
+        PasswordResetTokenEntity resetToken = PasswordResetTokenEntity.builder().user(user)
+                .token(UUID.randomUUID().toString())
+                .expiryDate(Instant.now().plusMillis(passwordResetExpirationMs)).used(false)
+                .build();
 
         PasswordResetTokenEntity savedToken = passwordResetTokenRepository.save(resetToken);
 
         try {
-            emailService.sendPasswordResetEmail(user.getEmail(), savedToken.getToken());
+            emailService.sendPasswordResetEmail(user.getEmail(), savedToken.getToken(), passwordResetExpirationMs);
         } catch (Exception ex) {
             log.error("Failed to send password reset email to {}", user.getEmail(), ex);
         }

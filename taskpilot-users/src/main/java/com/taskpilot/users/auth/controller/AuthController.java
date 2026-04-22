@@ -12,6 +12,7 @@ import com.taskpilot.users.auth.service.AuthService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -69,8 +70,9 @@ public class AuthController {
     @Operation(summary = "Forgot Password", description = "Send a password reset link to the user's registered email.")
     @SecurityRequirements()
     @PostMapping("/forgot-password")
-    public ApiResponse<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
-        authService.forgotPassword(request);
+    public ApiResponse<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request,
+            HttpServletRequest httpRequest) {
+        authService.forgotPassword(request, extractClientIp(httpRequest));
         return ApiResponse.success(HttpStatus.OK.value(),
                 "If the email exists, a password reset link has been sent.",
                 null);
@@ -84,5 +86,19 @@ public class AuthController {
         return ApiResponse.success(HttpStatus.OK.value(),
                 "Password reset successfully! Please log in again.",
                 null);
+    }
+
+    private String extractClientIp(HttpServletRequest request) {
+        String forwardedFor = request.getHeader("X-Forwarded-For");
+        if (forwardedFor != null && !forwardedFor.isBlank()) {
+            return forwardedFor.split(",")[0].trim();
+        }
+
+        String realIp = request.getHeader("X-Real-IP");
+        if (realIp != null && !realIp.isBlank()) {
+            return realIp.trim();
+        }
+
+        return request.getRemoteAddr();
     }
 }
