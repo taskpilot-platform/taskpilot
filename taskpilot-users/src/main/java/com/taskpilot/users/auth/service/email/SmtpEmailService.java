@@ -24,10 +24,17 @@ public class SmtpEmailService implements EmailService {
    private String fromEmail;
 
    @Override
-   public void sendPasswordResetEmail(String recipientEmail, String resetToken) {
+   public void sendPasswordResetEmail(String recipientEmail, String resetToken, long expirationMs) {
       String resetLink = frontendResetUrl + "?token=" + resetToken;
-      String plainText = "Use the link below to reset your password:\n" + resetLink;
-      String htmlContent = buildResetPasswordEmailHtml(resetLink);
+      String expirationText = PasswordResetExpirationFormatter.toMinutesText(expirationMs);
+      String plainText = """
+            Use the link below to reset your password:
+            %s
+
+            This link expires in %s.
+            If you request another reset email, only the latest link remains valid.
+            """.formatted(resetLink, expirationText);
+      String htmlContent = buildResetPasswordEmailHtml(resetLink, expirationText);
 
       try {
          MimeMessage mimeMessage = mailSender.createMimeMessage();
@@ -48,7 +55,7 @@ public class SmtpEmailService implements EmailService {
       }
    }
 
-   private String buildResetPasswordEmailHtml(String resetLink) {
+   private String buildResetPasswordEmailHtml(String resetLink, String expirationText) {
       return """
             <!doctype html>
             <html>
@@ -72,6 +79,7 @@ public class SmtpEmailService implements EmailService {
                               <td style="padding:28px;">
                                  <p style="margin:0 0 14px;font-size:15px;line-height:1.6;">We received a request to reset your password.</p>
                                  <p style="margin:0 0 20px;font-size:15px;line-height:1.6;">Click the button below to continue:</p>
+                                 <p style="margin:0 0 20px;font-size:14px;line-height:1.6;color:#374151;">This link expires in <strong>%s</strong>.</p>
                                  <p style="margin:0 0 24px;">
                                     <a href="%s"
                                        style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;padding:12px 20px;border-radius:10px;">Reset Password</a>
@@ -82,7 +90,8 @@ public class SmtpEmailService implements EmailService {
                            </tr>
                            <tr>
                               <td style="padding:18px 28px;background:#f8fafc;border-top:1px solid #e5e7eb;">
-                                 <p style="margin:0;font-size:12px;line-height:1.6;color:#6b7280;">If you did not request this, you can safely ignore this email.</p>
+                                 <p style="margin:0 0 6px;font-size:12px;line-height:1.6;color:#6b7280;">If you did not request this, you can safely ignore this email.</p>
+                                 <p style="margin:0;font-size:12px;line-height:1.6;color:#6b7280;">If you request another reset email, previous links become invalid.</p>
                               </td>
                            </tr>
                         </table>
@@ -92,6 +101,6 @@ public class SmtpEmailService implements EmailService {
             </body>
             </html>
             """
-            .formatted(resetLink, resetLink, resetLink);
+            .formatted(expirationText, resetLink, resetLink, resetLink);
    }
 }

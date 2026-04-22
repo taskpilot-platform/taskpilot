@@ -38,6 +38,7 @@ public class AuthService {
     private final JwtService jwtService;
     private final RefreshTokenService refreshTokenService;
     private final EmailService emailService;
+    private final PasswordResetThrottleService passwordResetThrottleService;
 
     public void register(RegisterRequest request) {
         if (userRepository.existsByEmail(request.email())) {
@@ -104,18 +105,21 @@ public class AuthService {
     }
 
     @Transactional
-    public void forgotPassword(ForgotPasswordRequest request) {
-        userRepository.findByEmail(request.email())
+    public void forgotPassword(ForgotPasswordRequest request, String clientIp) {
+        passwordResetThrottleService.checkAndConsume(request.email(), clientIp);
+        userRepository.findByEmail(request.email().trim())
                 .ifPresent(this::issuePasswordResetTokenAndNotify);
     }
 
     @Transactional
     public void resetPassword(ResetPasswordRequest request) {
         PasswordResetTokenEntity tokenEntity = passwordResetTokenRepository.findByToken(request.token())
-                .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST.value(), "Invalid reset token"));
+                .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                        "Invalid reset token. Please use the latest reset link from your email."));
 
         if (tokenEntity.isUsed() || tokenEntity.isExpired()) {
-            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Reset token is invalid or expired");
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                    "Reset token is invalid or expired. Please request a new reset link.");
         }
 
         UserEntity user = tokenEntity.getUser();
@@ -139,7 +143,7 @@ public class AuthService {
         PasswordResetTokenEntity savedToken = passwordResetTokenRepository.save(resetToken);
 
         try {
-            emailService.sendPasswordResetEmail(user.getEmail(), savedToken.getToken());
+            emailService.sendPasswordResetEmail(user.getEmail(), savedToken.getToken(), passwordResetExpirationMs);
         } catch (Exception ex) {
             log.error("Failed to send password reset email to {}", user.getEmail(), ex);
         }
