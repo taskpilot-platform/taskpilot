@@ -9,6 +9,7 @@ import com.taskpilot.users.repository.SkillRepository;
 import com.taskpilot.users.repository.UserRepository;
 import com.taskpilot.users.repository.UserSkillRepository;
 import com.taskpilot.users.skills.dto.AddSkillRequest;
+import com.taskpilot.users.skills.dto.SkillDirectoryResponse;
 import com.taskpilot.users.skills.dto.UpdateSkillRequest;
 import com.taskpilot.users.skills.dto.UserSkillResponse;
 import lombok.RequiredArgsConstructor;
@@ -49,15 +50,19 @@ public class SkillService {
         return UserSkillResponse.fromEntity(us);
     }
 
+    public List<SkillDirectoryResponse> getSkillDirectory() {
+        return skillRepository.findByIsActiveTrueOrderByNameAsc().stream()
+                .map(SkillDirectoryResponse::fromEntity)
+                .collect(Collectors.toList());
+    }
+
     @Transactional
     public void addSkill(AddSkillRequest request) {
         UserEntity user = getCurrentUser();
 
-        SkillEntity skill = skillRepository.findByName(request.name())
-                .orElseGet(() -> {
-                    SkillEntity newSkill = SkillEntity.builder().name(request.name()).build();
-                    return skillRepository.save(newSkill);
-                });
+        SkillEntity skill = skillRepository.findByIdAndIsActiveTrue(request.skillId())
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(),
+                "Skill does not exist in system directory"));
 
         UserSkillId id = new UserSkillId(user.getId(), skill.getId());
         if (userSkillRepository.existsById(id)) {
