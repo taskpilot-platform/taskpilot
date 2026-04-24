@@ -211,12 +211,12 @@ public class ProjectServiceImpl {
                 "You are not a member of this project"));
 
         String leavingMemberName = userRepository.findById(userId)
-            .map(user -> user.getFullName())
-            .orElse("A member");
+                .map(user -> user.getFullName())
+                .orElse("A member");
 
         List<ProjectMemberEntity> managers = projectMemberRepository.findByProjectIdAndRole(
-            projectId,
-            MemberRole.MANAGER);
+                projectId,
+                MemberRole.MANAGER);
 
         // Check if user is the only MANAGER
         if (member.getRole() == MemberRole.MANAGER) {
