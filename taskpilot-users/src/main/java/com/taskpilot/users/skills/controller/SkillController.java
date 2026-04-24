@@ -2,6 +2,7 @@ package com.taskpilot.users.skills.controller;
 
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import com.taskpilot.users.skills.dto.AddSkillRequest;
+import com.taskpilot.users.skills.dto.SkillDirectoryResponse;
 import com.taskpilot.users.skills.dto.UpdateSkillRequest;
 import com.taskpilot.users.skills.dto.UserSkillResponse;
 import com.taskpilot.users.skills.service.SkillService;
@@ -26,6 +27,13 @@ public class SkillController {
     @GetMapping
     public ApiResponse<List<UserSkillResponse>> getMySkills() {
         return ApiResponse.success(HttpStatus.OK.value(), "Skills retrieved successfully", skillService.getMySkills());
+    }
+
+    @Operation(summary = "View Skill Directory", description = "Get active system skills that user can add.")
+    @GetMapping("/directory")
+    public ApiResponse<List<SkillDirectoryResponse>> getSkillDirectory() {
+        return ApiResponse.success(HttpStatus.OK.value(), "Skill directory retrieved successfully",
+                skillService.getSkillDirectory());
     }
 
     @Operation(summary = "View Detail", description = "Get detail of a specific skill for the current user.")
