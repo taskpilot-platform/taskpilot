@@ -7,10 +7,10 @@ import jakarta.validation.constraints.NotNull;
 public record AddSkillRequest(
         @NotNull(message = "Skill id cannot be null")
         Long skillId,
-
-        @NotNull(message = "Level cannot be null") 
-        @Min(value = 1, message = "Level must be between 1 and 5") 
-        @Max(value = 5, message = "Level must be between 1 and 5") 
+        @NotNull(message = "Level cannot be null")
+        @Min(value = 1, message = "Level must be between 1 and 5")
+        @Max(value = 5, message = "Level must be between 1 and 5")
         Integer level
-) {
+        ) {
+
 }

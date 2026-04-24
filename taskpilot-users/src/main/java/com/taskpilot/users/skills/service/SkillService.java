@@ -62,7 +62,7 @@ public class SkillService {
 
         SkillEntity skill = skillRepository.findByIdAndIsActiveTrue(request.skillId())
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(),
-                        "Skill does not exist in system directory"));
+                "Skill does not exist in system directory"));
 
         UserSkillId id = new UserSkillId(user.getId(), skill.getId());
         if (userSkillRepository.existsById(id)) {
