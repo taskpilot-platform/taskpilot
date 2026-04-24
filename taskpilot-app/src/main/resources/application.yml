@@ -79,3 +79,7 @@ ai:
 
   chat:
     history-size: ${AI_HISTORY_SIZE:20}
+
+onesignal:
+  app-id: ${ONESIGNAL_APP_ID:}
+  api-key: ${ONESIGNAL_REST_API_KEY:}

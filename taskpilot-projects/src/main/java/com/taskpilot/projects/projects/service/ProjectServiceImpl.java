@@ -1,5 +1,17 @@
 package com.taskpilot.projects.projects.service;
 
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Set;
+
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
@@ -13,19 +25,10 @@ import com.taskpilot.projects.projects.dto.ProjectMemberResponse;
 import com.taskpilot.projects.projects.dto.ProjectResponse;
 import com.taskpilot.projects.projects.dto.ProjectSummaryResponse;
 import com.taskpilot.projects.projects.dto.UpdateProjectRequest;
+import com.taskpilot.users.notifications.service.NotificationService;
 import com.taskpilot.users.repository.UserRepository;
-import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
-import org.springframework.http.HttpStatus;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDate;
-import java.util.List;
-import java.util.Set;
+import lombok.RequiredArgsConstructor;
 
 @Service
 @RequiredArgsConstructor
@@ -36,9 +39,9 @@ public class ProjectServiceImpl {
     private final ProjectRepository projectRepository;
     private final ProjectMemberRepository projectMemberRepository;
     private final UserRepository userRepository;
+    private final NotificationService notificationService;
 
     // ==================== PROJECT CRUD ====================
-
     /**
      * Get all projects the user has joined
      */
@@ -54,14 +57,14 @@ public class ProjectServiceImpl {
         }
 
         return page.map(member -> new MyProjectResponse(
-                        member.getProject().getId(),
-                        member.getProject().getName(),
-                        member.getProject().getDescription(),
-                        member.getProject().getStatus(),
-                        member.getRole(),
-                        member.getProject().getStartDate(),
-                        member.getProject().getEndDate(),
-                        member.getJoinedAt() != null ? member.getJoinedAt() : member.getProject().getCreatedAt()));
+                member.getProject().getId(),
+                member.getProject().getName(),
+                member.getProject().getDescription(),
+                member.getProject().getStatus(),
+                member.getRole(),
+                member.getProject().getStartDate(),
+                member.getProject().getEndDate(),
+                member.getJoinedAt() != null ? member.getJoinedAt() : member.getProject().getCreatedAt()));
     }
 
     /**
@@ -174,6 +177,24 @@ public class ProjectServiceImpl {
                 .build();
         projectMemberRepository.save(member);
 
+        String joinedMemberName = userRepository.findById(userId)
+                .map(user -> user.getFullName())
+                .orElse("A member");
+
+        List<ProjectMemberEntity> managers = projectMemberRepository.findByProjectIdAndRole(
+                project.getId(),
+                MemberRole.MANAGER);
+
+        String title = "New member joined your project";
+        String message = joinedMemberName + " has joined project \"" + project.getName() + "\".";
+        String linkAction = "/projects";
+
+        for (ProjectMemberEntity manager : managers) {
+            if (!manager.getUserId().equals(userId)) {
+                notificationService.createSystemNotification(manager.getUserId(), title, message, linkAction);
+            }
+        }
+
         return ProjectMemberResponse.fromEntity(member);
     }
 
@@ -183,11 +204,19 @@ public class ProjectServiceImpl {
     @Transactional
     public void leaveProject(Long projectId, String email) {
         Long userId = getCurrentUserIdByEmail(email);
-        findProjectById(projectId);
+        ProjectEntity project = findProjectById(projectId);
 
         ProjectMemberEntity member = projectMemberRepository.findByProjectIdAndUserId(projectId, userId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(),
-                        "You are not a member of this project"));
+                "You are not a member of this project"));
+
+        String leavingMemberName = userRepository.findById(userId)
+                .map(user -> user.getFullName())
+                .orElse("A member");
+
+        List<ProjectMemberEntity> managers = projectMemberRepository.findByProjectIdAndRole(
+                projectId,
+                MemberRole.MANAGER);
 
         // Check if user is the only MANAGER
         if (member.getRole() == MemberRole.MANAGER) {
@@ -201,6 +230,16 @@ public class ProjectServiceImpl {
         }
 
         projectMemberRepository.delete(member);
+
+        String title = "Member left your project";
+        String message = leavingMemberName + " has left project \"" + project.getName() + "\".";
+        String linkAction = "/projects";
+
+        for (ProjectMemberEntity manager : managers) {
+            if (!manager.getUserId().equals(userId)) {
+                notificationService.createSystemNotification(manager.getUserId(), title, message, linkAction);
+            }
+        }
     }
 
     /**
@@ -241,7 +280,6 @@ public class ProjectServiceImpl {
     }
 
     // ==================== HELPER METHODS ====================
-
     private ProjectEntity findProjectById(Long projectId) {
         return projectRepository.findById(projectId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Project not found"));
@@ -257,7 +295,7 @@ public class ProjectServiceImpl {
     private void validateUserIsProjectManager(Long projectId, Long userId) {
         ProjectMemberEntity member = projectMemberRepository.findByProjectIdAndUserId(projectId, userId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.FORBIDDEN.value(),
-                        "You are not a member of this project"));
+                "You are not a member of this project"));
 
         if (member.getRole() != MemberRole.MANAGER) {
             throw new BusinessException(HttpStatus.FORBIDDEN.value(),
