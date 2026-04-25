@@ -38,4 +38,9 @@ public interface ProjectMemberRepository extends JpaRepository<ProjectMemberEnti
 
     @Query("SELECT COUNT(pm) FROM ProjectMemberEntity pm WHERE pm.projectId = :projectId")
     long countMembers(@Param("projectId") Long projectId);
+
+    @Query("SELECT pm.performanceScore FROM ProjectMemberEntity pm "
+            + "WHERE pm.userId = :userId AND pm.performanceScore IS NOT NULL "
+            + "ORDER BY pm.joinedAt DESC")
+    List<Double> findRecentPerformanceScores(@Param("userId") Long userId, Pageable pageable);
 }
