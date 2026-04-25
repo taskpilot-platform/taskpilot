@@ -36,6 +36,7 @@ public class AiChatController {
     private final ChatSessionService sessionService;
     private final ChatMessageService messageService;
     private final AiStreamingService streamingService;
+    private final ChatStreamStatusService chatStreamStatusService;
     private final AiLogService aiLogService;
     private final AutoAssignmentService autoAssignmentService;
     private final UserIdentityPort userIdentityPort;
@@ -101,7 +102,7 @@ public class AiChatController {
         Long userId = resolveUserId(authentication);
         log.info("[AiChat] Stream request — session: {}, user: {}, msg: {}chars", sessionId, userId,
                 message.length());
-        return streamingService.streamChat(sessionId, userId, message);
+        return streamingService.streamChat(sessionId, userId, message, null);
     }
 
     @Operation(summary = "Stream AI chat response via SSE (POST body)")
@@ -111,9 +112,10 @@ public class AiChatController {
             Authentication authentication) {
         Long userId = resolveUserId(authentication);
         String message = request.message();
+        String clientMessageId = request.clientMessageId();
         log.info("[AiChat] Stream POST request — session: {}, user: {}, msg: {}chars", sessionId,
                 userId, message.length());
-        return streamingService.streamChat(sessionId, userId, message);
+        return streamingService.streamChat(sessionId, userId, message, clientMessageId);
     }
 
     @Operation(summary = "Get paginated message history for a session")
@@ -125,6 +127,17 @@ public class AiChatController {
         Pageable pageable = PageRequest.of(page, size);
         Page<ChatMessageEntity> messages = messageService.getMessages(sessionId, userId, pageable);
         return ApiResponse.success(messages.map(this::toMessageResponse));
+    }
+
+    @Operation(summary = "Get latest stream processing phase for a chat session")
+    @GetMapping("/sessions/{sessionId}/stream-status")
+    public ApiResponse<ChatStreamStatusResponse> getStreamStatus(@PathVariable Long sessionId,
+            @RequestParam(required = false) String clientMessageId,
+            Authentication authentication) {
+        Long userId = resolveUserId(authentication);
+        return ApiResponse.success(chatStreamStatusService
+                .getStatus(sessionId, userId, clientMessageId)
+                .orElse(null));
     }
 
     @Operation(summary = "View AI activity audit logs")
