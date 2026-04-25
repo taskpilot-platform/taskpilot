@@ -104,6 +104,18 @@ public class AiChatController {
         return streamingService.streamChat(sessionId, userId, message);
     }
 
+    @Operation(summary = "Stream AI chat response via SSE (POST body)")
+    @PostMapping(value = "/sessions/{sessionId}/stream", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamChatPost(@PathVariable Long sessionId,
+            @Valid @RequestBody StreamChatRequest request,
+            Authentication authentication) {
+        Long userId = resolveUserId(authentication);
+        String message = request.message();
+        log.info("[AiChat] Stream POST request — session: {}, user: {}, msg: {}chars", sessionId,
+                userId, message.length());
+        return streamingService.streamChat(sessionId, userId, message);
+    }
+
     @Operation(summary = "Get paginated message history for a session")
     @GetMapping("/sessions/{sessionId}/messages")
     public ApiResponse<Page<ChatMessageResponse>> getMessages(@PathVariable Long sessionId,
