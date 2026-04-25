@@ -16,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -23,9 +24,12 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
 @Service
@@ -37,17 +41,16 @@ public class AiStreamingService {
     private final AiLogService aiLogService;
     @Value("${ai.chat.history-size:20}")
     private int historySize;
-    private static final String SYSTEM_PROMPT =
-            """
-                    You are TaskPilot Copilot, an intelligent assistant for a project management system.
-                    You help project managers and team members with:
-                    - Querying task and project status
-                    - Recommending team member assignments based on skills and workload
-                    - Providing insights about project progress
-                    - Answering questions about the current project context
-                    Be concise, professional, and helpful. Always respond in the same language the user is using.
-                    When you perform an action (like creating a task or assigning someone), confirm what you have done.
-                    """;
+    private static final String SYSTEM_PROMPT = """
+            You are TaskPilot Copilot, an intelligent assistant for a project management system.
+            You help project managers and team members with:
+            - Querying task and project status
+            - Recommending team member assignments based on skills and workload
+            - Providing insights about project progress
+            - Answering questions about the current project context
+            Be concise, professional, and helpful. Always respond in the same language the user is using.
+            When you perform an action (like creating a task or assigning someone), confirm what you have done.
+            """;
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
     @Transactional
@@ -83,7 +86,14 @@ public class AiStreamingService {
             log.warn("[SSE] SseEmitter timed out for session {}", sessionId);
             emitter.complete();
         });
-        emitter.onError(e -> log.error("[SSE] SseEmitter error for session {}", sessionId, e));
+        emitter.onError(e -> {
+            if (isClientAbort(e)) {
+                log.debug("[SSE] SseEmitter client disconnect for session {}: {}", sessionId,
+                        e.getMessage());
+                return;
+            }
+            log.error("[SSE] SseEmitter error for session {}", sessionId, e);
+        });
         return emitter;
     }
 
@@ -92,15 +102,20 @@ public class AiStreamingService {
             String modelName, long startTime, boolean isFallbackAttempt) {
         StringBuilder fullResponse = new StringBuilder();
         CompletableFuture<Void> future = new CompletableFuture<>();
+        AtomicBoolean clientDisconnected = new AtomicBoolean(false);
         model.chat(history, new StreamingChatResponseHandler() {
             @Override
             public void onPartialResponse(String partialResponse) {
                 try {
                     fullResponse.append(partialResponse);
-                    emitter.send(SseEmitter.event().name("token").data(partialResponse));
+                    // Send token as JSON to preserve leading spaces from model chunks.
+                    emitter.send(SseEmitter.event().name("token")
+                            .data(Map.of("token", partialResponse), MediaType.APPLICATION_JSON));
                 } catch (IOException e) {
+                    clientDisconnected.set(true);
                     log.debug("[SSE] Client disconnected during streaming for session {}",
                             sessionId);
+                    emitter.complete();
                     future.complete(null);
                 }
             }
@@ -113,14 +128,13 @@ public class AiStreamingService {
                     int estimatedTokens = completeResponse.tokenUsage() != null
                             ? completeResponse.tokenUsage().totalTokenCount()
                             : responseText.length() / 4;
-                    ChatMessageEntity assistantMsg =
-                            messageRepository.save(ChatMessageEntity.builder().sessionId(sessionId)
+                    ChatMessageEntity assistantMsg = messageRepository
+                            .save(ChatMessageEntity.builder().sessionId(sessionId)
                                     .sender(SenderType.ASSISTANT).content(responseText).build());
                     session.setUpdatedAt(Instant.now());
                     if (session.getTitle() == null || session.getTitle().isBlank()) {
-                        String autoTitle =
-                                responseText.length() > 60 ? responseText.substring(0, 60) + "..."
-                                        : responseText;
+                        String autoTitle = responseText.length() > 60 ? responseText.substring(0, 60) + "..."
+                                : responseText;
                         session.setTitle(autoTitle);
                     }
                     sessionRepository.save(session);
@@ -140,6 +154,14 @@ public class AiStreamingService {
 
             @Override
             public void onError(Throwable error) {
+                if (clientDisconnected.get() || isClientAbort(error)) {
+                    log.warn("[SSE] Client aborted stream for session {} (model {}): {}",
+                            sessionId, modelName, error.getMessage());
+                    emitter.complete();
+                    future.complete(null);
+                    return;
+                }
+
                 log.error("[SSE] Model {} failed for session {}: {}", modelName, sessionId,
                         error.getMessage());
                 if (!isFallbackAttempt) {
@@ -166,12 +188,45 @@ public class AiStreamingService {
         });
     }
 
+    private boolean isClientAbort(Throwable error) {
+        if (error == null) {
+            return false;
+        }
+
+        Throwable current = error;
+        while (current != null) {
+            String className = current.getClass().getName();
+            if ("org.apache.catalina.connector.ClientAbortException".equals(className)
+                    || "org.springframework.web.context.request.async.AsyncRequestNotUsableException"
+                            .equals(className)) {
+                return true;
+            }
+
+            String message = current.getMessage();
+            if (message != null) {
+                String normalized = message.toLowerCase(Locale.ROOT);
+                if (normalized.contains("aborted") || normalized.contains("broken pipe")
+                        || normalized.contains("connection reset")
+                        || normalized.contains("async request")
+                        || normalized.contains("not usable")
+                        || normalized.contains("response already committed")
+                        || normalized.contains("stream closed")
+                        || normalized.contains("already completed")) {
+                    return true;
+                }
+            }
+
+            current = current.getCause();
+        }
+
+        return false;
+    }
+
     private List<ChatMessage> buildHistory(Long sessionId, String currentUserMessage) {
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(SystemMessage.from(SYSTEM_PROMPT));
         PageRequest lastN = PageRequest.of(0, historySize);
-        List<ChatMessageEntity> dbMessages =
-                messageRepository.findLastNBySessionId(sessionId, lastN);
+        List<ChatMessageEntity> dbMessages = messageRepository.findLastNBySessionId(sessionId, lastN);
         for (ChatMessageEntity msg : dbMessages) {
             if (msg.getSender() == SenderType.USER) {
                 messages.add(UserMessage.from(msg.getContent()));
@@ -194,4 +249,3 @@ public class AiStreamingService {
         return null;
     }
 }
-
