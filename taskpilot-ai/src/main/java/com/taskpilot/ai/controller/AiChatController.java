@@ -5,10 +5,9 @@ import com.taskpilot.ai.entity.AiLogEntity;
 import com.taskpilot.ai.entity.ChatMessageEntity;
 import com.taskpilot.ai.entity.ChatSessionEntity;
 import com.taskpilot.ai.service.*;
+import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import com.taskpilot.infrastructure.exception.BusinessException;
-import com.taskpilot.users.entity.UserEntity;
-import com.taskpilot.users.repository.UserRepository;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -39,7 +38,7 @@ public class AiChatController {
     private final AiStreamingService streamingService;
     private final AiLogService aiLogService;
     private final AutoAssignmentService autoAssignmentService;
-    private final UserRepository userRepository;
+    private final UserIdentityPort userIdentityPort;
 
     @Operation(summary = "Create a new AI chat session")
     @PostMapping("/sessions")
@@ -164,8 +163,7 @@ public class AiChatController {
     }
 
     private Long resolveUserId(Authentication authentication) {
-        return userRepository.findByEmail(authentication.getName())
-                .map(com.taskpilot.users.entity.UserEntity::getId)
+        return userIdentityPort.findUserIdByEmail(authentication.getName())
                 .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(),
                         "User not found"));
     }
