@@ -79,6 +79,9 @@ ai:
 
   chat:
     history-size: ${AI_HISTORY_SIZE:20}
+    memory-max-tokens: ${AI_MEMORY_MAX_TOKENS:7000}
+    max-user-input-chars: ${AI_MAX_USER_INPUT_CHARS:12000}
+    max-user-input-tokens: ${AI_MAX_USER_INPUT_TOKENS:2500}
 
 onesignal:
   app-id: ${ONESIGNAL_APP_ID:}

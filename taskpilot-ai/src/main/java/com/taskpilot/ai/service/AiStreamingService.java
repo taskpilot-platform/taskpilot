@@ -14,15 +14,12 @@ import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.io.IOException;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -39,8 +36,7 @@ public class AiStreamingService {
     private final ChatMessageRepository messageRepository;
     private final SmartRoutingService routingService;
     private final AiLogService aiLogService;
-    @Value("${ai.chat.history-size:20}")
-    private int historySize;
+    private final SessionChatMemoryService sessionChatMemoryService;
     private static final String SYSTEM_PROMPT = """
             You are TaskPilot Copilot, an intelligent assistant for a project management system.
             You help project managers and team members with:
@@ -61,7 +57,8 @@ public class AiStreamingService {
         long startTime = System.currentTimeMillis();
         messageRepository.save(ChatMessageEntity.builder().sessionId(sessionId)
                 .sender(SenderType.USER).content(userInput).build());
-        List<ChatMessage> history = buildHistory(sessionId, userInput);
+        List<ChatMessage> history = sessionChatMemoryService
+                .appendUserMessage(sessionId, SYSTEM_PROMPT, userInput);
         String contextText = history.stream().map(m -> {
             if (m instanceof UserMessage um)
                 return um.singleText();
@@ -71,7 +68,8 @@ public class AiStreamingService {
                 return sm.text();
             return "";
         }).reduce("", (a, b) -> a + "\n" + b);
-        StreamingChatModel selectedModel = routingService.selectModel(userInput, contextText);
+        String routingInput = latestUserMessageText(history, userInput);
+        StreamingChatModel selectedModel = routingService.selectModel(routingInput, contextText);
         String modelName = routingService.getModelName(selectedModel);
         executor.submit(() -> {
             try {
@@ -141,6 +139,8 @@ public class AiStreamingService {
                     aiLogService.saveLog(userId, null, sessionId, assistantMsg.getId(), userInput,
                             responseText, extractReasoning(responseText), null, null, modelName,
                             estimatedTokens, (int) durationMs);
+                    sessionChatMemoryService.appendAssistantMessage(sessionId, responseText,
+                            SYSTEM_PROMPT);
                     emitter.send(SseEmitter.event().name("done").data(responseText));
                     emitter.complete();
                     log.info("[SSE] Streaming complete for session {} using model {} in {}ms",
@@ -166,6 +166,19 @@ public class AiStreamingService {
                         error.getMessage());
                 if (!isFallbackAttempt) {
                     StreamingChatModel fallback = routingService.getFallbackModel();
+                    if (fallback == model) {
+                        log.warn(
+                                "[SSE] Fallback model is identical to current model ({}), skip fallback for session {}",
+                                modelName, sessionId);
+                        try {
+                            emitter.send(SseEmitter.event().name("error").data(
+                                    "AI service is currently unavailable. Please try again later."));
+                            emitter.complete();
+                        } catch (IOException ignored) {
+                        }
+                        future.completeExceptionally(error);
+                        return;
+                    }
                     String fallbackName = routingService.getModelName(fallback);
                     log.info("[SSE] Falling back to {} for session {}", fallbackName, sessionId);
                     try {
@@ -222,22 +235,6 @@ public class AiStreamingService {
         return false;
     }
 
-    private List<ChatMessage> buildHistory(Long sessionId, String currentUserMessage) {
-        List<ChatMessage> messages = new ArrayList<>();
-        messages.add(SystemMessage.from(SYSTEM_PROMPT));
-        PageRequest lastN = PageRequest.of(0, historySize);
-        List<ChatMessageEntity> dbMessages = messageRepository.findLastNBySessionId(sessionId, lastN);
-        for (ChatMessageEntity msg : dbMessages) {
-            if (msg.getSender() == SenderType.USER) {
-                messages.add(UserMessage.from(msg.getContent()));
-            } else if (msg.getSender() == SenderType.ASSISTANT) {
-                messages.add(AiMessage.from(msg.getContent()));
-            }
-        }
-        messages.add(UserMessage.from(currentUserMessage));
-        return messages;
-    }
-
     private String extractReasoning(String response) {
         if (response == null)
             return null;
@@ -247,5 +244,15 @@ public class AiStreamingService {
             return response.substring(start + 7, end).trim();
         }
         return null;
+    }
+
+    private String latestUserMessageText(List<ChatMessage> history, String fallbackInput) {
+        for (int i = history.size() - 1; i >= 0; i--) {
+            ChatMessage message = history.get(i);
+            if (message instanceof UserMessage userMessage) {
+                return userMessage.singleText();
+            }
+        }
+        return fallbackInput;
     }
 }
