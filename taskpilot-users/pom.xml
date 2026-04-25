@@ -39,5 +39,10 @@
             <groupId>com.taskpilot</groupId>
             <artifactId>taskpilot-infrastructure</artifactId>
         </dependency>
+
+        <dependency>
+            <groupId>com.taskpilot</groupId>
+            <artifactId>taskpilot-contracts</artifactId>
+        </dependency>
     </dependencies>
 </project>
