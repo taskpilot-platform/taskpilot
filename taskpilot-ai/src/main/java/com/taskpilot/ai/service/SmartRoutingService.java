@@ -21,7 +21,7 @@ public class SmartRoutingService {
     @Value("${ai.github.fallback-model:gpt-4o}")
     private String fallbackModelName;
 
-    @Value("${ai.routing.token-threshold:6000}")
+    @Value("${ai.routing.token-threshold:8000}")
     private int tokenThreshold;
 
     public SmartRoutingService(
