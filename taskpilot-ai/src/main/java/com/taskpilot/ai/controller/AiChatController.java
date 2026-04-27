@@ -24,6 +24,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.beans.factory.annotation.Value;
 import java.time.Instant;
 import java.util.List;
 
@@ -40,6 +41,9 @@ public class AiChatController {
     private final AiLogService aiLogService;
     private final AutoAssignmentService autoAssignmentService;
     private final UserIdentityPort userIdentityPort;
+
+    @Value("${ai.chat.max-user-input-chars:1500}")
+    private int maxUserInputChars;
 
     @Operation(summary = "Create a new AI chat session")
     @PostMapping("/sessions")
@@ -100,6 +104,7 @@ public class AiChatController {
     public SseEmitter streamChat(@PathVariable Long sessionId, @RequestParam String message,
             Authentication authentication) {
         Long userId = resolveUserId(authentication);
+        validateUserMessage(message);
         log.info("[AiChat] Stream request — session: {}, user: {}, msg: {}chars", sessionId, userId,
                 message.length());
         return streamingService.streamChat(sessionId, userId, message, null);
@@ -113,6 +118,7 @@ public class AiChatController {
         Long userId = resolveUserId(authentication);
         String message = request.message();
         String clientMessageId = request.clientMessageId();
+        validateUserMessage(message);
         log.info("[AiChat] Stream POST request — session: {}, user: {}, msg: {}chars", sessionId,
                 userId, message.length());
         return streamingService.streamChat(sessionId, userId, message, clientMessageId);
@@ -191,6 +197,17 @@ public class AiChatController {
         return userIdentityPort.findUserIdByEmail(authentication.getName())
                 .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(),
                         "User not found"));
+    }
+
+    private void validateUserMessage(String message) {
+        if (message == null) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Message is required");
+        }
+
+        if (message.length() > maxUserInputChars) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                    "Message exceeds " + maxUserInputChars + " characters");
+        }
     }
 
     private ChatSessionResponse toSessionResponse(ChatSessionEntity s, long messageCount) {
