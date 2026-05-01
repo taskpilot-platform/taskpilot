@@ -4,13 +4,21 @@ import com.taskpilot.ai.entity.AiChatRequestEntity.Phase;
 import com.taskpilot.ai.entity.ChatMessageEntity;
 import com.taskpilot.ai.entity.ChatMessageEntity.SenderType;
 import com.taskpilot.ai.entity.ChatSessionEntity;
+import com.taskpilot.ai.gatekeeper.GatekeeperService;
+import com.taskpilot.ai.heuristic.HeuristicConfigProvider;
 import com.taskpilot.ai.repository.ChatMessageRepository;
 import com.taskpilot.ai.repository.ChatSessionRepository;
+import com.taskpilot.ai.tools.ToolExecutionContext;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.input.PromptTemplate;
 import dev.langchain4j.model.chat.StreamingChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.request.ToolChoice;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import lombok.RequiredArgsConstructor;
@@ -19,9 +27,14 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.io.IOException;
+import java.time.LocalDate;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -36,22 +49,49 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @RequiredArgsConstructor
 public class AiStreamingService {
 
+    private static final int MAX_TOOL_ROUNDS = 4;
+
     private final ChatSessionRepository sessionRepository;
     private final ChatMessageRepository messageRepository;
     private final SmartRoutingService routingService;
     private final AiLogService aiLogService;
     private final ChatStreamStatusService chatStreamStatusService;
     private final SessionChatMemoryService sessionChatMemoryService;
+    private final ToolCallingRegistryService toolCallingRegistryService;
+    private final HeuristicConfigProvider heuristicConfigProvider;
+    private final GatekeeperService gatekeeperService;
 
-    private static final String SYSTEM_PROMPT = """
-            You are TaskPilot Copilot, an intelligent assistant for a project management system.
-            You help project managers and team members with:
-            - Querying task and project status
-            - Recommending team member assignments based on skills and workload
-            - Providing insights about project progress
-            - Answering questions about the current project context
-            Be concise, professional, and helpful. Always respond in the same language the user is using.
-            When you perform an action (like creating a task or assigning someone), confirm what you have done.
+    @Value("${ai.chat.max-output-tokens:3500}")
+    private int maxOutputTokens;
+
+    private static final String MASTER_PROMPT_TEMPLATE = """
+            You are the Senior Project Manager (TaskPilot Agent) of the TaskPilot system. Your task is to
+            recommend task assignments based on analytical data.
+
+            [CURRENT SYSTEM CONTEXT]
+            - Today's Date: {{current_date}}
+            - Current Assignment Mode: {{current_mode}}
+
+            [REASONING OBJECTIVES & TRADE-OFFS]
+            You MUST perform an internal reasoning process before providing your final recommendation. You are
+            not a simple calculator; you are a strategic manager. You must balance the candidates' AHP (Analytic
+            Hierarchy Process) scores, their current workload, and the 'Current Assignment Mode':
+            - If Mode is 'URGENT': Prioritize the candidate with the highest expertise and fastest execution
+                (highest AHP score). Workload constraints can be secondary to meeting tight deadlines.
+            - If Mode is 'TRAINING': Prioritize junior members or those with an empty schedule to give them
+                hands-on experience and foster team growth, even if their AHP score is slightly lower.
+            - If Mode is 'BALANCED': Find the optimal harmony between a high AHP score and an unburdened
+                schedule to avoid overloading any single team member.
+
+            [STRICT OUTPUT RULES]
+            1. Step 1 (Thinking): All of your internal reasoning, comparisons, and strategic trade-offs MUST be
+                enclosed exactly within <think> and </think> tags.
+            2. Step 2 (Communicating): After the closing </think> tag, provide your final recommendation clearly
+                and professionally to the user. CRITICAL REQUIREMENT: You MUST extract the key data, metrics, or a markdown table (e.g., AHP scores, workload stats, overdue tasks) and present them IN YOUR FINAL RESPONSE outside the <think> tag. This ensures the user sees the concrete evidence for your decision.
+            3. PROHIBITED ACTION: You MUST NEVER justify your choice by simply stating "because they have the
+                highest score" or "due to the highest AHP score". You must explain your decision using
+                professional management terminology (e.g., "to optimize resource allocation", "to ensure project
+                timelines", or "to foster skill development").
             """;
 
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -72,8 +112,7 @@ public class AiStreamingService {
         chatStreamStatusService.upsertQueued(sessionId, userId, effectiveClientMessageId);
 
         Optional<ChatMessageEntity> existing = messageRepository
-                .findFirstBySessionIdAndSenderAndClientMessageId(sessionId, SenderType.USER,
-                        effectiveClientMessageId);
+                .findFirstBySessionIdAndSenderAndClientMessageId(sessionId, SenderType.USER, effectiveClientMessageId);
         if (existing.isPresent()) {
             log.info("[AiChat] Duplicate stream request ignored for session {} clientMessageId={}",
                     sessionId, effectiveClientMessageId);
@@ -90,14 +129,14 @@ public class AiStreamingService {
                 .content(userInput)
                 .build());
 
-        List<ChatMessage> history = sessionChatMemoryService
-                .appendUserMessage(sessionId, SYSTEM_PROMPT, userInput);
+        String systemPrompt = buildSystemPrompt();
+        List<ChatMessage> history = sessionChatMemoryService.appendUserMessage(sessionId, systemPrompt, userInput);
+        List<ChatMessage> requestHistory = withSystemPrompt(history, systemPrompt);
 
-        chatStreamStatusService.updatePhase(sessionId, effectiveClientMessageId,
-                Phase.ROUTING, null, null, null);
+        chatStreamStatusService.updatePhase(sessionId, effectiveClientMessageId, Phase.ROUTING, null, null, null);
         safeSend(emitter, "phase", Phase.ROUTING.name(), null);
 
-        String contextText = history.stream().map(m -> {
+        String contextText = requestHistory.stream().map(m -> {
             if (m instanceof UserMessage um) {
                 return um.singleText();
             }
@@ -110,19 +149,18 @@ public class AiStreamingService {
             return "";
         }).reduce("", (a, b) -> a + "\n" + b);
 
-        String routingInput = latestUserMessageText(history, userInput);
+        String routingInput = latestUserMessageText(requestHistory, userInput);
         StreamingChatModel selectedModel = routingService.selectModel(routingInput, contextText);
         String modelName = routingService.getModelName(selectedModel);
 
-        chatStreamStatusService.updatePhase(sessionId, effectiveClientMessageId,
-                Phase.THINKING, modelName, null, null);
+        chatStreamStatusService.updatePhase(sessionId, effectiveClientMessageId, Phase.THINKING, modelName, null, null);
 
         String finalClientMessageId = effectiveClientMessageId;
         executor.submit(() -> {
             safeSend(emitter, "model", modelName, null);
             safeSend(emitter, "phase", Phase.THINKING.name(), null);
-            doStream(emitter, session, sessionId, userId, userInput, history, selectedModel,
-                    modelName, startTime, false, finalClientMessageId);
+            doStream(emitter, session, sessionId, userId, userInput, requestHistory, systemPrompt,
+                    selectedModel, modelName, startTime, false, finalClientMessageId);
         });
 
         emitter.onTimeout(() -> {
@@ -132,8 +170,7 @@ public class AiStreamingService {
 
         emitter.onError(e -> {
             if (isClientAbort(e)) {
-                log.debug("[SSE] SseEmitter client disconnect for session {}: {}", sessionId,
-                        e.getMessage());
+                log.debug("[SSE] SseEmitter client disconnect for session {}: {}", sessionId, e.getMessage());
                 return;
             }
             log.error("[SSE] SseEmitter error for session {}", sessionId, e);
@@ -148,17 +185,89 @@ public class AiStreamingService {
             Long userId,
             String userInput,
             List<ChatMessage> history,
+            String systemPrompt,
             StreamingChatModel model,
             String modelName,
             long startTime,
             boolean isFallbackAttempt,
             String clientMessageId) {
 
+        List<ChatMessage> workingHistory = new ArrayList<>(history);
         StringBuilder fullResponse = new StringBuilder();
         AtomicBoolean clientDisconnected = new AtomicBoolean(false);
         AtomicBoolean generatingMarked = new AtomicBoolean(false);
 
-        model.chat(history, new StreamingChatResponseHandler() {
+        List<Map<String, Object>> toolCallSummaries = new ArrayList<>();
+        LinkedHashSet<String> toolNames = new LinkedHashSet<>();
+
+        boolean requiresAHP = gatekeeperService.requiresAHP(userInput);
+
+        streamRound(
+                emitter,
+                session,
+                sessionId,
+                userId,
+                userInput,
+                workingHistory,
+                systemPrompt,
+                model,
+                modelName,
+                startTime,
+                isFallbackAttempt,
+                clientMessageId,
+                fullResponse,
+                clientDisconnected,
+                generatingMarked,
+                0,
+                requiresAHP,
+                toolCallSummaries,
+                toolNames);
+    }
+
+    private void streamRound(SseEmitter emitter,
+            ChatSessionEntity session,
+            Long sessionId,
+            Long userId,
+            String userInput,
+            List<ChatMessage> history,
+            String systemPrompt,
+            StreamingChatModel model,
+            String modelName,
+            long startTime,
+            boolean isFallbackAttempt,
+            String clientMessageId,
+            StringBuilder fullResponse,
+            AtomicBoolean clientDisconnected,
+            AtomicBoolean generatingMarked,
+            int toolRound,
+            boolean requiresAHP,
+            List<Map<String, Object>> toolCallSummaries,
+            LinkedHashSet<String> toolNames) {
+        List<ChatMessage> sanitizedHistory = sanitizeHistoryForTools(history);
+        List<dev.langchain4j.agent.tool.ToolSpecification> toolSpecs = toolCallingRegistryService
+                .toolSpecifications();
+        ToolChoice toolChoice = ToolChoice.AUTO;
+
+        if (requiresAHP && toolRound == 0) {
+            List<dev.langchain4j.agent.tool.ToolSpecification> ahpOnly = toolCallingRegistryService
+                    .toolSpecificationsByName("recommendAssignmentCandidates");
+            if (!ahpOnly.isEmpty()) {
+                toolSpecs = ahpOnly;
+                toolChoice = ToolChoice.REQUIRED;
+                log.info("[Gatekeeper] requiresAHP=true -> forcing recommendAssignmentCandidates");
+            } else {
+                log.warn("[Gatekeeper] requiresAHP=true but recommendAssignmentCandidates tool not found");
+            }
+        }
+
+        ChatRequest request = ChatRequest.builder()
+                .messages(sanitizedHistory)
+                .toolSpecifications(toolSpecs)
+                .toolChoice(toolChoice)
+                .maxOutputTokens(maxOutputTokens)
+                .build();
+
+        model.chat(request, new StreamingChatResponseHandler() {
             @Override
             public void onPartialResponse(String partialResponse) {
                 fullResponse.append(partialResponse);
@@ -172,8 +281,7 @@ public class AiStreamingService {
                 }
 
                 if (!clientDisconnected.get()) {
-                    if (!safeSend(emitter, "token", Map.of("token", partialResponse),
-                            MediaType.APPLICATION_JSON)) {
+                    if (!safeSend(emitter, "token", Map.of("token", partialResponse), MediaType.APPLICATION_JSON)) {
                         clientDisconnected.set(true);
                     }
                 }
@@ -181,8 +289,64 @@ public class AiStreamingService {
 
             @Override
             public void onCompleteResponse(ChatResponse completeResponse) {
+                AiMessage aiMessage = completeResponse.aiMessage();
+
+                if (aiMessage != null && aiMessage.hasToolExecutionRequests()) {
+                    if (toolRound >= MAX_TOOL_ROUNDS) {
+                        chatStreamStatusService.updatePhase(sessionId, clientMessageId,
+                                Phase.FAILED, modelName, null,
+                                "Max tool rounds exceeded");
+                        safeSend(emitter, "phase", Phase.FAILED.name(), null);
+                        safeSend(emitter, "error",
+                                "Tool execution exceeded allowed rounds. Please refine your request.",
+                                null);
+                        emitter.complete();
+                        return;
+                    }
+
+                    history.add(aiMessage);
+                    List<ToolExecutionResultMessage> toolResults = executeTools(
+                            aiMessage.toolExecutionRequests(),
+                            emitter,
+                            toolCallSummaries,
+                            toolNames,
+                            userId,
+                            sessionId);
+                    history.addAll(toolResults);
+
+                    chatStreamStatusService.updatePhase(sessionId, clientMessageId,
+                            Phase.THINKING, modelName, null, null);
+                    safeSend(emitter, "phase", Phase.THINKING.name(), null);
+
+                    streamRound(
+                            emitter,
+                            session,
+                            sessionId,
+                            userId,
+                            userInput,
+                            history,
+                            systemPrompt,
+                            model,
+                            modelName,
+                            startTime,
+                            isFallbackAttempt,
+                            clientMessageId,
+                            fullResponse,
+                            clientDisconnected,
+                            generatingMarked,
+                            toolRound + 1,
+                            requiresAHP,
+                            toolCallSummaries,
+                            toolNames);
+                    return;
+                }
+
                 long durationMs = System.currentTimeMillis() - startTime;
                 String responseText = fullResponse.toString();
+                if ((responseText == null || responseText.isBlank()) && aiMessage != null && aiMessage.text() != null) {
+                    responseText = aiMessage.text();
+                }
+
                 int estimatedTokens = completeResponse.tokenUsage() != null
                         ? completeResponse.tokenUsage().totalTokenCount()
                         : responseText.length() / 4;
@@ -202,12 +366,15 @@ public class AiStreamingService {
                 }
                 sessionRepository.save(session);
 
+                Object toolOutput = toolCallSummaries.isEmpty() ? null : toolCallSummaries;
+                String actionTaken = toolNames.isEmpty() ? null : String.join(",", toolNames);
+
                 aiLogService.saveLog(userId, null, sessionId, assistantMsg.getId(), userInput,
-                        responseText, extractReasoning(responseText), null, null, modelName,
+                        responseText, extractReasoning(responseText), actionTaken, toolOutput, modelName,
                         estimatedTokens, (int) durationMs);
 
-                sessionChatMemoryService.appendAssistantMessage(sessionId, responseText,
-                        SYSTEM_PROMPT);
+                String cleanResponse = sessionChatMemoryService.sanitizeAssistantMessage(responseText);
+                sessionChatMemoryService.appendAssistantMessage(sessionId, cleanResponse, systemPrompt);
 
                 chatStreamStatusService.updatePhase(sessionId, clientMessageId,
                         Phase.FINALIZED, modelName, assistantMsg.getId(), null);
@@ -252,7 +419,7 @@ public class AiStreamingService {
                     safeSend(emitter, "model", fallbackName + " (fallback)", null);
                     safeSend(emitter, "phase", Phase.THINKING.name(), null);
 
-                    doStream(emitter, session, sessionId, userId, userInput, history, fallback,
+                    doStream(emitter, session, sessionId, userId, userInput, history, systemPrompt, fallback,
                             fallbackName, startTime, true, clientMessageId);
                 } else {
                     chatStreamStatusService.updatePhase(sessionId, clientMessageId,
@@ -265,6 +432,46 @@ public class AiStreamingService {
                 }
             }
         });
+    }
+
+    private List<ToolExecutionResultMessage> executeTools(
+            List<ToolExecutionRequest> requests,
+            SseEmitter emitter,
+            List<Map<String, Object>> toolCallSummaries,
+            LinkedHashSet<String> toolNames,
+            Long userId,
+            Long sessionId) {
+        List<ToolExecutionResultMessage> results = new ArrayList<>();
+
+        for (ToolExecutionRequest request : requests) {
+            String output;
+            ToolExecutionContext.set(new ToolExecutionContext.Context(userId, sessionId));
+            try {
+                output = toolCallingRegistryService.execute(request);
+            } finally {
+                ToolExecutionContext.clear();
+            }
+
+            Map<String, Object> eventPayload = new LinkedHashMap<>();
+            eventPayload.put("name", request.name());
+            eventPayload.put("arguments", request.arguments());
+            eventPayload.put("result", truncate(output, 1500));
+            safeSend(emitter, "tool", eventPayload, MediaType.APPLICATION_JSON);
+
+            toolNames.add(request.name());
+            toolCallSummaries.add(eventPayload);
+
+            results.add(ToolExecutionResultMessage.from(request, output));
+        }
+
+        return results;
+    }
+
+    private String truncate(String text, int maxLength) {
+        if (text == null || text.length() <= maxLength) {
+            return text;
+        }
+        return text.substring(0, maxLength) + "...";
     }
 
     private boolean safeSend(SseEmitter emitter, String event, Object data, MediaType mediaType) {
@@ -314,6 +521,37 @@ public class AiStreamingService {
         return false;
     }
 
+    private List<ChatMessage> sanitizeHistoryForTools(List<ChatMessage> history) {
+        if (history == null || history.isEmpty()) {
+            return List.of();
+        }
+
+        List<ChatMessage> sanitized = new ArrayList<>(history.size());
+        boolean allowToolResults = false;
+
+        for (ChatMessage message : history) {
+            if (message instanceof AiMessage aiMessage) {
+                sanitized.add(message);
+                allowToolResults = aiMessage.hasToolExecutionRequests();
+                continue;
+            }
+
+            if (message instanceof ToolExecutionResultMessage) {
+                if (allowToolResults) {
+                    sanitized.add(message);
+                } else {
+                    log.warn("[AiChat] Dropping tool result without preceding tool_calls in history");
+                }
+                continue;
+            }
+
+            sanitized.add(message);
+            allowToolResults = false;
+        }
+
+        return sanitized;
+    }
+
     private String extractReasoning(String response) {
         if (response == null) {
             return null;
@@ -337,38 +575,31 @@ public class AiStreamingService {
         return fallbackInput;
     }
 
+    private String buildSystemPrompt() {
+        PromptTemplate template = PromptTemplate.from(MASTER_PROMPT_TEMPLATE);
+        return template.apply(Map.of(
+                "current_date", LocalDate.now().toString(),
+                "current_mode", heuristicConfigProvider.getCurrentMode()))
+                .text();
+    }
+
+    private List<ChatMessage> withSystemPrompt(List<ChatMessage> history, String systemPrompt) {
+        List<ChatMessage> updated = new ArrayList<>(history.size() + 1);
+        updated.add(SystemMessage.from(systemPrompt));
+        for (ChatMessage message : history) {
+            if (message instanceof SystemMessage) {
+                continue;
+            }
+            updated.add(message);
+        }
+        return updated;
+    }
+
     private String normalizeClientMessageId(String clientMessageId) {
         if (clientMessageId == null) {
             return null;
         }
         String trimmed = clientMessageId.trim();
         return trimmed.isEmpty() ? null : trimmed;
-    }}
-
-    
-    
-        
-        
-                
-                        
-            
-        
-
-        
-        
-            
-            
-                    
-                    
-                    
-                    
-                    
-                    
-                
-            
-        
-
-        
-    
-
-    
+    }
+}
