@@ -4,12 +4,16 @@ import com.taskpilot.ai.assignment.port.out.AiAuditPort;
 import com.taskpilot.ai.dto.AutoAssignmentResponse;
 import com.taskpilot.ai.dto.CandidateScore;
 import com.taskpilot.ai.entity.AiLogEntity;
+import com.taskpilot.ai.heuristic.HeuristicStrategy;
+import com.taskpilot.ai.heuristic.HeuristicStrategyFactory;
+import com.taskpilot.ai.heuristic.NormalizedScores;
+import com.taskpilot.ai.heuristic.RawScores;
+import com.taskpilot.ai.heuristic.ScoreRanges;
 import com.taskpilot.contracts.assignment.dto.ProjectMemberDto;
 import com.taskpilot.contracts.assignment.dto.UserProfileDto;
 import com.taskpilot.contracts.assignment.dto.UserSkillDto;
 import com.taskpilot.contracts.assignment.port.out.ProjectMemberPort;
 import com.taskpilot.contracts.assignment.port.out.ProjectPort;
-import com.taskpilot.contracts.assignment.port.out.SystemSettingPort;
 import com.taskpilot.contracts.assignment.port.out.UserPort;
 import com.taskpilot.contracts.assignment.port.out.UserSkillPort;
 import com.taskpilot.infrastructure.exception.BusinessException;
@@ -35,15 +39,14 @@ import java.util.stream.Collectors;
 public class AutoAssignmentService {
     private final ProjectMemberPort projectMemberPort;
     private final UserSkillPort userSkillPort;
-    private final SystemSettingPort systemSettingPort;
     private final AiAuditPort aiAuditPort;
     private final UserPort userPort;
     private final ProjectPort projectPort;
+    private final HeuristicStrategyFactory heuristicStrategyFactory;
 
     @Qualifier("deepSeekReasoningModel")
     private final StreamingChatModel deepSeekModel;
 
-    private static final String HEURISTIC_WEIGHTS_KEY = "heuristic.weights";
     private static final int PERFORMANCE_WINDOW_SIZE = 3;
     private static final double NEUTRAL_PERFORMANCE_PRIOR = 0.5;
     private static final double[] DECAY_WEIGHTS = new double[] { 0.5, 0.3, 0.2 };
@@ -51,52 +54,91 @@ public class AutoAssignmentService {
     @Transactional(readOnly = true)
     public AutoAssignmentResponse recommend(Long projectId, List<String> requiredSkills,
             int taskDifficulty, Long requestingUserId) {
+        AutoAssignmentResponse base = recommendCandidates(projectId, requiredSkills, taskDifficulty, requestingUserId);
+
+        if (base.candidates() == null || base.candidates().isEmpty()) {
+            return base;
+        }
+
+        List<CandidateScore> top3 = base.candidates().stream().limit(3).toList();
+        String explanation = generateExplanation(top3, base.requiredSkills(), taskDifficulty,
+                requestingUserId, projectId);
+
+        saveAutoAssignLog(requestingUserId, projectId, base.requiredSkills(), base.candidates(),
+                explanation);
+
+        return AutoAssignmentResponse.builder()
+                .projectId(projectId)
+                .requiredSkills(base.requiredSkills())
+                .candidates(base.candidates())
+                .aiExplanation(explanation)
+                .build();
+    }
+
+    @Transactional(readOnly = true)
+    public AutoAssignmentResponse recommendCandidates(Long projectId, List<String> requiredSkills,
+            int taskDifficulty, Long requestingUserId) {
         List<String> safeRequiredSkills = requiredSkills == null ? Collections.emptyList() : requiredSkills;
-        log.info("[AutoAssign] Starting recommendation for project {} with skills: {}", projectId,
+        log.info("[AutoAssign] Starting candidate scoring for project {} with skills: {}", projectId,
                 safeRequiredSkills);
 
         String mode = resolveHeuristicMode(projectId);
-        HeuristicWeights weights = loadWeights(mode);
+        HeuristicStrategy strategy = heuristicStrategyFactory.resolve(mode);
         List<ProjectMemberDto> members = projectMemberPort.findProjectMembers(projectId);
 
         if (members.isEmpty()) {
             return AutoAssignmentResponse.builder().projectId(projectId)
+                    .requiredSkills(safeRequiredSkills)
                     .candidates(Collections.emptyList())
-                    .aiExplanation("No members found in this project.").build();
+                    .aiExplanation("No members found in this project.")
+                    .build();
         }
 
-        List<CandidateScore> scoredCandidates = members.stream()
-                .map(member -> userPort.findById(member.userId())
-                        .map(user -> scoreMember(user, member.performanceScore(),
-                                safeRequiredSkills, weights, mode))
-                        .orElse(null))
-                .filter(java.util.Objects::nonNull)
-                .sorted(Comparator.comparingDouble(CandidateScore::getTotalScore).reversed())
-                .collect(Collectors.toList());
+        List<CandidateScore> scoredCandidates = computeCandidates(
+                members, safeRequiredSkills, strategy, mode);
 
         if (scoredCandidates.isEmpty()) {
             return AutoAssignmentResponse.builder().projectId(projectId)
-                    .requiredSkills(safeRequiredSkills).candidates(Collections.emptyList())
+                    .requiredSkills(safeRequiredSkills)
+                    .candidates(Collections.emptyList())
                     .aiExplanation("No eligible members are currently available for assignment.")
                     .build();
         }
 
-        List<CandidateScore> top3 = scoredCandidates.stream().limit(3).toList();
-        String explanation = generateExplanation(top3, safeRequiredSkills, taskDifficulty,
-                requestingUserId, projectId);
-
-        saveAutoAssignLog(requestingUserId, projectId, safeRequiredSkills, scoredCandidates,
-                explanation);
-
         return AutoAssignmentResponse.builder().projectId(projectId)
                 .requiredSkills(safeRequiredSkills)
-                .candidates(scoredCandidates).aiExplanation(explanation).build();
+                .candidates(scoredCandidates)
+                .aiExplanation(null)
+                .build();
     }
 
-    private CandidateScore scoreMember(UserProfileDto user, double projectPerformancePrior,
+    private List<CandidateScore> computeCandidates(
+            List<ProjectMemberDto> members,
             List<String> requiredSkills,
-            HeuristicWeights weights,
+            HeuristicStrategy strategy,
             String mode) {
+        List<RawCandidate> rawCandidates = members.stream()
+                .map(member -> userPort.findById(member.userId())
+                        .map(user -> buildRawCandidate(user, member.performanceScore(), requiredSkills))
+                        .orElse(null))
+                .filter(java.util.Objects::nonNull)
+                .toList();
+
+        if (rawCandidates.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<RawScores> rawScores = rawCandidates.stream().map(RawCandidate::rawScores).toList();
+        ScoreRanges ranges = ScoreRanges.from(rawScores);
+
+        return rawCandidates.stream()
+                .map(raw -> buildCandidateScore(raw, strategy, ranges, mode))
+                .sorted(Comparator.comparingDouble(CandidateScore::getTotalScore).reversed())
+                .collect(Collectors.toList());
+    }
+
+    private RawCandidate buildRawCandidate(UserProfileDto user, double projectPerformancePrior,
+            List<String> requiredSkills) {
         if (isUnavailable(user.status())) {
             return null;
         }
@@ -109,24 +151,34 @@ public class AutoAssignmentService {
         PerformanceSnapshot performanceSnapshot = calculateTimeDecayPerformanceScore(user.id(),
                 projectPerformancePrior);
 
-        double totalScore = (fitScore * weights.fitWeight())
-                - (loadScore * weights.loadWeight())
-                + (performanceSnapshot.performanceScore() * weights.performanceWeight());
+        return new RawCandidate(user, new RawScores(fitScore, loadScore, performanceSnapshot.performanceScore()),
+                performanceSnapshot.confidence(), workload);
+    }
 
-        double roundedFit = round2(fitScore);
-        double roundedLoad = round2(loadScore);
-        double roundedPerf = round2(performanceSnapshot.performanceScore());
+    private CandidateScore buildCandidateScore(RawCandidate raw,
+            HeuristicStrategy strategy,
+            ScoreRanges ranges,
+            String mode) {
+        NormalizedScores normalized = strategy.normalize(raw.rawScores(), ranges);
+        double totalScore = strategy.score(normalized);
 
-        return CandidateScore.builder().userId(user.id()).fullName(user.fullName())
-                .email(user.email())
+        double roundedFit = round2(normalized.fit());
+        double roundedLoad = round2(normalized.load());
+        double roundedPerf = round2(normalized.performance());
+
+        return CandidateScore.builder()
+                .userId(raw.user().id())
+                .fullName(raw.user().fullName())
+                .email(raw.user().email())
                 .fitScore(roundedFit)
                 .loadScore(roundedLoad)
                 .performanceScore(roundedPerf)
-                .confidenceScore(round2(performanceSnapshot.confidence()))
+                .confidenceScore(round2(raw.confidence()))
                 .skillScore(roundedFit)
                 .workloadScore(round2(1.0 - roundedLoad))
-                .totalScore(round2(totalScore)).currentWorkload(workload)
-                .status(user.status())
+                .totalScore(round2(totalScore))
+                .currentWorkload(raw.currentWorkload())
+                .status(raw.user().status())
                 .heuristicMode(mode)
                 .build();
     }
@@ -288,75 +340,6 @@ public class AutoAssignmentService {
         }
     }
 
-    private HeuristicWeights loadWeights(String mode) {
-        Map<String, Object> allWeights = systemSettingPort.findJsonObjectByKey(HEURISTIC_WEIGHTS_KEY)
-                .orElseThrow(() -> new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR.value(),
-                        "Missing system setting: " + HEURISTIC_WEIGHTS_KEY));
-
-        HeuristicWeights byMode = parseModeWeights(allWeights, mode);
-        if (byMode != null) {
-            return byMode;
-        }
-
-        // Backward compatibility with flat DB schema, still DB-driven.
-        return parseWeightsMap(allWeights, "root");
-    }
-
-    @SuppressWarnings("unchecked")
-    private HeuristicWeights parseModeWeights(Map<String, Object> allWeights,
-            String mode) {
-        Object modeNode = allWeights.get(mode);
-        if (!(modeNode instanceof Map<?, ?> modeMapRaw)) {
-            return null;
-        }
-
-        Map<String, Object> modeMap = (Map<String, Object>) modeMapRaw;
-        return parseWeightsMap(modeMap, mode);
-    }
-
-    private HeuristicWeights parseWeightsMap(Map<String, Object> map, String contextName) {
-        double fit = requiredDouble(firstPresent(map, "fit", "skill", "w_fit"),
-                contextName + ".fit|skill|w_fit");
-        double load = requiredDouble(firstPresent(map, "load", "workload", "w_load"),
-                contextName + ".load|workload|w_load");
-        double perf = requiredDouble(firstPresent(map, "perf", "performance", "availability", "w_perf"),
-                contextName + ".perf|performance|availability|w_perf");
-        return normalizeWeights(fit, load, perf, contextName);
-    }
-
-    private HeuristicWeights normalizeWeights(double fit, double load, double perf,
-            String contextName) {
-        if (fit < 0 || load < 0 || perf < 0) {
-            throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR.value(),
-                    "Invalid negative heuristic weights in " + contextName);
-        }
-
-        double total = fit + load + perf;
-        if (total <= 0) {
-            throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR.value(),
-                    "Invalid heuristic weight sum in " + contextName + ": " + total);
-        }
-
-        return new HeuristicWeights(fit / total, load / total, perf / total);
-    }
-
-    private Object firstPresent(Map<String, Object> map, String... keys) {
-        for (String key : keys) {
-            if (map.containsKey(key)) {
-                return map.get(key);
-            }
-        }
-        return null;
-    }
-
-    private double requiredDouble(Object value, String field) {
-        if (value instanceof Number n) {
-            return n.doubleValue();
-        }
-        throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR.value(),
-                "Missing/invalid numeric heuristic field: " + field);
-    }
-
     private void saveAutoAssignLog(Long userId, Long projectId, List<String> requiredSkills,
             List<CandidateScore> candidates, String explanation) {
         try {
@@ -371,8 +354,8 @@ public class AutoAssignmentService {
         }
     }
 
-    private record HeuristicWeights(double fitWeight, double loadWeight,
-            double performanceWeight) {
+    private record RawCandidate(UserProfileDto user, RawScores rawScores, double confidence,
+            int currentWorkload) {
     }
 
     private record PerformanceSnapshot(double performanceScore, double confidence) {
