@@ -5,10 +5,9 @@ import com.taskpilot.ai.entity.AiLogEntity;
 import com.taskpilot.ai.entity.ChatMessageEntity;
 import com.taskpilot.ai.entity.ChatSessionEntity;
 import com.taskpilot.ai.service.*;
+import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import com.taskpilot.infrastructure.exception.BusinessException;
-import com.taskpilot.users.entity.UserEntity;
-import com.taskpilot.users.repository.UserRepository;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -25,6 +24,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.beans.factory.annotation.Value;
 import java.time.Instant;
 import java.util.List;
 
@@ -37,9 +37,13 @@ public class AiChatController {
     private final ChatSessionService sessionService;
     private final ChatMessageService messageService;
     private final AiStreamingService streamingService;
+    private final ChatStreamStatusService chatStreamStatusService;
     private final AiLogService aiLogService;
     private final AutoAssignmentService autoAssignmentService;
-    private final UserRepository userRepository;
+    private final UserIdentityPort userIdentityPort;
+
+    @Value("${ai.chat.max-user-input-chars:1500}")
+    private int maxUserInputChars;
 
     @Operation(summary = "Create a new AI chat session")
     @PostMapping("/sessions")
@@ -100,9 +104,24 @@ public class AiChatController {
     public SseEmitter streamChat(@PathVariable Long sessionId, @RequestParam String message,
             Authentication authentication) {
         Long userId = resolveUserId(authentication);
+        validateUserMessage(message);
         log.info("[AiChat] Stream request — session: {}, user: {}, msg: {}chars", sessionId, userId,
                 message.length());
-        return streamingService.streamChat(sessionId, userId, message);
+        return streamingService.streamChat(sessionId, userId, message, null);
+    }
+
+    @Operation(summary = "Stream AI chat response via SSE (POST body)")
+    @PostMapping(value = "/sessions/{sessionId}/stream", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamChatPost(@PathVariable Long sessionId,
+            @Valid @RequestBody StreamChatRequest request,
+            Authentication authentication) {
+        Long userId = resolveUserId(authentication);
+        String message = request.message();
+        String clientMessageId = request.clientMessageId();
+        validateUserMessage(message);
+        log.info("[AiChat] Stream POST request — session: {}, user: {}, msg: {}chars", sessionId,
+                userId, message.length());
+        return streamingService.streamChat(sessionId, userId, message, clientMessageId);
     }
 
     @Operation(summary = "Get paginated message history for a session")
@@ -114,6 +133,17 @@ public class AiChatController {
         Pageable pageable = PageRequest.of(page, size);
         Page<ChatMessageEntity> messages = messageService.getMessages(sessionId, userId, pageable);
         return ApiResponse.success(messages.map(this::toMessageResponse));
+    }
+
+    @Operation(summary = "Get latest stream processing phase for a chat session")
+    @GetMapping("/sessions/{sessionId}/stream-status")
+    public ApiResponse<ChatStreamStatusResponse> getStreamStatus(@PathVariable Long sessionId,
+            @RequestParam(required = false) String clientMessageId,
+            Authentication authentication) {
+        Long userId = resolveUserId(authentication);
+        return ApiResponse.success(chatStreamStatusService
+                .getStatus(sessionId, userId, clientMessageId)
+                .orElse(null));
     }
 
     @Operation(summary = "View AI activity audit logs")
@@ -164,10 +194,20 @@ public class AiChatController {
     }
 
     private Long resolveUserId(Authentication authentication) {
-        return userRepository.findByEmail(authentication.getName())
-                .map(com.taskpilot.users.entity.UserEntity::getId)
+        return userIdentityPort.findUserIdByEmail(authentication.getName())
                 .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(),
                         "User not found"));
+    }
+
+    private void validateUserMessage(String message) {
+        if (message == null) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Message is required");
+        }
+
+        if (message.length() > maxUserInputChars) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                    "Message exceeds " + maxUserInputChars + " characters");
+        }
     }
 
     private ChatSessionResponse toSessionResponse(ChatSessionEntity s, long messageCount) {

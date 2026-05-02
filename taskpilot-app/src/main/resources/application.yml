@@ -2,7 +2,7 @@ spring:
   application:
     name: taskpilot-app
   profiles:
-    active: prod
+    active: ai-dev
   output:
     ansi:
       enabled: always
@@ -71,14 +71,31 @@ ai:
     fallback-model: ${AI_GITHUB_FALLBACK_MODEL:gpt-4o}
     reasoning-model: ${AI_GITHUB_REASONING_MODEL:DeepSeek-R1}
 
+  groq:
+    enabled: ${AI_GROQ_ENABLED:false}
+    api-key: ${GROQ_API_KEY:}
+    base-url: ${AI_GROQ_BASE_URL:https://api.groq.com/openai/v1}
+    reasoning-model: ${AI_GROQ_REASONING_MODEL:openai/gpt-oss-120b}
+    gatekeeper-model: ${AI_GROQ_GATEKEEPER_MODEL:llama-3.1-8b-instant}
+
   model:
     timeout-seconds: ${AI_MODEL_TIMEOUT:60}
 
   routing:
     token-threshold: ${AI_TOKEN_THRESHOLD:6000}
+    reasoning-keywords: ${AI_REASONING_KEYWORDS:analyze,reason,strategy,architecture,tradeoff,root cause,plan,optimize,design,deep dive,phân tích,chiến lược,so sánh,vì sao,giải thích,lý do,đánh giá,lựa chọn,phân rã,bóc tách,lộ trình,breakdown,roadmap,rủi ro,trễ hạn,bế tắc,nguyên nhân,giải pháp,bottleneck,risk,quá tải,cân bằng,xung đột,kiến trúc,thiết kế hệ thống,database,tối ưu,architecture,system design,refactor}
+    tool-keywords: ${AI_TOOL_KEYWORDS:project status,workload,assign,candidates,task list,project progress,giao việc,tình trạng,tiến độ,danh sách task,công việc,ứng viên,giao task,gánh bug,chia việc,tạo task}
+
+  heuristic:
+    cache-ttl-seconds: ${AI_HEURISTIC_CACHE_TTL:60}
 
   chat:
-    history-size: ${AI_HISTORY_SIZE:20}
+    history-size: ${AI_HISTORY_SIZE:10}
+    memory-max-tokens: ${AI_MEMORY_MAX_TOKENS:7000}
+    max-user-input-chars: ${AI_MAX_USER_INPUT_CHARS:1500}
+    max-user-input-tokens: ${AI_MAX_USER_INPUT_TOKENS:2500}
+    max-output-tokens: ${AI_MAX_OUTPUT_TOKENS:3500}
+    max-assistant-memory-chars: ${AI_MAX_ASSISTANT_MEMORY_CHARS:1500}
 
 onesignal:
   app-id: ${ONESIGNAL_APP_ID:}
