@@ -247,15 +247,21 @@ public class AiStreamingService {
                 .toolSpecifications();
         ToolChoice toolChoice = ToolChoice.AUTO;
 
-        if (requiresAHP && toolRound == 0) {
-            List<dev.langchain4j.agent.tool.ToolSpecification> ahpOnly = toolCallingRegistryService
-                    .toolSpecificationsByName("recommendAssignmentCandidates");
-            if (!ahpOnly.isEmpty()) {
-                toolSpecs = ahpOnly;
-                toolChoice = ToolChoice.REQUIRED;
-                log.info("[Gatekeeper] requiresAHP=true -> forcing recommendAssignmentCandidates");
+        if (requiresAHP) {
+            if (toolRound == 0) {
+                List<dev.langchain4j.agent.tool.ToolSpecification> ahpOnly = toolCallingRegistryService
+                        .toolSpecificationsByName("recommendAssignmentCandidates");
+                if (!ahpOnly.isEmpty()) {
+                    toolSpecs = ahpOnly;
+                    toolChoice = ToolChoice.REQUIRED;
+                    log.info("[Gatekeeper] requiresAHP=true -> forcing recommendAssignmentCandidates");
+                } else {
+                    log.warn("[Gatekeeper] requiresAHP=true but recommendAssignmentCandidates tool not found");
+                }
             } else {
-                log.warn("[Gatekeeper] requiresAHP=true but recommendAssignmentCandidates tool not found");
+                toolSpecs = List.of();
+                toolChoice = ToolChoice.AUTO;
+                log.info("[Gatekeeper] requiresAHP=true -> disabling further tool rounds after initial execution");
             }
         }
 

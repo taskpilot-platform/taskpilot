@@ -42,11 +42,11 @@ public class SmartRoutingService {
     @Value("${ai.routing.token-threshold:8000}")
     private int tokenThreshold;
 
-    @Value("${ai.routing.reasoning-keywords:analyze,reason,strategy,architecture,tradeoff,root cause,plan,optimize,design,deep dive}")
-    private String reasoningKeywordsRaw;
-
     @Value("${ai.routing.tool-keywords:project status,workload,assign,candidates,task list,project progress}")
     private String toolKeywordsRaw;
+
+    @Value("${ai.routing.ahp-fallback-keywords:phân công,phan cong,giao việc,giao viec,chia việc,chia viec,chọn ai,chon ai,chọn người,chon nguoi,tìm người,tim nguoi,ai rảnh,ai ranh,ứng viên,ung vien,assign,candidate,workload,chia task}")
+    private String ahpFallbackKeywordsRaw;
 
     public SmartRoutingService(
             @Qualifier("geminiFlashModel") StreamingChatModel geminiFlashModel,
@@ -66,14 +66,17 @@ public class SmartRoutingService {
     public record RoutingDecision(StreamingChatModel model, String modelName, boolean requiresAHP) {
     }
 
+    public RoutingDecision route(String userMessage) {
+        return route(userMessage, null);
+    }
+
     public RoutingDecision route(String userMessage, String contextHistory) {
-        boolean requiresAHP = gatekeeperService.requiresAHP(userMessage);
+        boolean requiresAHP = resolveRequiresAHP(userMessage);
 
         int estimatedTokens = tokenEstimationUtil.estimateTotal(userMessage, contextHistory);
         log.debug("[SmartRouting] Estimated tokens: {}, threshold: {}", estimatedTokens, tokenThreshold);
 
-        String normalized = (userMessage == null ? "" : userMessage).toLowerCase(Locale.ROOT);
-        boolean asksForReasoning = containsAny(normalized, splitKeywords(reasoningKeywordsRaw));
+        String normalized = normalize(userMessage);
         boolean likelyNeedsTools = containsAny(normalized, splitKeywords(toolKeywordsRaw));
         boolean heavyContext = estimatedTokens > tokenThreshold;
 
@@ -84,11 +87,11 @@ public class SmartRoutingService {
             return new RoutingDecision(reasoningModel, name, true);
         }
 
-        if (heavyContext || asksForReasoning) {
+        if (heavyContext) {
             StreamingChatModel reasoningModel = getReasoningModel();
             String name = getModelName(reasoningModel);
-            log.info("[SmartRouting] Routing to REASONING model ({}) — tokens: {}, asksForReasoning: {}",
-                    name, estimatedTokens, asksForReasoning);
+            log.info("[SmartRouting] Routing to REASONING model ({}) — tokens: {}",
+                    name, estimatedTokens);
             return new RoutingDecision(reasoningModel, name, false);
         }
 
@@ -100,32 +103,6 @@ public class SmartRoutingService {
 
         log.info("[SmartRouting] Routing to LIGHT model ({}) — tokens: {}", fallbackModelName, estimatedTokens);
         return new RoutingDecision(gpt4oFallbackModel, fallbackModelName, false);
-    }
-
-    public StreamingChatModel selectModel(String userMessage, String contextHistory) {
-        int estimatedTokens = tokenEstimationUtil.estimateTotal(userMessage, contextHistory);
-        log.debug("[SmartRouting] Estimated tokens: {}, threshold: {}", estimatedTokens, tokenThreshold);
-
-        String normalized = (userMessage == null ? "" : userMessage).toLowerCase(Locale.ROOT);
-        boolean asksForReasoning = containsAny(normalized, splitKeywords(reasoningKeywordsRaw));
-        boolean likelyNeedsTools = containsAny(normalized, splitKeywords(toolKeywordsRaw));
-        boolean heavyContext = estimatedTokens > tokenThreshold;
-
-        if (heavyContext || asksForReasoning) {
-            StreamingChatModel reasoningModel = getReasoningModel();
-            log.info("[SmartRouting] Routing to REASONING model ({}) — tokens: {}, asksForReasoning: {}",
-                    getModelName(reasoningModel), estimatedTokens, asksForReasoning);
-            return reasoningModel;
-        }
-
-        if (likelyNeedsTools) {
-            log.info("[SmartRouting] Routing to TOOL-FRIENDLY model ({}) — tokens: {}",
-                    geminiModelName, estimatedTokens);
-            return geminiFlashModel;
-        }
-
-        log.info("[SmartRouting] Routing to LIGHT model ({}) — tokens: {}", fallbackModelName, estimatedTokens);
-        return gpt4oFallbackModel;
     }
 
     public StreamingChatModel getFallbackModel() {
@@ -153,6 +130,23 @@ public class SmartRoutingService {
         if (model == groqOssReasoningModel)
             return groqReasoningModelName;
         return model.getClass().getSimpleName();
+    }
+
+    private boolean resolveRequiresAHP(String userMessage) {
+        try {
+            boolean requiresAHP = gatekeeperService.requiresAHP(userMessage);
+            log.info("[SmartRouting] Gatekeeper requiresAHP={}", requiresAHP);
+            return requiresAHP;
+        } catch (Exception ex) {
+            log.warn("[SmartRouting] Gatekeeper failed; using keyword fallback: {}", ex.getMessage());
+            boolean requiresAHP = containsAny(normalize(userMessage), splitKeywords(ahpFallbackKeywordsRaw));
+            log.info("[SmartRouting] Keyword fallback requiresAHP={}", requiresAHP);
+            return requiresAHP;
+        }
+    }
+
+    private String normalize(String text) {
+        return text == null ? "" : text.toLowerCase(Locale.ROOT);
     }
 
     private boolean containsAny(String text, List<String> keywords) {
