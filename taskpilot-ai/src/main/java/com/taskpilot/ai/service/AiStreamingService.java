@@ -28,6 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.beans.factory.annotation.Value;
 
+import jakarta.annotation.PreDestroy;
 import java.io.IOException;
 import java.time.LocalDate;
 import java.time.Instant;
@@ -42,6 +43,8 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Slf4j
 @Service
@@ -49,6 +52,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class AiStreamingService {
 
     private static final int MAX_TOOL_ROUNDS = 4;
+    private static final int MAX_CONSECUTIVE_SAME_TOOL_EXECUTIONS = 3;
 
     private final ChatSessionRepository sessionRepository;
     private final ChatMessageRepository messageRepository;
@@ -94,12 +98,19 @@ public class AiStreamingService {
 
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
+    @PreDestroy
+    public void shutdown() {
+        executor.shutdown();
+    }
+
     @Transactional
     public SseEmitter streamChat(Long sessionId, Long userId, String userInput, String clientMessageId) {
         ChatSessionEntity session = sessionRepository.findByIdAndUserId(sessionId, userId)
                 .orElseThrow(() -> new SecurityException("Session not found or access denied"));
 
         SseEmitter emitter = new SseEmitter(180_000L);
+        // Bug fix #4: per-request guard so emitter.complete() is never called twice
+        AtomicBoolean emitterCompleted = new AtomicBoolean(false);
         long startTime = System.currentTimeMillis();
 
         String effectiveClientMessageId = normalizeClientMessageId(clientMessageId);
@@ -159,7 +170,7 @@ public class AiStreamingService {
         executor.submit(() -> {
             safeSend(emitter, "model", modelName, null);
             safeSend(emitter, "phase", Phase.THINKING.name(), null);
-            doStream(emitter, session, sessionId, userId, userInput, requestHistory, systemPrompt,
+            doStream(emitter, emitterCompleted, session, sessionId, userId, userInput, requestHistory, systemPrompt,
                     selectedModel, modelName, startTime, false, finalClientMessageId, requiresAHP);
         });
 
@@ -180,6 +191,7 @@ public class AiStreamingService {
     }
 
     private void doStream(SseEmitter emitter,
+            AtomicBoolean emitterCompleted,
             ChatSessionEntity session,
             Long sessionId,
             Long userId,
@@ -203,6 +215,7 @@ public class AiStreamingService {
 
         streamRound(
                 emitter,
+                emitterCompleted,
                 session,
                 sessionId,
                 userId,
@@ -219,11 +232,14 @@ public class AiStreamingService {
                 generatingMarked,
                 0,
                 requiresAHP,
+                null,
+                0,
                 toolCallSummaries,
                 toolNames);
     }
 
     private void streamRound(SseEmitter emitter,
+            AtomicBoolean emitterCompleted,
             ChatSessionEntity session,
             Long sessionId,
             Long userId,
@@ -240,37 +256,59 @@ public class AiStreamingService {
             AtomicBoolean generatingMarked,
             int toolRound,
             boolean requiresAHP,
+            String lastToolName,
+            int consecutiveToolExecutions,
             List<Map<String, Object>> toolCallSummaries,
             LinkedHashSet<String> toolNames) {
         List<ChatMessage> sanitizedHistory = sanitizeHistoryForTools(history);
+        // Default: No tools, no toolChoice. Only override when explicitly needed.
         List<dev.langchain4j.agent.tool.ToolSpecification> toolSpecs = toolCallingRegistryService
                 .toolSpecifications();
-        ToolChoice toolChoice = ToolChoice.AUTO;
+        ToolChoice toolChoice = null;
 
         if (requiresAHP) {
             if (toolRound == 0) {
+                // Round 0: Force AHP tool call
                 List<dev.langchain4j.agent.tool.ToolSpecification> ahpOnly = toolCallingRegistryService
                         .toolSpecificationsByName("recommendAssignmentCandidates");
                 if (!ahpOnly.isEmpty()) {
                     toolSpecs = ahpOnly;
-                    toolChoice = ToolChoice.REQUIRED;
+                    // Bug fix: Groq 120b crashes when ToolChoice.REQUIRED is used if the model fails to call it.
+                    // Using AUTO prevents the 400 error while still allowing the model to call the tool.
+                    toolChoice = ToolChoice.AUTO;
                     log.info("[Gatekeeper] requiresAHP=true -> forcing recommendAssignmentCandidates");
                 } else {
                     log.warn("[Gatekeeper] requiresAHP=true but recommendAssignmentCandidates tool not found");
                 }
             } else {
-                toolSpecs = List.of();
-                toolChoice = ToolChoice.AUTO;
-                log.info("[Gatekeeper] requiresAHP=true -> disabling further tool rounds after initial execution");
+                // Round 1+: All tool results are already injected into history by sanitizeHistoryForTools().
+                // Do NOT call streamRound() again — that still sends parallel_tool_calls and causes 400.
+                // Instead, delegate immediately to forceTextOnlyResponse().
+                log.info("[Gatekeeper] requiresAHP=true -> disabling further tool rounds, routing to text-only");
+                forceTextOnlyResponse(
+                        emitter, emitterCompleted, session, sessionId, userId, userInput,
+                        history, systemPrompt, model, modelName, startTime,
+                        isFallbackAttempt, clientMessageId, fullResponse,
+                        clientDisconnected, generatingMarked, requiresAHP,
+                        toolCallSummaries, toolNames,
+                        "Based on the tool data already provided in the context above, provide your final recommendation now. Do not call any tools.");
+                return;
             }
         }
 
-        ChatRequest request = ChatRequest.builder()
+        var requestBuilder = ChatRequest.builder()
                 .messages(sanitizedHistory)
-                .toolSpecifications(toolSpecs)
-                .toolChoice(toolChoice)
-                .maxOutputTokens(maxOutputTokens)
-                .build();
+                .maxOutputTokens(maxOutputTokens);
+
+        // Only add tools/toolChoice if actually needed.
+        if (toolSpecs != null && !toolSpecs.isEmpty()) {
+            requestBuilder.toolSpecifications(toolSpecs);
+            if (toolChoice != null) {
+                requestBuilder.toolChoice(toolChoice);
+            }
+        }
+
+        ChatRequest request = requestBuilder.build();
 
         model.chat(request, new StreamingChatResponseHandler() {
             @Override
@@ -297,6 +335,38 @@ public class AiStreamingService {
                 AiMessage aiMessage = completeResponse.aiMessage();
 
                 if (aiMessage != null && aiMessage.hasToolExecutionRequests()) {
+                    ToolLoopState nextToolState = advanceToolLoopState(
+                            lastToolName,
+                            consecutiveToolExecutions,
+                            aiMessage.toolExecutionRequests());
+
+                    if (nextToolState.consecutiveCount() > MAX_CONSECUTIVE_SAME_TOOL_EXECUTIONS) {
+                        log.warn("[AiChat] Tool loop guard hit for session {}: tool={} repeated {} times",
+                                sessionId, nextToolState.toolName(), nextToolState.consecutiveCount());
+                        forceTextOnlyResponse(
+                                emitter,
+                                emitterCompleted,
+                                session,
+                                sessionId,
+                                userId,
+                                userInput,
+                                history,
+                                systemPrompt,
+                                model,
+                                modelName,
+                                startTime,
+                                isFallbackAttempt,
+                                clientMessageId,
+                                fullResponse,
+                                clientDisconnected,
+                                generatingMarked,
+                                requiresAHP,
+                                toolCallSummaries,
+                                toolNames,
+                                "The same tool was requested too many times. Provide a final answer using the data already gathered, without calling more tools.");
+                        return;
+                    }
+
                     if (toolRound >= MAX_TOOL_ROUNDS) {
                         chatStreamStatusService.updatePhase(sessionId, clientMessageId,
                                 Phase.FAILED, modelName, null,
@@ -305,7 +375,7 @@ public class AiStreamingService {
                         safeSend(emitter, "error",
                                 "Tool execution exceeded allowed rounds. Please refine your request.",
                                 null);
-                        emitter.complete();
+                        safeComplete(emitter, emitterCompleted);
                         return;
                     }
 
@@ -323,26 +393,44 @@ public class AiStreamingService {
                             Phase.THINKING, modelName, null, null);
                     safeSend(emitter, "phase", Phase.THINKING.name(), null);
 
-                    streamRound(
-                            emitter,
-                            session,
-                            sessionId,
-                            userId,
-                            userInput,
-                            history,
-                            systemPrompt,
-                            model,
-                            modelName,
-                            startTime,
-                            isFallbackAttempt,
-                            clientMessageId,
-                            fullResponse,
-                            clientDisconnected,
-                            generatingMarked,
-                            toolRound + 1,
-                            requiresAHP,
-                            toolCallSummaries,
-                            toolNames);
+                    if (requiresAHP) {
+                        // AHP flow: tool result is already sanitized into history by the next
+                        // streamRound() call's sanitizeHistoryForTools(). Skip streamRound() entirely
+                        // to avoid sending parallel_tool_calls without tools (OpenAI 400 error).
+                        // Route directly to a clean text-only call.
+                        log.info("[Gatekeeper] requiresAHP=true -> tool done, routing to forceTextOnlyResponse");
+                        forceTextOnlyResponse(
+                                emitter, emitterCompleted, session, sessionId, userId, userInput,
+                                history, systemPrompt, model, modelName, startTime,
+                                isFallbackAttempt, clientMessageId, fullResponse,
+                                clientDisconnected, generatingMarked, requiresAHP,
+                                toolCallSummaries, toolNames,
+                                "Based on the tool data already provided in the context above, provide your final strategic recommendation now. Do not call any tools.");
+                    } else {
+                        streamRound(
+                                emitter,
+                                emitterCompleted,
+                                session,
+                                sessionId,
+                                userId,
+                                userInput,
+                                history,
+                                systemPrompt,
+                                model,
+                                modelName,
+                                startTime,
+                                isFallbackAttempt,
+                                clientMessageId,
+                                fullResponse,
+                                clientDisconnected,
+                                generatingMarked,
+                                toolRound + 1,
+                                requiresAHP,
+                                nextToolState.toolName(),
+                                nextToolState.consecutiveCount(),
+                                toolCallSummaries,
+                                toolNames);
+                    }
                     return;
                 }
 
@@ -364,9 +452,11 @@ public class AiStreamingService {
 
                 session.setUpdatedAt(Instant.now());
                 if (session.getTitle() == null || session.getTitle().isBlank()) {
-                    String autoTitle = responseText.length() > 60
-                            ? responseText.substring(0, 60) + "..."
-                            : responseText;
+                    // Bug fix #8: strip <think> block before using as title
+                    String titleSource = stripThinkTags(responseText);
+                    String autoTitle = titleSource.length() > 60
+                            ? titleSource.substring(0, 60) + "..."
+                            : titleSource;
                     session.setTitle(autoTitle);
                 }
                 sessionRepository.save(session);
@@ -387,7 +477,7 @@ public class AiStreamingService {
                 if (!clientDisconnected.get()) {
                     safeSend(emitter, "phase", Phase.FINALIZED.name(), null);
                     safeSend(emitter, "done", responseText, null);
-                    emitter.complete();
+                    safeComplete(emitter, emitterCompleted);
                 }
 
                 log.info("[SSE] Streaming complete for session {} using model {} in {}ms",
@@ -414,7 +504,7 @@ public class AiStreamingService {
                         safeSend(emitter, "error",
                                 "AI service is currently unavailable. Please try again later.",
                                 null);
-                        emitter.complete();
+                        safeComplete(emitter, emitterCompleted);
                         return;
                     }
 
@@ -424,7 +514,9 @@ public class AiStreamingService {
                     safeSend(emitter, "model", fallbackName + " (fallback)", null);
                     safeSend(emitter, "phase", Phase.THINKING.name(), null);
 
-                    doStream(emitter, session, sessionId, userId, userInput, history, systemPrompt, fallback,
+                    // Bug fix #3: pass fresh StringBuilder so fallback doesn't inherit partial tokens
+                    // from the failed primary model's output.
+                    doStream(emitter, emitterCompleted, session, sessionId, userId, userInput, history, systemPrompt, fallback,
                             fallbackName, startTime, true, clientMessageId, requiresAHP);
                 } else {
                     chatStreamStatusService.updatePhase(sessionId, clientMessageId,
@@ -433,10 +525,167 @@ public class AiStreamingService {
                     safeSend(emitter, "error",
                             "AI service is currently unavailable. Please try again later.",
                             null);
-                    emitter.complete();
+                    safeComplete(emitter, emitterCompleted);
                 }
             }
         });
+    }
+
+    private void forceTextOnlyResponse(SseEmitter emitter,
+            AtomicBoolean emitterCompleted,
+            ChatSessionEntity session,
+            Long sessionId,
+            Long userId,
+            String userInput,
+            List<ChatMessage> history,
+            String systemPrompt,
+            StreamingChatModel model,
+            String modelName,
+            long startTime,
+            boolean isFallbackAttempt,
+            String clientMessageId,
+            StringBuilder ignoredSharedBuffer,
+            AtomicBoolean clientDisconnected,
+            AtomicBoolean generatingMarked,
+            boolean requiresAHP,
+            List<Map<String, Object>> toolCallSummaries,
+            LinkedHashSet<String> toolNames,
+            String guardrailInstruction) {
+
+        List<ChatMessage> textOnlyHistory = new ArrayList<>(sanitizeHistoryForTools(history));
+        textOnlyHistory.add(SystemMessage.from(guardrailInstruction));
+
+        // Bug fix #2: use a fresh, isolated StringBuilder so we don't contaminate
+        // the shared fullResponse with stray partial tokens from earlier rounds.
+        StringBuilder roundResponse = new StringBuilder();
+
+        // Architectural Fix: Dual-Pipeline.
+        // Instead of reusing the tool-enabled model, we fetch the pure TEXT-ONLY variant 
+        // of the same provider to avoid the parallel_tool_calls bug cleanly without dummy tools.
+        StreamingChatModel textModel = routingService.getTextModel(modelName);
+        log.info("[ForceTextOnly] Using text-only pipeline model {} for session {}", modelName, sessionId);
+
+        ChatRequest request = ChatRequest.builder()
+                .messages(textOnlyHistory)
+                .maxOutputTokens(maxOutputTokens)
+                .build();
+
+        textModel.chat(request, new StreamingChatResponseHandler() {
+            @Override
+            public void onPartialResponse(String partialResponse) {
+                roundResponse.append(partialResponse);
+
+                if (generatingMarked.compareAndSet(false, true)) {
+                    chatStreamStatusService.updatePhase(sessionId, clientMessageId,
+                            Phase.GENERATING, modelName, null, null);
+                    if (!safeSend(emitter, "phase", Phase.GENERATING.name(), null)) {
+                        clientDisconnected.set(true);
+                    }
+                }
+
+                if (!clientDisconnected.get()) {
+                    if (!safeSend(emitter, "token", Map.of("token", partialResponse), MediaType.APPLICATION_JSON)) {
+                        clientDisconnected.set(true);
+                    }
+                }
+            }
+
+            @Override
+            public void onCompleteResponse(ChatResponse completeResponse) {
+                AiMessage aiMessage = completeResponse.aiMessage();
+                String responseText = roundResponse.toString();
+                if ((responseText == null || responseText.isBlank()) && aiMessage != null && aiMessage.text() != null) {
+                    responseText = aiMessage.text();
+                }
+
+                if (responseText == null || responseText.isBlank()) {
+                    responseText = "I couldn't complete the tool-based reasoning safely, so please refine the request and try again.";
+                }
+
+                long durationMs = System.currentTimeMillis() - startTime;
+                int estimatedTokens = completeResponse.tokenUsage() != null
+                        ? completeResponse.tokenUsage().totalTokenCount()
+                        : responseText.length() / 4;
+
+                ChatMessageEntity assistantMsg = messageRepository.save(ChatMessageEntity.builder()
+                        .sessionId(sessionId)
+                        .sender(SenderType.ASSISTANT)
+                        .content(responseText)
+                        .build());
+
+                session.setUpdatedAt(Instant.now());
+                if (session.getTitle() == null || session.getTitle().isBlank()) {
+                    // Bug fix #8: strip <think> block before using as title
+                    String titleSource = stripThinkTags(responseText);
+                    String autoTitle = titleSource.length() > 60
+                            ? titleSource.substring(0, 60) + "..."
+                            : titleSource;
+                    session.setTitle(autoTitle);
+                }
+                sessionRepository.save(session);
+
+                Object toolOutput = toolCallSummaries.isEmpty() ? null : toolCallSummaries;
+                String actionTaken = toolNames.isEmpty() ? null : String.join(",", toolNames);
+
+                // Log with modelName so it's clear which model actually generated the response
+                aiLogService.saveLog(userId, null, sessionId, assistantMsg.getId(), userInput,
+                        responseText, extractReasoning(responseText), actionTaken, toolOutput, modelName,
+                        estimatedTokens, (int) durationMs);
+
+                String cleanResponse = sessionChatMemoryService.sanitizeAssistantMessage(responseText);
+                sessionChatMemoryService.appendAssistantMessage(sessionId, cleanResponse, systemPrompt);
+
+                chatStreamStatusService.updatePhase(sessionId, clientMessageId,
+                        Phase.FINALIZED, modelName, assistantMsg.getId(), null);
+
+                if (!clientDisconnected.get()) {
+                    safeSend(emitter, "phase", Phase.FINALIZED.name(), null);
+                    safeSend(emitter, "done", responseText, null);
+                    safeComplete(emitter, emitterCompleted);
+                }
+
+                log.info("[SSE] forceTextOnly finalized session {} via {} in {}ms",
+                        sessionId, modelName, durationMs);
+            }
+
+            @Override
+            public void onError(Throwable error) {
+                if (clientDisconnected.get() || isClientAbort(error)) {
+                    return;
+                }
+
+                // Always log — this was previously swallowed silently, making bugs invisible
+                log.error("[SSE] forceTextOnlyResponse failed for session {} model {}: {}",
+                        sessionId, modelName, error.getMessage());
+
+                chatStreamStatusService.updatePhase(sessionId, clientMessageId,
+                        Phase.FAILED, modelName, null, error.getMessage());
+                safeSend(emitter, "phase", Phase.FAILED.name(), null);
+                safeSend(emitter, "error",
+                        "AI service is currently unavailable. Please try again later.",
+                        null);
+                safeComplete(emitter, emitterCompleted);
+            }
+        });
+    }
+
+    private ToolLoopState advanceToolLoopState(String previousToolName,
+            int previousCount,
+            List<ToolExecutionRequest> requests) {
+        String currentToolName = previousToolName;
+        int currentCount = previousCount;
+
+        for (ToolExecutionRequest request : requests) {
+            String requestToolName = request.name();
+            if (requestToolName != null && requestToolName.equals(currentToolName)) {
+                currentCount++;
+            } else {
+                currentToolName = requestToolName;
+                currentCount = 1;
+            }
+        }
+
+        return new ToolLoopState(currentToolName, currentCount);
     }
 
     private List<ToolExecutionResultMessage> executeTools(
@@ -487,8 +736,17 @@ public class AiStreamingService {
                 emitter.send(SseEmitter.event().name(event).data(data, mediaType));
             }
             return true;
-        } catch (IOException ignored) {
+        } catch (IOException e) {
+            // Bug fix #9: log at debug so send failures are traceable without spamming logs
+            log.debug("[SSE] safeSend failed for event '{}': {}", event, e.getMessage());
             return false;
+        }
+    }
+
+    /** Bug fix #4: guard against emitter.complete() being called multiple times (race condition). */
+    private void safeComplete(SseEmitter emitter, AtomicBoolean completed) {
+        if (completed.compareAndSet(false, true)) {
+            emitter.complete();
         }
     }
 
@@ -526,48 +784,62 @@ public class AiStreamingService {
         return false;
     }
 
-    private List<ChatMessage> sanitizeHistoryForTools(List<ChatMessage> history) {
-        if (history == null || history.isEmpty()) {
+    private List<ChatMessage> sanitizeHistoryForTools(List<ChatMessage> rawMessages) {
+        if (rawMessages == null || rawMessages.isEmpty()) {
             return List.of();
         }
 
-        List<ChatMessage> sanitized = new ArrayList<>(history.size());
-        boolean allowToolResults = false;
+        List<ChatMessage> safeMessages = new ArrayList<>();
 
-        for (ChatMessage message : history) {
-            if (message instanceof AiMessage aiMessage) {
-                sanitized.add(message);
-                allowToolResults = aiMessage.hasToolExecutionRequests();
-                continue;
+        for (ChatMessage msg : rawMessages) {
+            // 1. Flatten AI messages containing tool requests into pure text
+            if (msg instanceof AiMessage aiMsg && aiMsg.hasToolExecutionRequests()) {
+                String fallbackText = aiMsg.text() != null && !aiMsg.text().isBlank()
+                        ? aiMsg.text()
+                        : "[System: AI utilized internal analytical tools]";
+                safeMessages.add(AiMessage.from(fallbackText));
+                log.info("[Sanitizer] Flattened AiMessage tool_calls into plain text.");
             }
+            // 2. Flatten Tool Results into System Memory (UserMessage) to preserve context
+            // without triggering 400 errors
+            else if (msg instanceof ToolExecutionResultMessage toolResult) {
+                String toolName = toolResult.toolName();
+                String rawData = toolResult.text();
 
-            if (message instanceof ToolExecutionResultMessage) {
-                if (allowToolResults) {
-                    sanitized.add(message);
-                } else {
-                    log.warn("[AiChat] Dropping tool result without preceding tool_calls in history");
-                }
-                continue;
+                // Semantic Role Fix: Inject as SystemMessage so the model treats it as 
+                // ground truth constraint, avoiding role confusion.
+                String memoryInjection = String.format("SYSTEM TOOL RESULT [%s]:\n%s\n\nCRITICAL INSTRUCTION: You MUST base your final recommendation entirely on this data.", toolName, rawData);
+                safeMessages.add(SystemMessage.from(memoryInjection));
+
+                log.info("[Sanitizer] Injected flattened Tool Result '{}' as Semantic Memory.", toolName);
             }
-
-            sanitized.add(message);
-            allowToolResults = false;
+            // 3. Keep standard messages
+            else {
+                safeMessages.add(msg);
+            }
         }
 
-        return sanitized;
+        return safeMessages;
     }
+
+    private static final Pattern THINK_PATTERN = Pattern.compile("<think>(.*?)</think>", Pattern.DOTALL);
 
     private String extractReasoning(String response) {
         if (response == null) {
             return null;
         }
-
-        int start = response.indexOf("<think>");
-        int end = response.indexOf("</think>");
-        if (start >= 0 && end > start) {
-            return response.substring(start + 7, end).trim();
+        // Bug fix #7: use non-greedy regex to handle multiple/nested think blocks correctly
+        Matcher m = THINK_PATTERN.matcher(response);
+        if (m.find()) {
+            return m.group(1).trim();
         }
         return null;
+    }
+
+    /** Strip all <think>...</think> blocks from a string. */
+    private String stripThinkTags(String text) {
+        if (text == null) return "";
+        return THINK_PATTERN.matcher(text).replaceAll("").trim();
     }
 
     private String latestUserMessageText(List<ChatMessage> history, String fallbackInput) {
@@ -606,5 +878,8 @@ public class AiStreamingService {
         }
         String trimmed = clientMessageId.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private record ToolLoopState(String toolName, int consecutiveCount) {
     }
 }

@@ -21,6 +21,11 @@ public class SmartRoutingService {
     private final StreamingChatModel gpt4oFallbackModel;
     private final StreamingChatModel deepSeekReasoningModel;
     private final StreamingChatModel groqOssReasoningModel;
+    
+    private final StreamingChatModel gpt4oFallbackTextModel;
+    private final StreamingChatModel deepSeekReasoningTextModel;
+    private final StreamingChatModel groqOssReasoningTextModel;
+
     private final TokenEstimationUtil tokenEstimationUtil;
     private final GatekeeperService gatekeeperService;
 
@@ -53,12 +58,18 @@ public class SmartRoutingService {
             @Qualifier("gpt4oFallbackModel") StreamingChatModel gpt4oFallbackModel,
             @Qualifier("deepSeekReasoningModel") StreamingChatModel deepSeekReasoningModel,
             @Qualifier("groqOssReasoningModel") @Nullable StreamingChatModel groqOssReasoningModel,
+            @Qualifier("gpt4oFallbackTextModel") StreamingChatModel gpt4oFallbackTextModel,
+            @Qualifier("deepSeekReasoningTextModel") StreamingChatModel deepSeekReasoningTextModel,
+            @Qualifier("groqOssReasoningTextModel") @Nullable StreamingChatModel groqOssReasoningTextModel,
             TokenEstimationUtil tokenEstimationUtil,
             GatekeeperService gatekeeperService) {
         this.geminiFlashModel = geminiFlashModel;
         this.gpt4oFallbackModel = gpt4oFallbackModel;
         this.deepSeekReasoningModel = deepSeekReasoningModel;
         this.groqOssReasoningModel = groqOssReasoningModel;
+        this.gpt4oFallbackTextModel = gpt4oFallbackTextModel;
+        this.deepSeekReasoningTextModel = deepSeekReasoningTextModel;
+        this.groqOssReasoningTextModel = groqOssReasoningTextModel;
         this.tokenEstimationUtil = tokenEstimationUtil;
         this.gatekeeperService = gatekeeperService;
     }
@@ -120,14 +131,32 @@ public class SmartRoutingService {
         return deepSeekReasoningModel;
     }
 
+    public StreamingChatModel getReasoningTextModel() {
+        if (groqEnabled && groqOssReasoningTextModel != null) {
+            return groqOssReasoningTextModel;
+        }
+        return deepSeekReasoningTextModel;
+    }
+
+    public StreamingChatModel getFallbackTextModel() {
+        return gpt4oFallbackTextModel;
+    }
+
+    public StreamingChatModel getTextModel(String modelName) {
+        if (modelName == null) return getPrimaryModel();
+        if (modelName.equals(fallbackModelName)) return getFallbackTextModel();
+        if (modelName.equals(deepSeekReasoningModelName) || modelName.equals(groqReasoningModelName)) return getReasoningTextModel();
+        return getPrimaryModel();
+    }
+
     public String getModelName(StreamingChatModel model) {
-        if (model == gpt4oFallbackModel)
+        if (model == gpt4oFallbackModel || model == gpt4oFallbackTextModel)
             return fallbackModelName;
         if (model == geminiFlashModel)
             return geminiModelName;
-        if (model == deepSeekReasoningModel)
+        if (model == deepSeekReasoningModel || model == deepSeekReasoningTextModel)
             return deepSeekReasoningModelName;
-        if (model == groqOssReasoningModel)
+        if (model == groqOssReasoningModel || model == groqOssReasoningTextModel)
             return groqReasoningModelName;
         return model.getClass().getSimpleName();
     }
