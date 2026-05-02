@@ -1,5 +1,6 @@
 package com.taskpilot.ai.service;
 
+import com.taskpilot.ai.gatekeeper.GatekeeperService;
 import com.taskpilot.ai.util.TokenEstimationUtil;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import lombok.extern.slf4j.Slf4j;
@@ -21,6 +22,7 @@ public class SmartRoutingService {
     private final StreamingChatModel deepSeekReasoningModel;
     private final StreamingChatModel groqOssReasoningModel;
     private final TokenEstimationUtil tokenEstimationUtil;
+    private final GatekeeperService gatekeeperService;
 
     @Value("${ai.gemini.model-name}")
     private String geminiModelName;
@@ -51,12 +53,53 @@ public class SmartRoutingService {
             @Qualifier("gpt4oFallbackModel") StreamingChatModel gpt4oFallbackModel,
             @Qualifier("deepSeekReasoningModel") StreamingChatModel deepSeekReasoningModel,
             @Qualifier("groqOssReasoningModel") @Nullable StreamingChatModel groqOssReasoningModel,
-            TokenEstimationUtil tokenEstimationUtil) {
+            TokenEstimationUtil tokenEstimationUtil,
+            GatekeeperService gatekeeperService) {
         this.geminiFlashModel = geminiFlashModel;
         this.gpt4oFallbackModel = gpt4oFallbackModel;
         this.deepSeekReasoningModel = deepSeekReasoningModel;
         this.groqOssReasoningModel = groqOssReasoningModel;
         this.tokenEstimationUtil = tokenEstimationUtil;
+        this.gatekeeperService = gatekeeperService;
+    }
+
+    public record RoutingDecision(StreamingChatModel model, String modelName, boolean requiresAHP) {
+    }
+
+    public RoutingDecision route(String userMessage, String contextHistory) {
+        boolean requiresAHP = gatekeeperService.requiresAHP(userMessage);
+
+        int estimatedTokens = tokenEstimationUtil.estimateTotal(userMessage, contextHistory);
+        log.debug("[SmartRouting] Estimated tokens: {}, threshold: {}", estimatedTokens, tokenThreshold);
+
+        String normalized = (userMessage == null ? "" : userMessage).toLowerCase(Locale.ROOT);
+        boolean asksForReasoning = containsAny(normalized, splitKeywords(reasoningKeywordsRaw));
+        boolean likelyNeedsTools = containsAny(normalized, splitKeywords(toolKeywordsRaw));
+        boolean heavyContext = estimatedTokens > tokenThreshold;
+
+        if (requiresAHP) {
+            StreamingChatModel reasoningModel = getReasoningModel();
+            String name = getModelName(reasoningModel);
+            log.info("[SmartRouting] Gatekeeper requires AHP -> REASONING model ({})", name);
+            return new RoutingDecision(reasoningModel, name, true);
+        }
+
+        if (heavyContext || asksForReasoning) {
+            StreamingChatModel reasoningModel = getReasoningModel();
+            String name = getModelName(reasoningModel);
+            log.info("[SmartRouting] Routing to REASONING model ({}) — tokens: {}, asksForReasoning: {}",
+                    name, estimatedTokens, asksForReasoning);
+            return new RoutingDecision(reasoningModel, name, false);
+        }
+
+        if (likelyNeedsTools) {
+            log.info("[SmartRouting] Routing to TOOL-FRIENDLY model ({}) — tokens: {}",
+                    geminiModelName, estimatedTokens);
+            return new RoutingDecision(geminiFlashModel, geminiModelName, false);
+        }
+
+        log.info("[SmartRouting] Routing to LIGHT model ({}) — tokens: {}", fallbackModelName, estimatedTokens);
+        return new RoutingDecision(gpt4oFallbackModel, fallbackModelName, false);
     }
 
     public StreamingChatModel selectModel(String userMessage, String contextHistory) {

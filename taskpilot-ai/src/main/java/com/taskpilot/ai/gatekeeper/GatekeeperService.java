@@ -17,13 +17,23 @@ import java.util.Locale;
 public class GatekeeperService {
 
     private static final List<String> FALLBACK_KEYWORDS = List.of(
+            "phân công",
             "phan cong",
+            "giao việc",
             "giao task",
             "giao viec",
             "chia viec",
+            "chia việc",
+            "chọn ai",
+            "chon ai",
+            "chọn người",
+            "chon nguoi",
+            "tìm người",
             "tim nguoi",
             "ai ranh",
+            "ai rảnh",
             "ung vien",
+            "ứng viên",
             "assign",
             "candidate",
             "workload",
@@ -57,10 +67,14 @@ public class GatekeeperService {
 
         try {
             IntentResult intent = gatekeeperAgent.classify(userMessage);
-            return intent != null && intent.isRequiresAHP();
+            boolean requiresAHP = intent != null && intent.isRequiresAHP();
+            log.info("[Gatekeeper] requiresAHP={} (llama-3.1-8b)", requiresAHP);
+            return requiresAHP;
         } catch (Exception ex) {
             log.warn("[Gatekeeper] Gatekeeper model failed, using keyword fallback: {}", ex.getMessage());
-            return fallbackRequiresAHP(userMessage);
+            boolean requiresAHP = fallbackRequiresAHP(userMessage);
+            log.info("[Gatekeeper] requiresAHP={} (fallback)", requiresAHP);
+            return requiresAHP;
         }
     }
 

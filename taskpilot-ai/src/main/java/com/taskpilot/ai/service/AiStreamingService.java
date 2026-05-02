@@ -4,7 +4,6 @@ import com.taskpilot.ai.entity.AiChatRequestEntity.Phase;
 import com.taskpilot.ai.entity.ChatMessageEntity;
 import com.taskpilot.ai.entity.ChatMessageEntity.SenderType;
 import com.taskpilot.ai.entity.ChatSessionEntity;
-import com.taskpilot.ai.gatekeeper.GatekeeperService;
 import com.taskpilot.ai.heuristic.HeuristicConfigProvider;
 import com.taskpilot.ai.repository.ChatMessageRepository;
 import com.taskpilot.ai.repository.ChatSessionRepository;
@@ -59,7 +58,6 @@ public class AiStreamingService {
     private final SessionChatMemoryService sessionChatMemoryService;
     private final ToolCallingRegistryService toolCallingRegistryService;
     private final HeuristicConfigProvider heuristicConfigProvider;
-    private final GatekeeperService gatekeeperService;
 
     @Value("${ai.chat.max-output-tokens:3500}")
     private int maxOutputTokens;
@@ -150,8 +148,10 @@ public class AiStreamingService {
         }).reduce("", (a, b) -> a + "\n" + b);
 
         String routingInput = latestUserMessageText(requestHistory, userInput);
-        StreamingChatModel selectedModel = routingService.selectModel(routingInput, contextText);
-        String modelName = routingService.getModelName(selectedModel);
+        SmartRoutingService.RoutingDecision decision = routingService.route(routingInput, contextText);
+        StreamingChatModel selectedModel = decision.model();
+        String modelName = decision.modelName();
+        boolean requiresAHP = decision.requiresAHP();
 
         chatStreamStatusService.updatePhase(sessionId, effectiveClientMessageId, Phase.THINKING, modelName, null, null);
 
@@ -160,7 +160,7 @@ public class AiStreamingService {
             safeSend(emitter, "model", modelName, null);
             safeSend(emitter, "phase", Phase.THINKING.name(), null);
             doStream(emitter, session, sessionId, userId, userInput, requestHistory, systemPrompt,
-                    selectedModel, modelName, startTime, false, finalClientMessageId);
+                    selectedModel, modelName, startTime, false, finalClientMessageId, requiresAHP);
         });
 
         emitter.onTimeout(() -> {
@@ -190,7 +190,8 @@ public class AiStreamingService {
             String modelName,
             long startTime,
             boolean isFallbackAttempt,
-            String clientMessageId) {
+            String clientMessageId,
+            boolean requiresAHP) {
 
         List<ChatMessage> workingHistory = new ArrayList<>(history);
         StringBuilder fullResponse = new StringBuilder();
@@ -199,8 +200,6 @@ public class AiStreamingService {
 
         List<Map<String, Object>> toolCallSummaries = new ArrayList<>();
         LinkedHashSet<String> toolNames = new LinkedHashSet<>();
-
-        boolean requiresAHP = gatekeeperService.requiresAHP(userInput);
 
         streamRound(
                 emitter,
@@ -420,7 +419,7 @@ public class AiStreamingService {
                     safeSend(emitter, "phase", Phase.THINKING.name(), null);
 
                     doStream(emitter, session, sessionId, userId, userInput, history, systemPrompt, fallback,
-                            fallbackName, startTime, true, clientMessageId);
+                            fallbackName, startTime, true, clientMessageId, requiresAHP);
                 } else {
                     chatStreamStatusService.updatePhase(sessionId, clientMessageId,
                             Phase.FAILED, modelName, null, error.getMessage());
