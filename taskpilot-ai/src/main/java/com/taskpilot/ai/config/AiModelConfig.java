@@ -76,6 +76,20 @@ public class AiModelConfig {
                                 .build();
         }
 
+        @Bean("gpt4oFallbackTextModel")
+        public StreamingChatModel gpt4oFallbackTextModel() {
+                log.info("[AI Config] Initializing FALLBACK TEXT model: {} (GitHub Models via OpenAI Official SDK)",
+                                fallbackModelName);
+                return OpenAiOfficialStreamingChatModel.builder()
+                                .apiKey(githubToken)
+                                .modelName(fallbackModelName)
+                                .isGitHubModels(true)
+                                .temperature(0.3)
+                                .parallelToolCalls(false)
+                                .timeout(Duration.ofSeconds(timeoutSeconds))
+                                .build();
+        }
+
         @Bean("deepSeekReasoningModel")
         public StreamingChatModel deepSeekReasoningModel() {
                 log.info("[AI Config] Initializing REASONING model: {} (GitHub Models via OpenAI Official SDK)",
@@ -86,6 +100,20 @@ public class AiModelConfig {
                                 .isGitHubModels(true)
                                 .temperature(0.5)
                                 .parallelToolCalls(true)
+                                .timeout(Duration.ofSeconds(timeoutSeconds * 2))
+                                .build();
+        }
+
+        @Bean("deepSeekReasoningTextModel")
+        public StreamingChatModel deepSeekReasoningTextModel() {
+                log.info("[AI Config] Initializing REASONING TEXT model: {} (GitHub Models via OpenAI Official SDK)",
+                                reasoningModelName);
+                return OpenAiOfficialStreamingChatModel.builder()
+                                .apiKey(githubToken)
+                                .modelName(reasoningModelName)
+                                .isGitHubModels(true)
+                                .temperature(0.5)
+                                .parallelToolCalls(false)
                                 .timeout(Duration.ofSeconds(timeoutSeconds * 2))
                                 .build();
         }
@@ -105,6 +133,25 @@ public class AiModelConfig {
                                 .modelName(groqReasoningModelName)
                                 .temperature(0.4)
                                 .parallelToolCalls(true)
+                                .timeout(Duration.ofSeconds(timeoutSeconds * 2))
+                                .build();
+        }
+
+        @Bean("groqOssReasoningTextModel")
+        @ConditionalOnProperty(value = "ai.groq.enabled", havingValue = "true")
+        public StreamingChatModel groqOssReasoningTextModel() {
+                if (groqApiKey == null || groqApiKey.isBlank()) {
+                        throw new IllegalStateException("ai.groq.enabled=true but ai.groq.api-key is missing");
+                }
+
+                log.info("[AI Config] Initializing OSS REASONING TEXT model: {} (Groq OpenAI-compatible API)",
+                                groqReasoningModelName);
+                return OpenAiOfficialStreamingChatModel.builder()
+                                .apiKey(groqApiKey)
+                                .baseUrl(groqBaseUrl)
+                                .modelName(groqReasoningModelName)
+                                .temperature(0.4)
+                                .parallelToolCalls(false)
                                 .timeout(Duration.ofSeconds(timeoutSeconds * 2))
                                 .build();
         }
