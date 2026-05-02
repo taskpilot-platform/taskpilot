@@ -1,11 +1,13 @@
 package com.taskpilot.ai.tools;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.taskpilot.ai.dto.AutoAssignmentResponse;
 import com.taskpilot.ai.service.AutoAssignmentService;
 import com.taskpilot.contracts.assignment.dto.ProjectDueDto;
 import com.taskpilot.contracts.assignment.port.out.ProjectMemberPort;
+import com.taskpilot.contracts.aiquery.dto.*;
+import com.taskpilot.contracts.aiquery.port.out.ProjectInsightsPort;
+import com.taskpilot.contracts.aiquery.port.out.MemberAnalyticsPort;
+import com.taskpilot.contracts.aiquery.port.out.TaskCommandPort;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
@@ -14,11 +16,8 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -28,24 +27,18 @@ public class TaskPilotAiTools {
 
     private final AutoAssignmentService autoAssignmentService;
     private final ProjectMemberPort projectMemberPort;
-    private final ObjectMapper objectMapper;
+    private final ProjectInsightsPort projectInsightsPort;
+    private final MemberAnalyticsPort memberAnalyticsPort;
+    private final TaskCommandPort taskCommandPort;
 
     @Tool("""
             Use this tool when the user asks about the status, progress, or health of a specific project.
             Typical intents include: "tien do du an", "bao cao du an", "project status", "progress report".
             Provide the project ID, and this tool returns a short status summary for that project.
             """)
-    public String getProjectStatus(@P("The ID of the project to query") Long projectId) {
+    public ProjectStatusDto getProjectStatus(@P("The ID of the project to query") Long projectId) {
         log.info("[AiTool] getProjectStatus called for project {}", projectId);
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("projectId", projectId);
-        payload.put("projectName", projectId != null && projectId == 2L ? "warehouse-update" : "unknown");
-        payload.put("status", projectId != null && projectId == 2L ? "AT_RISK" : "IN_PROGRESS");
-        payload.put("completionPercent", projectId != null && projectId == 2L ? 62 : 45);
-        payload.put("openTasks", projectId != null && projectId == 2L ? 18 : 12);
-        payload.put("overdueTasks", projectId != null && projectId == 2L ? 3 : 1);
-        payload.put("mock", true);
-        return toJson(payload);
+        return projectInsightsPort.getProjectStatus(projectId);
     }
 
     @Tool("""
@@ -53,14 +46,9 @@ public class TaskPilotAiTools {
             Typical intents include: "ai ranh", "load team", "workload", "team availability".
             Provide the project ID to get a workload snapshot of members in that project.
             """)
-    public String getMemberWorkload(@P("The ID of the project") Long projectId) {
+    public List<MemberWorkloadDto> getMemberWorkload(@P("The ID of the project") Long projectId) {
         log.info("[AiTool] getMemberWorkload called for project {}", projectId);
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("projectId", projectId);
-        payload.put("projectName", projectId != null && projectId == 2L ? "warehouse-update" : "unknown");
-        payload.put("members", mockMemberWorkloads(projectId));
-        payload.put("mock", true);
-        return toJson(payload);
+        return memberAnalyticsPort.getMemberWorkloadForProject(projectId);
     }
 
     @Tool("""
@@ -68,15 +56,9 @@ public class TaskPilotAiTools {
             Typical intents include: "thanh vien du an", "ai trong du an", "project members".
             Provide the project ID. This tool returns member IDs, names, roles, and skills for that project.
             """)
-    public String getProjectMembers(@P("The ID of the project") Long projectId) {
+    public List<ProjectMemberDto> getProjectMembers(@P("The ID of the project") Long projectId) {
         log.info("[AiTool] getProjectMembers called for project {}", projectId);
-
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("projectId", projectId);
-        payload.put("projectName", projectId != null && projectId == 2L ? "warehouse-update" : "unknown");
-        payload.put("members", mockProjectMembers(projectId));
-        payload.put("mock", true);
-        return toJson(payload);
+        return projectInsightsPort.getProjectMembers(projectId);
     }
 
     @Tool("""
@@ -84,20 +66,9 @@ public class TaskPilotAiTools {
             Typical intents include: "member workload", "load cua thanh vien", "dang lam bao nhieu task".
             Provide the member ID. This tool returns open tasks, overdue tasks, and estimated hours.
             """)
-    public String getMemberWorkloadByMemberId(@P("The ID of the member") Long memberId) {
+    public MemberWorkloadDto getMemberWorkloadByMemberId(@P("The ID of the member") Long memberId) {
         log.info("[AiTool] getMemberWorkloadByMemberId called for member {}", memberId);
-
-        if (memberId == null) {
-            return "Missing required parameter: memberId";
-        }
-
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("memberId", memberId);
-        payload.put("openTasks", memberId == 102L ? 9 : 4);
-        payload.put("overdueTasks", memberId == 102L ? 2 : 0);
-        payload.put("estimatedHours", memberId == 102L ? 36 : 18);
-        payload.put("mock", true);
-        return toJson(payload);
+        return memberAnalyticsPort.getMemberWorkload(memberId);
     }
 
     @Tool("""
@@ -105,48 +76,22 @@ public class TaskPilotAiTools {
             Typical intents include: "task details", "chi tiet cong viec", "yeu cau task".
             Provide the task ID. This tool returns task name, description, difficulty, skills, and deadline.
             """)
-    public String getTaskDetails(@P("The ID of the task") Long taskId) {
+    public TaskDetailDto getTaskDetails(@P("The ID of the task") Long taskId) {
         log.info("[AiTool] getTaskDetails called for task {}", taskId);
-
-        if (taskId == null) {
-            return "Missing required parameter: taskId";
-        }
-
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("taskId", taskId);
-        payload.put("title", taskId == 7001L ? "Warehouse inventory sync" : "Generic task");
-        payload.put("description", taskId == 7001L
-                ? "Sync inventory counts between WMS and core system."
-                : "Task description not available.");
-        payload.put("difficulty", taskId == 7001L ? 7 : 4);
-        payload.put("requiredSkills", taskId == 7001L ? List.of("Java", "PostgreSQL", "Kafka")
-                : List.of("General"));
-        payload.put("dueDate", LocalDate.now().plusDays(5).toString());
-        payload.put("mock", true);
-        return toJson(payload);
+        return taskCommandPort.getTaskDetails(taskId);
     }
 
     @Tool("""
             Use this tool when the user explicitly asks to assign a task to a member.
             Provide taskId, memberId, and a short reason. This tool performs the assignment.
             """)
-    public String assignTaskToMember(
+    public TaskAssignmentResultDto assignTaskToMember(
             @P("The ID of the task") Long taskId,
             @P("The ID of the member") Long memberId,
             @P("Reason for the assignment") String reason) {
         log.info("[AiTool] assignTaskToMember called for task {} -> member {}", taskId, memberId);
-
-        if (taskId == null || memberId == null) {
-            return "Missing required parameters: taskId, memberId";
-        }
-
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("taskId", taskId);
-        payload.put("memberId", memberId);
-        payload.put("status", "ASSIGNED");
-        payload.put("reason", reason == null || reason.isBlank() ? "No reason provided" : reason);
-        payload.put("mock", true);
-        return toJson(payload);
+        // Sandbox logic simulation is disabled here (false) to perform real operation if connected to real DB
+        return taskCommandPort.assignTaskToMember(taskId, memberId, reason, false);
     }
 
     @Tool("""
@@ -154,7 +99,7 @@ public class TaskPilotAiTools {
             Typical intents include: "ai lam", "chon nguoi", "goi y dev", "find candidates".
             Provide the project ID and a comma-separated list of skills. This tool uses a default difficulty of 5.
             """)
-    public String findBestCandidates(
+    public AutoAssignmentResponse findBestCandidates(
             @P("The project ID") Long projectId,
             @P("Comma-separated list of required skill names, e.g. 'Java, Spring Boot, React'") String skills) {
         return recommendAssignmentCandidates(projectId, skills, 5);
@@ -168,24 +113,17 @@ public class TaskPilotAiTools {
             Provide the project ID, required skills, and a difficulty level (1-10). This tool runs AHP scoring
             with the current heuristic mode and returns ranked candidates.
             """)
-    public String recommendAssignmentCandidates(
+    public AutoAssignmentResponse recommendAssignmentCandidates(
             @P("The project ID") Long projectId,
             @P("Comma-separated list of required skill names") String skills,
             @P("Task difficulty 1-10") Integer difficulty) {
         log.info("[AiTool] recommendAssignmentCandidates called for project {}", projectId);
 
-        if (projectId == null) {
-            return "Missing required parameter: projectId";
-        }
-
         Long userId = ToolExecutionContext.requireUserId();
         int safeDifficulty = difficulty == null ? 5 : Math.max(1, Math.min(10, difficulty));
         List<String> requiredSkills = parseSkills(skills);
 
-        AutoAssignmentResponse response = autoAssignmentService.recommendCandidates(
-                projectId, requiredSkills, safeDifficulty, userId);
-
-        return toJson(response);
+        return autoAssignmentService.recommendCandidates(projectId, requiredSkills, safeDifficulty, userId);
     }
 
     @Tool("""
@@ -193,7 +131,7 @@ public class TaskPilotAiTools {
             Typical intents include: "trong X ngay toi", "sap toi han", "upcoming projects", "due soon".
             Provide daysAhead (default 7). This tool returns projects with due dates in that window.
             """)
-    public String getUpcomingProjects(
+    public List<ProjectDueDto> getUpcomingProjects(
             @P("Number of days ahead to check (default 7)") Integer daysAhead) {
         int safeDays = daysAhead == null ? 7 : Math.max(1, Math.min(90, daysAhead));
         Long userId = ToolExecutionContext.requireUserId();
@@ -201,8 +139,7 @@ public class TaskPilotAiTools {
         LocalDate fromDate = LocalDate.now();
         LocalDate toDate = fromDate.plusDays(safeDays);
 
-        List<ProjectDueDto> projects = projectMemberPort.findUpcomingProjects(userId, fromDate, toDate, 20);
-        return toJson(projects);
+        return projectMemberPort.findUpcomingProjects(userId, fromDate, toDate, 20);
     }
 
     @Tool("""
@@ -210,29 +147,25 @@ public class TaskPilotAiTools {
             into a concrete date range (e.g. "next week", "from 2026-05-01 to 2026-05-07").
             Provide fromDate and toDate in YYYY-MM-DD format. This tool returns projects due within that range.
             """)
-    public String findProjectsDue(
+    public List<ProjectDueDto> findProjectsDue(
             @P("Start date in YYYY-MM-DD format") String fromDate,
             @P("End date in YYYY-MM-DD format") String toDate) {
-        if (fromDate == null || fromDate.isBlank() || toDate == null || toDate.isBlank()) {
-            return "Missing required parameters: fromDate, toDate";
-        }
-
+        
         LocalDate from;
         LocalDate to;
         try {
             from = LocalDate.parse(fromDate);
             to = LocalDate.parse(toDate);
-        } catch (DateTimeParseException ex) {
-            return "Invalid date format. Use YYYY-MM-DD for fromDate and toDate.";
+        } catch (DateTimeParseException | NullPointerException ex) {
+            return List.of();
         }
 
         if (to.isBefore(from)) {
-            return "Invalid date range: toDate must be on or after fromDate.";
+            return List.of();
         }
 
         Long userId = ToolExecutionContext.requireUserId();
-        List<ProjectDueDto> projects = projectMemberPort.findUpcomingProjects(userId, from, to, 20);
-        return toJson(projects);
+        return projectMemberPort.findUpcomingProjects(userId, from, to, 20);
     }
 
     private List<String> parseSkills(String skills) {
@@ -245,61 +178,67 @@ public class TaskPilotAiTools {
                 .collect(Collectors.toList());
     }
 
-    private List<Map<String, Object>> mockProjectMembers(Long projectId) {
-        List<Map<String, Object>> members = new ArrayList<>();
+    // =========================================================================
+    // NEW CRUD TOOLS (TODO Implementations)
+    // =========================================================================
 
-        if (projectId != null && projectId == 2L) {
-            members.add(mockMember(101L, "Nguyen Minh Anh", "Backend", List.of("Java", "PostgreSQL")));
-            members.add(mockMember(102L, "Tran Hoang Phuc", "Backend", List.of("Java", "Kafka")));
-            members.add(mockMember(103L, "Le Thu Quynh", "QA", List.of("Testing", "Automation")));
-            members.add(mockMember(104L, "Pham Gia Bao", "Frontend", List.of("React", "TypeScript")));
-            return members;
-        }
-
-        members.add(mockMember(201L, "Member A", "Backend", List.of("Java")));
-        members.add(mockMember(202L, "Member B", "QA", List.of("Testing")));
-        return members;
+    @Tool("""
+            Use this tool to fetch all tasks belonging to a specific project.
+            Provide the project ID.
+            """)
+    public Object getTasksByProject(@P("The ID of the project") Long projectId) {
+        log.info("[AiTool] getTasksByProject called for project {}", projectId);
+        return "Not implemented"; // Replace with actual return type later
     }
 
-    private List<Map<String, Object>> mockMemberWorkloads(Long projectId) {
-        List<Map<String, Object>> workloads = new ArrayList<>();
-        if (projectId != null && projectId == 2L) {
-            workloads.add(mockWorkload(101L, "Nguyen Minh Anh", 5, 1, 22));
-            workloads.add(mockWorkload(102L, "Tran Hoang Phuc", 9, 2, 36));
-            workloads.add(mockWorkload(103L, "Le Thu Quynh", 3, 0, 12));
-            workloads.add(mockWorkload(104L, "Pham Gia Bao", 4, 1, 18));
-            return workloads;
-        }
-        workloads.add(mockWorkload(201L, "Member A", 4, 0, 16));
-        workloads.add(mockWorkload(202L, "Member B", 2, 0, 8));
-        return workloads;
+    @Tool("""
+            Use this tool to fetch subtasks of a specific task.
+            Provide the parent task ID.
+            """)
+    public Object getSubtasks(@P("The ID of the parent task") Long parentTaskId) {
+        log.info("[AiTool] getSubtasks called for parent task {}", parentTaskId);
+        return "Not implemented";
     }
 
-    private Map<String, Object> mockMember(Long id, String name, String role, List<String> skills) {
-        Map<String, Object> member = new LinkedHashMap<>();
-        member.put("memberId", id);
-        member.put("fullName", name);
-        member.put("role", role);
-        member.put("skills", skills);
-        return member;
+    @Tool("""
+            Use this tool to fetch comments made on a specific task.
+            Provide the task ID.
+            """)
+    public Object getTaskComments(@P("The ID of the task") Long taskId) {
+        log.info("[AiTool] getTaskComments called for task {}", taskId);
+        return "Not implemented";
     }
 
-    private Map<String, Object> mockWorkload(Long id, String name, int openTasks, int overdueTasks, int hours) {
-        Map<String, Object> workload = new LinkedHashMap<>();
-        workload.put("memberId", id);
-        workload.put("fullName", name);
-        workload.put("openTasks", openTasks);
-        workload.put("overdueTasks", overdueTasks);
-        workload.put("estimatedHours", hours);
-        return workload;
+    @Tool("""
+            Use this tool to update the status of a task (e.g. TODO, IN_PROGRESS, REVIEW, DONE).
+            Provide the task ID and the new status.
+            """)
+    public Object updateTaskStatus(
+            @P("The ID of the task") Long taskId,
+            @P("The new status (TODO, IN_PROGRESS, REVIEW, DONE)") String status) {
+        log.info("[AiTool] updateTaskStatus called for task {} -> {}", taskId, status);
+        return "Not implemented";
     }
 
-    private String toJson(Object payload) {
-        try {
-            return objectMapper.writeValueAsString(payload);
-        } catch (JsonProcessingException e) {
-            log.error("[AiTool] Failed to serialize tool output: {}", e.getMessage());
-            return "{}";
-        }
+    @Tool("""
+            Use this tool to fetch all sprints belonging to a specific project.
+            Provide the project ID.
+            """)
+    public Object getSprintsByProject(@P("The ID of the project") Long projectId) {
+        log.info("[AiTool] getSprintsByProject called for project {}", projectId);
+        return "Not implemented";
+    }
+
+    @Tool("""
+            Use this tool to create a new task in a project.
+            Provide project ID, title, priority, and optional sprint ID.
+            """)
+    public Object createTask(
+            @P("The project ID") Long projectId,
+            @P("Title of the task") String title,
+            @P("Priority (LOW, MEDIUM, HIGH, URGENT)") String priority,
+            @P("Optional sprint ID") Long sprintId) {
+        log.info("[AiTool] createTask called for project {}", projectId);
+        return "Not implemented";
     }
 }
