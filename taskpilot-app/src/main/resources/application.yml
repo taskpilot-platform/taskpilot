@@ -2,7 +2,7 @@ spring:
   application:
     name: taskpilot-app
   profiles:
-    active: prod
+    active: ai-dev
   output:
     ansi:
       enabled: always
