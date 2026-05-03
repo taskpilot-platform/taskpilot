@@ -36,6 +36,11 @@
 
         <dependency>
             <groupId>com.taskpilot</groupId>
+            <artifactId>taskpilot-contracts</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.taskpilot</groupId>
             <artifactId>taskpilot-users</artifactId>
         </dependency>
     </dependencies>

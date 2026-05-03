@@ -1,20 +1,38 @@
 package com.taskpilot.infrastructure.exception;
 
-
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import lombok.extern.slf4j.Slf4j;
+import java.io.IOException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.servlet.NoHandlerFoundException;
-
 
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    public ResponseEntity<Void> handleAsyncRequestNotUsableException(AsyncRequestNotUsableException ex) {
+        log.debug("Ignore async request not usable (likely client disconnected SSE): {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.NO_CONTENT).build();
+    }
+
+    @ExceptionHandler(IOException.class)
+    public ResponseEntity<Void> handleClientAbortIOException(IOException ex) {
+        String message = ex.getMessage() != null ? ex.getMessage().toLowerCase() : "";
+        if (message.contains("aborted") || message.contains("broken pipe")
+                || message.contains("connection reset") || message.contains("not usable")) {
+            log.debug("Ignore IO abort caused by client disconnect: {}", ex.getMessage());
+            return ResponseEntity.status(HttpStatus.NO_CONTENT).build();
+        }
+        log.error("Unhandled IOException caught: {}", ex.getMessage(), ex);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+    }
 
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ApiResponse<Void>> handleAccessDeniedException(AccessDeniedException ex) {
@@ -48,8 +66,8 @@ public class GlobalExceptionHandler {
         log.error("Unhandled Exception caught: ", ex);
 
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ApiResponse.error(HttpStatus.INTERNAL_SERVER_ERROR.value(), "Internal server error. Please try again later!"));
+                .body(ApiResponse.error(HttpStatus.INTERNAL_SERVER_ERROR.value(),
+                        "Internal server error. Please try again later!"));
         // hide real internal msg error from client
     }
 }
-

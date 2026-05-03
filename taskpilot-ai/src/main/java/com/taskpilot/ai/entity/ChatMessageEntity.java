@@ -32,6 +32,10 @@ public class ChatMessageEntity {
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
     @Column(name = "sender", nullable = false)
     private SenderType sender;
+
+    @Column(name = "client_message_id")
+    private String clientMessageId;
+
     @Column(name = "content", nullable = false, columnDefinition = "TEXT")
     private String content;
 
@@ -39,4 +43,3 @@ public class ChatMessageEntity {
         USER, ASSISTANT, SYSTEM
     }
 }
-
