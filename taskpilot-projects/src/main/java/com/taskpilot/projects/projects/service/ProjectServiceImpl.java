@@ -16,8 +16,10 @@ import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity.MemberRole;
+import com.taskpilot.projects.common.entity.TaskEntity;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
 import com.taskpilot.projects.common.repository.ProjectRepository;
+import com.taskpilot.projects.common.repository.TaskRepository;
 import com.taskpilot.projects.projects.dto.CreateProjectRequest;
 import com.taskpilot.projects.projects.dto.JoinProjectRequest;
 import com.taskpilot.projects.projects.dto.MyProjectResponse;
@@ -40,6 +42,7 @@ public class ProjectServiceImpl {
     private final ProjectMemberRepository projectMemberRepository;
     private final UserRepository userRepository;
     private final NotificationService notificationService;
+    private final TaskRepository taskRepository;
 
     // ==================== PROJECT CRUD ====================
     /**
@@ -252,17 +255,24 @@ public class ProjectServiceImpl {
 
         long totalMembers = projectMemberRepository.countMembers(projectId);
 
-        // TODO: Integrate with Task module to get real task statistics
-        // For now, return placeholder values
+        long totalTasks = taskRepository.countByProjectId(projectId);
+        long todoTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskEntity.TaskStatus.TODO);
+        long inProgressTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskEntity.TaskStatus.IN_PROGRESS);
+        long reviewTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskEntity.TaskStatus.REVIEW);
+        long doneTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskEntity.TaskStatus.DONE);
+
+        double completionRate = totalTasks > 0 ? ((double) doneTasks / totalTasks) * 100.0 : 0.0;
+
         return new ProjectSummaryResponse(
                 projectId,
                 project.getName(),
                 totalMembers,
-                0, // totalTasks
-                0, // completedTasks
-                0, // inProgressTasks
-                0, // pendingTasks
-                0.0 // completionRate
+                totalTasks,
+                todoTasks,
+                inProgressTasks,
+                reviewTasks,
+                doneTasks,
+                Math.round(completionRate * 10.0) / 10.0
         );
     }
 

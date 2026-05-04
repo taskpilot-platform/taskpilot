@@ -5,7 +5,7 @@ public record ProjectStatusDto(
     String name,
     String status,
     long totalTasks,
-    long completedTasks,
+    long doneTasks,
     long overdueTasks,
     long completionPercent
 ) {}
