@@ -11,7 +11,13 @@ import com.taskpilot.contracts.assignment.dto.UserSkillDto;
 import com.taskpilot.contracts.assignment.port.out.SystemSettingPort;
 import com.taskpilot.contracts.assignment.port.out.UserPort;
 import com.taskpilot.contracts.assignment.port.out.UserSkillPort;
+import com.taskpilot.contracts.user.dto.SystemNotificationCommandDto;
+import com.taskpilot.contracts.user.dto.UserIdentityDto;
+import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
 import com.taskpilot.contracts.user.port.out.UserIdentityPort;
+import com.taskpilot.contracts.user.port.out.UserNotificationPort;
+import com.taskpilot.contracts.user.port.out.UserProfilePort;
+import com.taskpilot.users.notifications.service.NotificationService;
 import com.taskpilot.users.repository.SystemSettingRepository;
 import com.taskpilot.users.repository.UserRepository;
 import com.taskpilot.users.repository.UserSkillRepository;
@@ -21,11 +27,12 @@ import lombok.RequiredArgsConstructor;
 @Component
 @RequiredArgsConstructor
 public class UserModuleAdapter
-        implements UserPort, UserSkillPort, SystemSettingPort, UserIdentityPort {
+        implements UserPort, UserSkillPort, SystemSettingPort, UserIdentityPort, UserProfilePort, UserNotificationPort {
 
     private final UserRepository userRepository;
     private final UserSkillRepository userSkillRepository;
     private final SystemSettingRepository systemSettingRepository;
+    private final NotificationService notificationService;
 
     @Override
     public Optional<UserProfileDto> findById(Long userId) {
@@ -58,7 +65,20 @@ public class UserModuleAdapter
     }
 
     @Override
-    public Optional<Long> findUserIdByEmail(String email) {
-        return userRepository.findByEmail(email).map(user -> user.getId());
+    public Optional<UserIdentityDto> findByEmail(String email) {
+        return userRepository.findByEmail(email)
+                .map(user -> new UserIdentityDto(user.getId(), user.getEmail()));
+    }
+
+    @Override
+    public Optional<UserProfileLiteDto> findLiteById(Long userId) {
+        return userRepository.findById(userId)
+                .map(user -> new UserProfileLiteDto(user.getId(), user.getFullName()));
+    }
+
+    @Override
+    public void createSystemNotification(SystemNotificationCommandDto command) {
+        notificationService.createSystemNotification(command.targetUserId(), command.title(),
+                command.message(), command.linkAction());
     }
 }
