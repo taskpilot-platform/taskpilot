@@ -1,5 +1,8 @@
 package com.taskpilot.projects.common.entity;
 
+import java.time.Instant;
+import java.util.List;
+
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -33,12 +36,67 @@ public class TaskEntity {
     @Column(name = "project_id")
     private Long projectId;
 
+    @Column(name = "parent_id")
+    private Long parentId;
+
+    @Column(name = "sprint_id")
+    private Long sprintId;
+
+    @Column(nullable = false)
+    private String title;
+
+    @Column(columnDefinition = "TEXT")
+    private String description;
+
     @Builder.Default
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
     @Enumerated(EnumType.STRING)
     private TaskStatus status = TaskStatus.TODO;
 
+    @Builder.Default
+    @JdbcTypeCode(SqlTypes.NAMED_ENUM)
+    @Enumerated(EnumType.STRING)
+    private PriorityLevel priority = PriorityLevel.MEDIUM;
+
+    @Builder.Default
+    @Column(nullable = false)
+    private Float position = 0f;
+
+    @JdbcTypeCode(SqlTypes.ARRAY)
+    @Column(columnDefinition = "TEXT[]")
+    private List<String> tags;
+
+    @Builder.Default
+    @Column(name = "difficulty_level")
+    private Integer difficultyLevel = 1;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "required_skills", columnDefinition = "JSONB")
+    private List<String> requiredSkills;
+
+    @Column(name = "assignee_id")
+    private Long assigneeId;
+
+    @Column(name = "reporter_id")
+    private Long reporterId;
+
+    @Column(name = "start_date")
+    private Instant startDate;
+
+    @Column(name = "due_date")
+    private Instant dueDate;
+
+    @Column(name = "created_at", insertable = false, updatable = false)
+    private Instant createdAt;
+
+    @Column(name = "updated_at", insertable = false, updatable = false)
+    private Instant updatedAt;
+
     public enum TaskStatus {
         TODO, IN_PROGRESS, REVIEW, DONE
+    }
+
+    public enum PriorityLevel {
+        LOW, MEDIUM, HIGH, URGENT
     }
 }
