@@ -16,7 +16,8 @@ import com.taskpilot.projects.tasks.dto.KanbanMoveRequest;
 import com.taskpilot.projects.tasks.dto.TaskDto;
 import com.taskpilot.projects.tasks.dto.TaskDetailDto;
 import com.taskpilot.projects.tasks.dto.UpdateTaskRequest;
-import com.taskpilot.users.repository.UserRepository;
+import com.taskpilot.contracts.user.port.out.UserIdentityPort;
+import com.taskpilot.contracts.skill.port.out.SkillPort;
 import com.taskpilot.contracts.assignment.port.out.UserPort;
 import com.taskpilot.contracts.user.port.out.NotificationPort;
 
@@ -28,13 +29,13 @@ public class TaskService {
 
     private final TaskRepository taskRepository;
     private final ProjectMemberRepository projectMemberRepository;
-    private final UserRepository userRepository;
+    private final UserIdentityPort userIdentityPort;
+    private final SkillPort skillPort;
     private final UserPort userPort;
     private final NotificationPort notificationPort;
 
     private Long getCurrentUserIdByEmail(String email) {
-        return userRepository.findByEmail(email)
-                .map(user -> user.getId())
+        return userIdentityPort.findUserIdByEmail(email)
                 .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"));
     }
 
@@ -101,15 +102,19 @@ public class TaskService {
             }
         }
 
-        TaskEntity task = TaskEntity.builder().projectId(request.projectId())
-                .parentId(request.parentId()).sprintId(request.sprintId()).title(request.title())
+        TaskEntity task = TaskEntity.builder()
+                .projectId(request.projectId())
+                .parentId(request.parentId())
+                .sprintId(request.sprintId())
+                .title(request.title())
                 .description(request.description())
-                .priority(request.priority() != null ? request.priority()
-                        : TaskEntity.PriorityLevel.MEDIUM)
-                .position(request.position() != null ? request.position() : 0f).tags(request.tags())
+                .priority(request.priority() != null ? request.priority() : TaskEntity.PriorityLevel.MEDIUM)
+                .position(request.position() != null ? request.position() : 0f)
                 .difficultyLevel(request.difficultyLevel() != null ? request.difficultyLevel() : 1)
-                .requiredSkills(request.requiredSkills()).assigneeId(request.assigneeId())
-                .reporterId(userId).startDate(request.startDate()).dueDate(request.dueDate())
+                .assigneeId(request.assigneeId())
+                .reporterId(userId)
+                .startDate(request.startDate())
+                .dueDate(request.dueDate())
                 .status(TaskEntity.TaskStatus.TODO).build();
 
         taskRepository.save(task);
@@ -134,12 +139,9 @@ public class TaskService {
             task.setPriority(request.priority());
         if (request.position() != null)
             task.setPosition(request.position());
-        if (request.tags() != null)
-            task.setTags(request.tags());
         if (request.difficultyLevel() != null)
             task.setDifficultyLevel(request.difficultyLevel());
-        if (request.requiredSkills() != null)
-            task.setRequiredSkills(request.requiredSkills());
+
         if (request.assigneeId() != null && !request.assigneeId().equals(task.getAssigneeId())) {
             task.setAssigneeId(request.assigneeId());
             notificationPort.sendSystemNotification(request.assigneeId(), "Task Assigned",

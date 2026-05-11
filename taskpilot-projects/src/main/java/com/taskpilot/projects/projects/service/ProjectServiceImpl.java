@@ -27,8 +27,9 @@ import com.taskpilot.projects.projects.dto.ProjectMemberResponse;
 import com.taskpilot.projects.projects.dto.ProjectResponse;
 import com.taskpilot.projects.projects.dto.ProjectSummaryResponse;
 import com.taskpilot.projects.projects.dto.UpdateProjectRequest;
-import com.taskpilot.users.notifications.service.NotificationService;
-import com.taskpilot.users.repository.UserRepository;
+import com.taskpilot.contracts.assignment.port.out.UserPort;
+import com.taskpilot.contracts.user.port.out.NotificationPort;
+import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 
 import lombok.RequiredArgsConstructor;
 
@@ -40,8 +41,9 @@ public class ProjectServiceImpl {
 
     private final ProjectRepository projectRepository;
     private final ProjectMemberRepository projectMemberRepository;
-    private final UserRepository userRepository;
-    private final NotificationService notificationService;
+    private final UserIdentityPort userIdentityPort;
+    private final UserPort userPort;
+    private final NotificationPort notificationPort;
     private final TaskRepository taskRepository;
 
     // ==================== PROJECT CRUD ====================
@@ -180,8 +182,8 @@ public class ProjectServiceImpl {
                 .build();
         projectMemberRepository.save(member);
 
-        String joinedMemberName = userRepository.findById(userId)
-                .map(user -> user.getFullName())
+        String joinedMemberName = userPort.findById(userId)
+                .map(user -> user.fullName())
                 .orElse("A member");
 
         List<ProjectMemberEntity> managers = projectMemberRepository.findByProjectIdAndRole(
@@ -194,7 +196,7 @@ public class ProjectServiceImpl {
 
         for (ProjectMemberEntity manager : managers) {
             if (!manager.getUserId().equals(userId)) {
-                notificationService.createSystemNotification(manager.getUserId(), title, message, linkAction);
+                notificationPort.sendSystemNotification(manager.getUserId(), title, message, linkAction);
             }
         }
 
@@ -213,8 +215,8 @@ public class ProjectServiceImpl {
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(),
                 "You are not a member of this project"));
 
-        String leavingMemberName = userRepository.findById(userId)
-                .map(user -> user.getFullName())
+        String leavingMemberName = userPort.findById(userId)
+                .map(user -> user.fullName())
                 .orElse("A member");
 
         List<ProjectMemberEntity> managers = projectMemberRepository.findByProjectIdAndRole(
@@ -240,7 +242,7 @@ public class ProjectServiceImpl {
 
         for (ProjectMemberEntity manager : managers) {
             if (!manager.getUserId().equals(userId)) {
-                notificationService.createSystemNotification(manager.getUserId(), title, message, linkAction);
+                notificationPort.sendSystemNotification(manager.getUserId(), title, message, linkAction);
             }
         }
     }
@@ -314,8 +316,7 @@ public class ProjectServiceImpl {
     }
 
     private Long getCurrentUserIdByEmail(String email) {
-        return userRepository.findByEmail(email)
-                .map(user -> user.getId())
+        return userIdentityPort.findUserIdByEmail(email)
                 .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"));
     }
 

@@ -3,7 +3,9 @@ package com.taskpilot.users.assignment.adapter.out;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 
 import com.taskpilot.contracts.assignment.dto.UserProfileDto;
@@ -15,20 +17,24 @@ import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.users.repository.SystemSettingRepository;
 import com.taskpilot.users.repository.UserRepository;
 import com.taskpilot.users.repository.UserSkillRepository;
+import com.taskpilot.users.repository.SkillRepository;
 import com.taskpilot.contracts.user.port.out.NotificationPort;
 import com.taskpilot.users.notifications.service.NotificationService;
+import com.taskpilot.contracts.skill.dto.SkillDto;
+import com.taskpilot.contracts.skill.port.out.SkillPort;
 
 import lombok.RequiredArgsConstructor;
 
 @Component
 @RequiredArgsConstructor
 public class UserModuleAdapter
-        implements UserPort, UserSkillPort, SystemSettingPort, UserIdentityPort, NotificationPort {
+        implements UserPort, UserSkillPort, SystemSettingPort, UserIdentityPort, NotificationPort, SkillPort {
 
     private final UserRepository userRepository;
     private final NotificationService notificationService;
     private final UserSkillRepository userSkillRepository;
     private final SystemSettingRepository systemSettingRepository;
+    private final SkillRepository skillRepository;
 
     @Override
     public Optional<UserProfileDto> findById(Long userId) {
@@ -68,5 +74,33 @@ public class UserModuleAdapter
     @Override
     public void sendSystemNotification(Long targetUserId, String title, String message, String linkAction) {
         notificationService.createSystemNotification(targetUserId, title, message, linkAction);
+    }
+
+    @Override
+    public List<SkillDto> findByIds(Set<Long> ids) {
+        return skillRepository.findAllById(ids).stream()
+                .filter(s -> Boolean.TRUE.equals(s.getIsActive()))
+                .map(s -> new SkillDto(s.getId(), s.getName(), s.getDescription()))
+                .toList();
+    }
+
+    @Override
+    public List<SkillDto> search(String keyword) {
+        return skillRepository
+                .findByNameContainingIgnoreCaseAndIsActiveTrue(keyword, PageRequest.of(0, 20))
+                .stream()
+                .map(s -> new SkillDto(s.getId(), s.getName(), s.getDescription()))
+                .toList();
+    }
+
+    @Override
+    public Optional<SkillDto> findSkillById(Long id) {
+        return skillRepository.findByIdAndIsActiveTrue(id)
+                .map(s -> new SkillDto(s.getId(), s.getName(), s.getDescription()));
+    }
+
+    @Override
+    public boolean existsById(Long id) {
+        return skillRepository.existsByIdAndIsActiveTrue(id);
     }
 }
