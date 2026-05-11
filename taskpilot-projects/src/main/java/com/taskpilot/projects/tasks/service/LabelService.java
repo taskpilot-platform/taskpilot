@@ -14,6 +14,8 @@ import com.taskpilot.projects.tasks.dto.CreateLabelRequest;
 import com.taskpilot.projects.tasks.dto.LabelDto;
 import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 
+import org.springframework.dao.DataIntegrityViolationException;
+
 import lombok.RequiredArgsConstructor;
 
 @Service
@@ -63,7 +65,11 @@ public class LabelService {
                 .color(request.color() != null ? request.color().toUpperCase() : "#6366F1")
                 .build();
 
-        labelRepository.save(label);
+        try {
+            labelRepository.save(label);
+        } catch (DataIntegrityViolationException e) {
+            throw new BusinessException(HttpStatus.CONFLICT.value(), "Label with this name already exists in the project");
+        }
 
         return new LabelDto(label.getId(), label.getName(), label.getColor());
     }

@@ -62,17 +62,9 @@ public class TaskEntity {
     @Column(nullable = false)
     private Float position = 0f;
 
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "tags", columnDefinition = "JSONB")
-    private List<String> tags;
-
     @Builder.Default
     @Column(name = "difficulty_level")
     private Integer difficultyLevel = 1;
-
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "required_skills", columnDefinition = "JSONB")
-    private List<String> requiredSkills;
 
     @Column(name = "assignee_id")
     private Long assigneeId;

@@ -16,9 +16,10 @@ CREATE TABLE labels (
     name       VARCHAR(100) NOT NULL,
     color      VARCHAR(7) DEFAULT '#6366F1',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_label_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
-    CONSTRAINT uq_label_project_name UNIQUE (project_id, name)
+    CONSTRAINT fk_label_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_label_project_name ON labels (project_id, lower(name));
 
 -- Task ↔ Label join table
 CREATE TABLE task_labels (

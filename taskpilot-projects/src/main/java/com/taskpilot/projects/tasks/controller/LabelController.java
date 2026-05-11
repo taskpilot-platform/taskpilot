@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.taskpilot.infrastructure.dto.ApiResponse;
 import com.taskpilot.projects.tasks.dto.CreateLabelRequest;
 import com.taskpilot.projects.tasks.dto.LabelDto;
 import com.taskpilot.projects.tasks.service.LabelService;
@@ -20,33 +21,33 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
 @RestController
-@RequestMapping("/projects/{projectId}/labels")
+@RequestMapping("/api/v1/projects/{projectId}/labels")
 @RequiredArgsConstructor
 public class LabelController {
 
     private final LabelService labelService;
 
     @GetMapping
-    public ResponseEntity<List<LabelDto>> getProjectLabels(
+    public ApiResponse<List<LabelDto>> getProjectLabels(
             @PathVariable Long projectId,
             @AuthenticationPrincipal String email) {
-        return ResponseEntity.ok(labelService.getLabelsByProject(projectId, email));
+        return ApiResponse.success(200, "Labels retrieved successfully", labelService.getLabelsByProject(projectId, email));
     }
 
     @PostMapping
-    public ResponseEntity<LabelDto> createLabel(
+    public ApiResponse<LabelDto> createLabel(
             @PathVariable Long projectId,
             @Valid @RequestBody CreateLabelRequest request,
             @AuthenticationPrincipal String email) {
-        return ResponseEntity.ok(labelService.createLabel(projectId, request, email));
+        return ApiResponse.success(201, "Label created successfully", labelService.createLabel(projectId, request, email));
     }
 
     @DeleteMapping("/{labelId}")
-    public ResponseEntity<Void> deleteLabel(
+    public ApiResponse<Void> deleteLabel(
             @PathVariable Long projectId,
             @PathVariable Long labelId,
             @AuthenticationPrincipal String email) {
         labelService.deleteLabel(projectId, labelId, email);
-        return ResponseEntity.ok().build();
+        return ApiResponse.success(200, "Label deleted successfully", null);
     }
 }
