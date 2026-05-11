@@ -2,6 +2,8 @@ package com.taskpilot.projects.tasks.service;
 
 import java.util.List;
 import java.util.stream.Collectors;
+import java.util.Map;
+import java.util.Set;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -16,6 +18,14 @@ import com.taskpilot.projects.tasks.dto.KanbanMoveRequest;
 import com.taskpilot.projects.tasks.dto.TaskDto;
 import com.taskpilot.projects.tasks.dto.TaskDetailDto;
 import com.taskpilot.projects.tasks.dto.UpdateTaskRequest;
+import com.taskpilot.projects.tasks.dto.LabelDto;
+import com.taskpilot.projects.common.repository.LabelRepository;
+import com.taskpilot.projects.common.repository.TaskLabelRepository;
+import com.taskpilot.projects.common.repository.TaskRequiredSkillRepository;
+import com.taskpilot.projects.common.entity.TaskLabelEntity;
+import com.taskpilot.projects.common.entity.TaskRequiredSkillEntity;
+import com.taskpilot.projects.common.entity.LabelEntity;
+import com.taskpilot.contracts.skill.dto.SkillDto;
 import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.skill.port.out.SkillPort;
 import com.taskpilot.contracts.assignment.port.out.UserPort;
@@ -33,6 +43,9 @@ public class TaskService {
     private final SkillPort skillPort;
     private final UserPort userPort;
     private final NotificationPort notificationPort;
+    private final LabelRepository labelRepository;
+    private final TaskLabelRepository taskLabelRepository;
+    private final TaskRequiredSkillRepository taskRequiredSkillRepository;
 
     private Long getCurrentUserIdByEmail(String email) {
         return userIdentityPort.findUserIdByEmail(email)
@@ -46,13 +59,43 @@ public class TaskService {
         }
     }
 
+    private List<TaskDto> mapToDtoWithLabels(List<TaskEntity> tasks) {
+        if (tasks.isEmpty()) return List.of();
+        
+        List<Long> taskIds = tasks.stream().map(TaskEntity::getId).toList();
+        List<TaskLabelEntity> taskLabels = taskLabelRepository.findByTaskIdIn(taskIds);
+        
+        if (taskLabels.isEmpty()) {
+            return tasks.stream().map(t -> TaskDto.fromEntity(t, List.of())).collect(Collectors.toList());
+        }
+        
+        List<Long> labelIds = taskLabels.stream().map(TaskLabelEntity::getLabelId).distinct().toList();
+        Map<Long, LabelDto> labelsMap = labelRepository.findAllById(labelIds).stream()
+            .collect(Collectors.toMap(LabelEntity::getId, l -> new LabelDto(l.getId(), l.getName(), l.getColor())));
+            
+        Map<Long, List<LabelDto>> labelsByTask = taskLabels.stream()
+            .filter(tl -> labelsMap.containsKey(tl.getLabelId()))
+            .collect(Collectors.groupingBy(
+                TaskLabelEntity::getTaskId,
+                Collectors.mapping(tl -> labelsMap.get(tl.getLabelId()), Collectors.toList())
+            ));
+            
+        return tasks.stream()
+            .map(task -> TaskDto.fromEntity(task, labelsByTask.getOrDefault(task.getId(), List.of())))
+            .collect(Collectors.toList());
+    }
+
+    private TaskDto mapToDtoWithLabels(TaskEntity task) {
+        return mapToDtoWithLabels(List.of(task)).get(0);
+    }
+
     @Transactional(readOnly = true)
     public List<TaskDto> getTasksByProject(Long projectId, String email) {
         Long userId = getCurrentUserIdByEmail(email);
         validateUserIsMember(projectId, userId);
 
-        return taskRepository.findByProjectId(projectId).stream().map(TaskDto::fromEntity)
-                .collect(Collectors.toList());
+        List<TaskEntity> tasks = taskRepository.findByProjectId(projectId);
+        return mapToDtoWithLabels(tasks);
     }
 
     @Transactional(readOnly = true)
@@ -69,10 +112,21 @@ public class TaskService {
         var reporter =
                 task.getReporterId() != null ? userPort.findById(task.getReporterId()).orElse(null)
                         : null;
-        var subtasks = taskRepository.findByParentId(taskId).stream().map(TaskDto::fromEntity)
-                .collect(Collectors.toList());
+        List<TaskDto> subtasks = mapToDtoWithLabels(taskRepository.findByParentId(taskId));
 
-        return TaskDetailDto.from(task, assignee, reporter, subtasks);
+        List<TaskRequiredSkillEntity> reqSkills = taskRequiredSkillRepository.findByTaskId(taskId);
+        Set<Long> skillIds = reqSkills.stream().map(TaskRequiredSkillEntity::getSkillId).collect(Collectors.toSet());
+        List<SkillDto> skills = skillIds.isEmpty() ? List.of() : skillPort.findByIds(skillIds);
+        
+        TaskDto taskDto = mapToDtoWithLabels(task);
+
+        return TaskDetailDto.builder()
+                .task(taskDto)
+                .assignee(assignee)
+                .reporter(reporter)
+                .subtasks(subtasks)
+                .requiredSkills(skills)
+                .build();
     }
 
     @Transactional(readOnly = true)
@@ -83,8 +137,8 @@ public class TaskService {
         Long userId = getCurrentUserIdByEmail(email);
         validateUserIsMember(parentTask.getProjectId(), userId);
 
-        return taskRepository.findByParentId(parentId).stream().map(TaskDto::fromEntity)
-                .collect(Collectors.toList());
+        List<TaskEntity> subtasks = taskRepository.findByParentId(parentId);
+        return mapToDtoWithLabels(subtasks);
     }
 
     @Transactional
@@ -118,7 +172,28 @@ public class TaskService {
                 .status(TaskEntity.TaskStatus.TODO).build();
 
         taskRepository.save(task);
-        return TaskDto.fromEntity(task);
+
+        if (request.labelIds() != null && !request.labelIds().isEmpty()) {
+            List<TaskLabelEntity> taskLabels = request.labelIds().stream()
+                .map(labelId -> TaskLabelEntity.builder()
+                    .id(new TaskLabelEntity.TaskLabelId(task.getId(), labelId))
+                    .taskId(task.getId())
+                    .labelId(labelId).build())
+                .toList();
+            taskLabelRepository.saveAll(taskLabels);
+        }
+        
+        if (request.requiredSkillIds() != null && !request.requiredSkillIds().isEmpty()) {
+            List<TaskRequiredSkillEntity> taskSkills = request.requiredSkillIds().stream()
+                .map(skillId -> TaskRequiredSkillEntity.builder()
+                    .id(new TaskRequiredSkillEntity.TaskRequiredSkillId(task.getId(), skillId))
+                    .taskId(task.getId())
+                    .skillId(skillId).build())
+                .toList();
+            taskRequiredSkillRepository.saveAll(taskSkills);
+        }
+
+        return mapToDtoWithLabels(task);
     }
 
     @Transactional
@@ -154,7 +229,34 @@ public class TaskService {
             task.setDueDate(request.dueDate());
 
         taskRepository.save(task);
-        return TaskDto.fromEntity(task);
+        
+        if (request.labelIds() != null) {
+            taskLabelRepository.deleteByTaskId(task.getId());
+            if (!request.labelIds().isEmpty()) {
+                List<TaskLabelEntity> taskLabels = request.labelIds().stream()
+                    .map(labelId -> TaskLabelEntity.builder()
+                        .id(new TaskLabelEntity.TaskLabelId(task.getId(), labelId))
+                        .taskId(task.getId())
+                        .labelId(labelId).build())
+                    .toList();
+                taskLabelRepository.saveAll(taskLabels);
+            }
+        }
+        
+        if (request.requiredSkillIds() != null) {
+            taskRequiredSkillRepository.deleteByTaskId(task.getId());
+            if (!request.requiredSkillIds().isEmpty()) {
+                List<TaskRequiredSkillEntity> taskSkills = request.requiredSkillIds().stream()
+                    .map(skillId -> TaskRequiredSkillEntity.builder()
+                        .id(new TaskRequiredSkillEntity.TaskRequiredSkillId(task.getId(), skillId))
+                        .taskId(task.getId())
+                        .skillId(skillId).build())
+                    .toList();
+                taskRequiredSkillRepository.saveAll(taskSkills);
+            }
+        }
+
+        return mapToDtoWithLabels(task);
     }
 
     @Transactional
@@ -182,6 +284,8 @@ public class TaskService {
         List<TaskEntity> subtasks = taskRepository.findByParentId(taskId);
         taskRepository.deleteAll(subtasks);
 
+        taskLabelRepository.deleteByTaskId(task.getId());
+        taskRequiredSkillRepository.deleteByTaskId(task.getId());
         taskRepository.delete(task);
     }
 
@@ -197,6 +301,6 @@ public class TaskService {
         task.setPosition(request.position());
 
         taskRepository.save(task);
-        return TaskDto.fromEntity(task);
+        return mapToDtoWithLabels(task);
     }
 }

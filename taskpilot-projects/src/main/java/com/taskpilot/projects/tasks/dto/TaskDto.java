@@ -15,9 +15,8 @@ public record TaskDto(
     TaskEntity.TaskStatus status,
     TaskEntity.PriorityLevel priority,
     Float position,
-    List<String> tags,
+    List<LabelDto> labels,
     Integer difficultyLevel,
-    List<String> requiredSkills,
     Long assigneeId,
     Long reporterId,
     Instant startDate,
@@ -25,7 +24,7 @@ public record TaskDto(
     Instant createdAt,
     Instant updatedAt
 ) {
-    public static TaskDto fromEntity(TaskEntity entity) {
+    public static TaskDto fromEntity(TaskEntity entity, List<LabelDto> labels) {
         return new TaskDto(
             entity.getId(),
             entity.getProjectId(),
@@ -36,9 +35,8 @@ public record TaskDto(
             entity.getStatus(),
             entity.getPriority(),
             entity.getPosition(),
-            entity.getTags(),
+            labels,
             entity.getDifficultyLevel(),
-            entity.getRequiredSkills(),
             entity.getAssigneeId(),
             entity.getReporterId(),
             entity.getStartDate(),

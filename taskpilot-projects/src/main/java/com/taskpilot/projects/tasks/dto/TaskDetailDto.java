@@ -7,20 +7,13 @@ import com.taskpilot.projects.common.entity.TaskEntity;
 
 import lombok.Builder;
 
+import com.taskpilot.contracts.skill.dto.SkillDto;
+
 @Builder
 public record TaskDetailDto(
         TaskDto task,
         UserProfileDto assignee,
         UserProfileDto reporter,
-        List<TaskDto> subtasks) {
-
-    public static TaskDetailDto from(TaskEntity taskEntity, UserProfileDto assignee, UserProfileDto reporter,
-            List<TaskDto> subtasks) {
-        return TaskDetailDto.builder()
-                .task(TaskDto.fromEntity(taskEntity))
-                .assignee(assignee)
-                .reporter(reporter)
-                .subtasks(subtasks)
-                .build();
-    }
+        List<TaskDto> subtasks,
+        List<SkillDto> requiredSkills) {
 }

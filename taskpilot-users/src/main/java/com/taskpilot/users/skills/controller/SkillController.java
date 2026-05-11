@@ -36,6 +36,13 @@ public class SkillController {
                 skillService.getSkillDirectory());
     }
 
+    @Operation(summary = "Search System Skills", description = "Search for system skills by keyword.")
+    @GetMapping("/search")
+    public ApiResponse<List<SkillDirectoryResponse>> searchSkills(@RequestParam String keyword) {
+        return ApiResponse.success(HttpStatus.OK.value(), "Skills retrieved successfully",
+                skillService.searchSkills(keyword));
+    }
+
     @Operation(summary = "View Detail", description = "Get detail of a specific skill for the current user.")
     @GetMapping("/{skill_id}")
     public ApiResponse<UserSkillResponse> getSkillDetail(@PathVariable("skill_id") Long skillId) {
