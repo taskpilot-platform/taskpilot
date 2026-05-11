@@ -62,8 +62,8 @@ public class TaskEntity {
     @Column(nullable = false)
     private Float position = 0f;
 
-    @JdbcTypeCode(SqlTypes.ARRAY)
-    @Column(columnDefinition = "TEXT[]")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "tags", columnDefinition = "JSONB")
     private List<String> tags;
 
     @Builder.Default
