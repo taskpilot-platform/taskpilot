@@ -7,6 +7,7 @@ import com.taskpilot.projects.projects.dto.MyProjectResponse;
 import com.taskpilot.projects.projects.dto.ProjectMemberResponse;
 import com.taskpilot.projects.projects.dto.ProjectResponse;
 import com.taskpilot.projects.projects.dto.ProjectSummaryResponse;
+import com.taskpilot.projects.projects.dto.UpdateMemberRoleRequest;
 import com.taskpilot.projects.projects.dto.UpdateProjectRequest;
 import com.taskpilot.projects.projects.service.ProjectServiceImpl;
 import io.swagger.v3.oas.annotations.Operation;
@@ -103,5 +104,53 @@ public class ProjectController {
                         Authentication authentication) {
                 return ApiResponse.success(HttpStatus.OK.value(), "Project members retrieved successfully",
                                 projectService.getProjectMembers(projectId, authentication.getName()));
+        }
+
+        @Operation(summary = "Update member role", description = "Update the role of a project member (Manager only)")
+        @PutMapping("/{projectId}/members/{userId}/role")
+        public ApiResponse<Void> updateMemberRole(
+                        @PathVariable Long projectId,
+                        @PathVariable Long userId,
+                        @Valid @RequestBody UpdateMemberRoleRequest request,
+                        Authentication authentication) {
+                projectService.updateMemberRole(projectId, userId, request.role(), authentication.getName());
+                return ApiResponse.success(HttpStatus.OK.value(), "Member role updated successfully", null);
+        }
+
+        @Operation(summary = "Remove member", description = "Remove a member from the project (Manager only)")
+        @DeleteMapping("/{projectId}/members/{userId}")
+        public ApiResponse<Void> removeMember(
+                        @PathVariable Long projectId,
+                        @PathVariable Long userId,
+                        Authentication authentication) {
+                projectService.removeMember(projectId, userId, authentication.getName());
+                return ApiResponse.success(HttpStatus.OK.value(), "Member removed successfully", null);
+        }
+
+        @Operation(summary = "Archive project", description = "Archive a project to make it read-only (Manager only)")
+        @PostMapping("/{projectId}/archive")
+        public ApiResponse<Void> archiveProject(
+                        @PathVariable Long projectId,
+                        Authentication authentication) {
+                projectService.archiveProject(projectId, authentication.getName());
+                return ApiResponse.success(HttpStatus.OK.value(), "Project archived successfully", null);
+        }
+
+        @Operation(summary = "Restore project", description = "Restore an archived project to active status (Manager only)")
+        @PostMapping("/{projectId}/restore")
+        public ApiResponse<Void> restoreProject(
+                        @PathVariable Long projectId,
+                        Authentication authentication) {
+                projectService.restoreProject(projectId, authentication.getName());
+                return ApiResponse.success(HttpStatus.OK.value(), "Project restored successfully", null);
+        }
+
+        @Operation(summary = "Delete project", description = "Permanently delete a project and all its data (Manager only)")
+        @DeleteMapping("/{projectId}")
+        public ApiResponse<Void> deleteProject(
+                        @PathVariable Long projectId,
+                        Authentication authentication) {
+                projectService.deleteProject(projectId, authentication.getName());
+                return ApiResponse.success(HttpStatus.OK.value(), "Project deleted successfully", null);
         }
 }

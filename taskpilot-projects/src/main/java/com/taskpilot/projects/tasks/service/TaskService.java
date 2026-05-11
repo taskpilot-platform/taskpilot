@@ -10,8 +10,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.taskpilot.infrastructure.exception.BusinessException;
+import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.entity.TaskEntity;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
+import com.taskpilot.projects.common.repository.ProjectRepository;
 import com.taskpilot.projects.common.repository.TaskRepository;
 import com.taskpilot.projects.tasks.dto.CreateTaskRequest;
 import com.taskpilot.projects.tasks.dto.KanbanMoveRequest;
@@ -38,6 +40,7 @@ import lombok.RequiredArgsConstructor;
 public class TaskService {
 
     private final TaskRepository taskRepository;
+    private final ProjectRepository projectRepository;
     private final ProjectMemberRepository projectMemberRepository;
     private final UserIdentityPort userIdentityPort;
     private final SkillPort skillPort;
@@ -56,6 +59,14 @@ public class TaskService {
         if (!projectMemberRepository.existsByProjectIdAndUserId(projectId, userId)) {
             throw new BusinessException(HttpStatus.FORBIDDEN.value(),
                     "You are not a member of this project");
+        }
+    }
+
+    private void validateProjectNotArchived(Long projectId) {
+        ProjectEntity project = projectRepository.findById(projectId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Project not found"));
+        if (project.getStatus() == ProjectEntity.ProjectStatus.ARCHIVED) {
+            throw new BusinessException(HttpStatus.CONFLICT.value(), "Project is archived");
         }
     }
 
@@ -145,6 +156,7 @@ public class TaskService {
     public TaskDto createTask(CreateTaskRequest request, String email) {
         Long userId = getCurrentUserIdByEmail(email);
         validateUserIsMember(request.projectId(), userId);
+        validateProjectNotArchived(request.projectId());
 
         if (request.parentId() != null) {
             TaskEntity parentTask = taskRepository.findById(request.parentId())
@@ -217,6 +229,7 @@ public class TaskService {
 
         Long userId = getCurrentUserIdByEmail(email);
         validateUserIsMember(task.getProjectId(), userId);
+        validateProjectNotArchived(task.getProjectId());
 
         if (request.title() != null)
             task.setTitle(request.title());
@@ -296,6 +309,7 @@ public class TaskService {
 
         Long userId = getCurrentUserIdByEmail(email);
         validateUserIsMember(task.getProjectId(), userId);
+        validateProjectNotArchived(task.getProjectId());
 
         boolean canDelete = task.getReporterId().equals(userId);
         if (!canDelete) {
@@ -326,6 +340,7 @@ public class TaskService {
 
         Long userId = getCurrentUserIdByEmail(email);
         validateUserIsMember(task.getProjectId(), userId);
+        validateProjectNotArchived(task.getProjectId());
 
         task.setStatus(request.status());
         task.setPosition(request.position());

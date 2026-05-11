@@ -127,6 +127,8 @@ public class ProjectServiceImpl {
         ProjectEntity project = findProjectById(projectId);
         validateUserIsProjectManager(projectId, userId);
 
+        validateProjectNotArchived(project);
+
         validateProjectDateRange(
                 request.startDate() != null ? request.startDate() : project.getStartDate(),
                 request.endDate() != null ? request.endDate() : project.getEndDate());
@@ -248,6 +250,95 @@ public class ProjectServiceImpl {
     }
 
     /**
+     * Update member role (only MANAGER can do this)
+     */
+    @Transactional
+    public void updateMemberRole(Long projectId, Long targetUserId, MemberRole newRole, String email) {
+        Long currentUserId = getCurrentUserIdByEmail(email);
+        ProjectEntity project = findProjectById(projectId);
+        validateProjectNotArchived(project);
+        validateUserIsProjectManager(projectId, currentUserId);
+
+        ProjectMemberEntity targetMember = projectMemberRepository.findByProjectIdAndUserId(projectId, targetUserId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Member not found in project"));
+
+        if (targetMember.getRole() == newRole) {
+            return;
+        }
+
+        // Prevent last manager demoting themselves
+        if (targetMember.getUserId().equals(currentUserId) && targetMember.getRole() == MemberRole.MANAGER) {
+            long pmCount = projectMemberRepository.findMembers(projectId).stream()
+                    .filter(m -> m.getRole() == MemberRole.MANAGER)
+                    .count();
+            if (pmCount <= 1) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Project must have at least one manager");
+            }
+        }
+
+        targetMember.setRole(newRole);
+        projectMemberRepository.save(targetMember);
+    }
+
+    /**
+     * Remove member from project (only MANAGER can do this)
+     */
+    @Transactional
+    public void removeMember(Long projectId, Long targetUserId, String email) {
+        Long currentUserId = getCurrentUserIdByEmail(email);
+        ProjectEntity project = findProjectById(projectId);
+        validateProjectNotArchived(project);
+        validateUserIsProjectManager(projectId, currentUserId);
+
+        ProjectMemberEntity targetMember = projectMemberRepository.findByProjectIdAndUserId(projectId, targetUserId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Member not found in project"));
+
+        // Prevent last manager being removed
+        if (targetMember.getRole() == MemberRole.MANAGER) {
+            long pmCount = projectMemberRepository.findMembers(projectId).stream()
+                    .filter(m -> m.getRole() == MemberRole.MANAGER)
+                    .count();
+            if (pmCount <= 1) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Project must have at least one manager");
+            }
+        }
+
+        projectMemberRepository.delete(targetMember);
+    }
+
+    // ==================== PROJECT LIFECYCLE ====================
+
+    @Transactional
+    public void archiveProject(Long projectId, String email) {
+        Long userId = getCurrentUserIdByEmail(email);
+        ProjectEntity project = findProjectById(projectId);
+        validateUserIsProjectManager(projectId, userId);
+
+        project.setStatus(ProjectEntity.ProjectStatus.ARCHIVED);
+        projectRepository.save(project);
+    }
+
+    @Transactional
+    public void restoreProject(Long projectId, String email) {
+        Long userId = getCurrentUserIdByEmail(email);
+        ProjectEntity project = findProjectById(projectId);
+        validateUserIsProjectManager(projectId, userId);
+
+        project.setStatus(ProjectEntity.ProjectStatus.ACTIVE);
+        projectRepository.save(project);
+    }
+
+    @Transactional
+    public void deleteProject(Long projectId, String email) {
+        Long userId = getCurrentUserIdByEmail(email);
+        ProjectEntity project = findProjectById(projectId);
+        validateUserIsProjectManager(projectId, userId);
+
+        // Cascade delete will handle the rest
+        projectRepository.delete(project);
+    }
+
+    /**
      * Get project summary (statistics)
      */
     public ProjectSummaryResponse getProjectSummary(Long projectId, String email) {
@@ -312,6 +403,12 @@ public class ProjectServiceImpl {
         if (member.getRole() != MemberRole.MANAGER) {
             throw new BusinessException(HttpStatus.FORBIDDEN.value(),
                     "Only Project Manager can perform this action");
+        }
+    }
+
+    public void validateProjectNotArchived(ProjectEntity project) {
+        if (project.getStatus() == ProjectEntity.ProjectStatus.ARCHIVED) {
+            throw new BusinessException(HttpStatus.CONFLICT.value(), "Project is archived");
         }
     }
 
