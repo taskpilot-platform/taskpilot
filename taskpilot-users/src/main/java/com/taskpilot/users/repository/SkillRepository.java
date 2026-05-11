@@ -21,4 +21,8 @@ public interface SkillRepository extends JpaRepository<SkillEntity, Long> {
     Page<SkillEntity> findByNameContainingIgnoreCase(String name, Pageable pageable);
 
     List<SkillEntity> findByIsActiveTrueOrderByNameAsc();
+
+    boolean existsByIdAndIsActiveTrue(Long id);
+
+    Page<SkillEntity> findByNameContainingIgnoreCaseAndIsActiveTrue(String keyword, Pageable pageable);
 }

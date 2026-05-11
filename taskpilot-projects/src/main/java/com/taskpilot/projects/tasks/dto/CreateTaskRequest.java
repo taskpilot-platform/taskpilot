@@ -21,9 +21,9 @@ public record CreateTaskRequest(
     String description,
     TaskEntity.PriorityLevel priority,
     Float position,
-    List<String> tags,
+    List<Long> labelIds,
     Integer difficultyLevel,
-    List<String> requiredSkills,
+    List<Long> requiredSkillIds,
     Long assigneeId,
     Instant startDate,
     Instant dueDate

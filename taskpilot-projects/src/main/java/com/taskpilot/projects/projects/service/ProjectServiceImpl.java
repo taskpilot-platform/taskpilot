@@ -12,6 +12,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.taskpilot.contracts.assignment.port.out.UserPort;
+import com.taskpilot.contracts.user.port.out.NotificationPort;
+import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
@@ -27,8 +30,6 @@ import com.taskpilot.projects.projects.dto.ProjectMemberResponse;
 import com.taskpilot.projects.projects.dto.ProjectResponse;
 import com.taskpilot.projects.projects.dto.ProjectSummaryResponse;
 import com.taskpilot.projects.projects.dto.UpdateProjectRequest;
-import com.taskpilot.users.notifications.service.NotificationService;
-import com.taskpilot.users.repository.UserRepository;
 
 import lombok.RequiredArgsConstructor;
 
@@ -40,8 +41,9 @@ public class ProjectServiceImpl {
 
     private final ProjectRepository projectRepository;
     private final ProjectMemberRepository projectMemberRepository;
-    private final UserRepository userRepository;
-    private final NotificationService notificationService;
+    private final UserIdentityPort userIdentityPort;
+    private final UserPort userPort;
+    private final NotificationPort notificationPort;
     private final TaskRepository taskRepository;
 
     // ==================== PROJECT CRUD ====================
@@ -125,6 +127,8 @@ public class ProjectServiceImpl {
         ProjectEntity project = findProjectById(projectId);
         validateUserIsProjectManager(projectId, userId);
 
+        validateProjectNotArchived(project);
+
         validateProjectDateRange(
                 request.startDate() != null ? request.startDate() : project.getStartDate(),
                 request.endDate() != null ? request.endDate() : project.getEndDate());
@@ -180,8 +184,8 @@ public class ProjectServiceImpl {
                 .build();
         projectMemberRepository.save(member);
 
-        String joinedMemberName = userRepository.findById(userId)
-                .map(user -> user.getFullName())
+        String joinedMemberName = userPort.findById(userId)
+                .map(user -> user.fullName())
                 .orElse("A member");
 
         List<ProjectMemberEntity> managers = projectMemberRepository.findByProjectIdAndRole(
@@ -194,7 +198,7 @@ public class ProjectServiceImpl {
 
         for (ProjectMemberEntity manager : managers) {
             if (!manager.getUserId().equals(userId)) {
-                notificationService.createSystemNotification(manager.getUserId(), title, message, linkAction);
+                notificationPort.sendSystemNotification(manager.getUserId(), title, message, linkAction);
             }
         }
 
@@ -211,10 +215,10 @@ public class ProjectServiceImpl {
 
         ProjectMemberEntity member = projectMemberRepository.findByProjectIdAndUserId(projectId, userId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(),
-                "You are not a member of this project"));
+                        "You are not a member of this project"));
 
-        String leavingMemberName = userRepository.findById(userId)
-                .map(user -> user.getFullName())
+        String leavingMemberName = userPort.findById(userId)
+                .map(user -> user.fullName())
                 .orElse("A member");
 
         List<ProjectMemberEntity> managers = projectMemberRepository.findByProjectIdAndRole(
@@ -240,9 +244,98 @@ public class ProjectServiceImpl {
 
         for (ProjectMemberEntity manager : managers) {
             if (!manager.getUserId().equals(userId)) {
-                notificationService.createSystemNotification(manager.getUserId(), title, message, linkAction);
+                notificationPort.sendSystemNotification(manager.getUserId(), title, message, linkAction);
             }
         }
+    }
+
+    /**
+     * Update member role (only MANAGER can do this)
+     */
+    @Transactional
+    public void updateMemberRole(Long projectId, Long targetUserId, MemberRole newRole, String email) {
+        Long currentUserId = getCurrentUserIdByEmail(email);
+        ProjectEntity project = findProjectById(projectId);
+        validateProjectNotArchived(project);
+        validateUserIsProjectManager(projectId, currentUserId);
+
+        ProjectMemberEntity targetMember = projectMemberRepository.findByProjectIdAndUserId(projectId, targetUserId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Member not found in project"));
+
+        if (targetMember.getRole() == newRole) {
+            return;
+        }
+
+        // Prevent last manager demoting themselves
+        if (targetMember.getUserId().equals(currentUserId) && targetMember.getRole() == MemberRole.MANAGER) {
+            long pmCount = projectMemberRepository.findMembers(projectId).stream()
+                    .filter(m -> m.getRole() == MemberRole.MANAGER)
+                    .count();
+            if (pmCount <= 1) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Project must have at least one manager");
+            }
+        }
+
+        targetMember.setRole(newRole);
+        projectMemberRepository.save(targetMember);
+    }
+
+    /**
+     * Remove member from project (only MANAGER can do this)
+     */
+    @Transactional
+    public void removeMember(Long projectId, Long targetUserId, String email) {
+        Long currentUserId = getCurrentUserIdByEmail(email);
+        ProjectEntity project = findProjectById(projectId);
+        validateProjectNotArchived(project);
+        validateUserIsProjectManager(projectId, currentUserId);
+
+        ProjectMemberEntity targetMember = projectMemberRepository.findByProjectIdAndUserId(projectId, targetUserId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Member not found in project"));
+
+        // Prevent last manager being removed
+        if (targetMember.getRole() == MemberRole.MANAGER) {
+            long pmCount = projectMemberRepository.findMembers(projectId).stream()
+                    .filter(m -> m.getRole() == MemberRole.MANAGER)
+                    .count();
+            if (pmCount <= 1) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Project must have at least one manager");
+            }
+        }
+
+        projectMemberRepository.delete(targetMember);
+    }
+
+    // ==================== PROJECT LIFECYCLE ====================
+
+    @Transactional
+    public void archiveProject(Long projectId, String email) {
+        Long userId = getCurrentUserIdByEmail(email);
+        ProjectEntity project = findProjectById(projectId);
+        validateUserIsProjectManager(projectId, userId);
+
+        project.setStatus(ProjectEntity.ProjectStatus.ARCHIVED);
+        projectRepository.save(project);
+    }
+
+    @Transactional
+    public void restoreProject(Long projectId, String email) {
+        Long userId = getCurrentUserIdByEmail(email);
+        ProjectEntity project = findProjectById(projectId);
+        validateUserIsProjectManager(projectId, userId);
+
+        project.setStatus(ProjectEntity.ProjectStatus.ACTIVE);
+        projectRepository.save(project);
+    }
+
+    @Transactional
+    public void deleteProject(Long projectId, String email) {
+        Long userId = getCurrentUserIdByEmail(email);
+        ProjectEntity project = findProjectById(projectId);
+        validateUserIsProjectManager(projectId, userId);
+
+        // Cascade delete will handle the rest
+        projectRepository.delete(project);
     }
 
     /**
@@ -272,8 +365,7 @@ public class ProjectServiceImpl {
                 inProgressTasks,
                 reviewTasks,
                 doneTasks,
-                Math.round(completionRate * 10.0) / 10.0
-        );
+                Math.round(completionRate * 10.0) / 10.0);
     }
 
     /**
@@ -305,7 +397,7 @@ public class ProjectServiceImpl {
     private void validateUserIsProjectManager(Long projectId, Long userId) {
         ProjectMemberEntity member = projectMemberRepository.findByProjectIdAndUserId(projectId, userId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.FORBIDDEN.value(),
-                "You are not a member of this project"));
+                        "You are not a member of this project"));
 
         if (member.getRole() != MemberRole.MANAGER) {
             throw new BusinessException(HttpStatus.FORBIDDEN.value(),
@@ -313,9 +405,15 @@ public class ProjectServiceImpl {
         }
     }
 
+    public void validateProjectNotArchived(ProjectEntity project) {
+        if (project.getStatus() == ProjectEntity.ProjectStatus.ARCHIVED) {
+            throw new BusinessException(HttpStatus.CONFLICT.value(), "Project is archived");
+        }
+    }
+
     private Long getCurrentUserIdByEmail(String email) {
-        return userRepository.findByEmail(email)
-                .map(user -> user.getId())
+        return userIdentityPort.findByEmail(email)
+                .map(identity -> identity.id())
                 .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"));
     }
 

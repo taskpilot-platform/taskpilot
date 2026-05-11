@@ -13,6 +13,7 @@ import com.taskpilot.users.skills.dto.SkillDirectoryResponse;
 import com.taskpilot.users.skills.dto.UpdateSkillRequest;
 import com.taskpilot.users.skills.dto.UserSkillResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
@@ -52,6 +53,13 @@ public class SkillService {
 
     public List<SkillDirectoryResponse> getSkillDirectory() {
         return skillRepository.findByIsActiveTrueOrderByNameAsc().stream()
+                .map(SkillDirectoryResponse::fromEntity)
+                .collect(Collectors.toList());
+    }
+
+    public List<SkillDirectoryResponse> searchSkills(String keyword) {
+        PageRequest pageRequest = PageRequest.of(0, 20);
+        return skillRepository.findByNameContainingIgnoreCaseAndIsActiveTrue(keyword, pageRequest).stream()
                 .map(SkillDirectoryResponse::fromEntity)
                 .collect(Collectors.toList());
     }

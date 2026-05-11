@@ -11,9 +11,9 @@ public record UpdateTaskRequest(
     TaskEntity.TaskStatus status,
     TaskEntity.PriorityLevel priority,
     Float position,
-    List<String> tags,
+    List<Long> labelIds,
     Integer difficultyLevel,
-    List<String> requiredSkills,
+    List<Long> requiredSkillIds,
     Long assigneeId,
     Instant startDate,
     Instant dueDate

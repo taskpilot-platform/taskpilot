@@ -194,7 +194,8 @@ public class AiChatController {
     }
 
     private Long resolveUserId(Authentication authentication) {
-        return userIdentityPort.findUserIdByEmail(authentication.getName())
+        return userIdentityPort.findByEmail(authentication.getName())
+                .map(identity -> identity.id())
                 .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(),
                         "User not found"));
     }

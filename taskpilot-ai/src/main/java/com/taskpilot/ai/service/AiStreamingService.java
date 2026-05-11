@@ -62,6 +62,7 @@ public class AiStreamingService {
     private final SessionChatMemoryService sessionChatMemoryService;
     private final ToolCallingRegistryService toolCallingRegistryService;
     private final HeuristicConfigProvider heuristicConfigProvider;
+    private final ThinkingNarratorService thinkingNarratorService;
 
     @Value("${ai.chat.max-output-tokens:3500}")
     private int maxOutputTokens;
@@ -77,17 +78,18 @@ public class AiStreamingService {
             [REASONING OBJECTIVES & TRADE-OFFS]
             You MUST perform an internal reasoning process before providing your final recommendation. You are
             not a simple calculator; you are a strategic manager. You must balance the candidates' AHP (Analytic
-            Hierarchy Process) scores, their current workload, and the 'Current Assignment Mode':
-            - If Mode is 'URGENT': Prioritize the candidate with the highest expertise and fastest execution
-                (highest AHP score). Workload constraints can be secondary to meeting tight deadlines.
-            - If Mode is 'TRAINING': Prioritize junior members or those with an empty schedule to give them
-                hands-on experience and foster team growth, even if their AHP score is slightly lower.
-            - If Mode is 'BALANCED': Find the optimal harmony between a high AHP score and an unburdened
-                schedule to avoid overloading any single team member.
+            Hierarchy Process) scores, their current workload, and the 'Current Assignment Mode'.
+
+            Your reasoning process MUST be granular and structured. Break it down into clear logical steps:
+            - Step 1: Analyze user intent and project requirements.
+            - Step 2: Retrieve relevant data using available tools (if needed).
+            - Step 3: Evaluate results, compare candidates, and weigh trade-offs based on the 'Current Assignment Mode'.
+            - Step 4: Formulate the final strategic recommendation.
 
             [STRICT OUTPUT RULES]
             1. Step 1 (Thinking): All of your internal reasoning, comparisons, and strategic trade-offs MUST be
-                enclosed exactly within <think> and </think> tags.
+                enclosed exactly within <think> and </think> tags. Use a "Step-by-step" format internally to
+                make your logic transparent.
             2. Step 2 (Communicating): After the closing </think> tag, provide your final recommendation clearly
                 and professionally to the user. CRITICAL REQUIREMENT: You MUST extract the key data, metrics, or a markdown table (e.g., AHP scores, workload stats, overdue tasks) and present them IN YOUR FINAL RESPONSE outside the <think> tag. This ensures the user sees the concrete evidence for your decision.
             3. PROHIBITED ACTION: You MUST NEVER justify your choice by simply stating "because they have the
@@ -310,29 +312,55 @@ public class AiStreamingService {
 
         ChatRequest request = requestBuilder.build();
 
-        model.chat(request, new StreamingChatResponseHandler() {
-            @Override
-            public void onPartialResponse(String partialResponse) {
-                fullResponse.append(partialResponse);
+                final StringBuilder thinkingBuffer = new StringBuilder();
+                final AtomicBoolean insideThink = new AtomicBoolean(false);
 
-                if (generatingMarked.compareAndSet(false, true)) {
-                    chatStreamStatusService.updatePhase(sessionId, clientMessageId,
-                            Phase.GENERATING, modelName, null, null);
-                    if (!safeSend(emitter, "phase", Phase.GENERATING.name(), null)) {
-                        clientDisconnected.set(true);
+                model.chat(request, new StreamingChatResponseHandler() {
+                    @Override
+                    public void onPartialResponse(String partialResponse) {
+                        fullResponse.append(partialResponse);
+
+                        // Thinking expansion logic: buffer tokens between <think> and </think>
+                        if (partialResponse.contains("<think>")) {
+                            insideThink.set(true);
+                        }
+                        if (insideThink.get()) {
+                            thinkingBuffer.append(partialResponse);
+                        }
+                        if (partialResponse.contains("</think>")) {
+                            insideThink.set(false);
+                        }
+
+                        if (generatingMarked.compareAndSet(false, true)) {
+                            chatStreamStatusService.updatePhase(sessionId, clientMessageId,
+                                    Phase.GENERATING, modelName, null, null);
+                            if (!safeSend(emitter, "phase", Phase.GENERATING.name(), null)) {
+                                clientDisconnected.set(true);
+                            }
+                        }
+
+                        if (!clientDisconnected.get()) {
+                            if (!safeSend(emitter, "token", Map.of("token", partialResponse), MediaType.APPLICATION_JSON)) {
+                                clientDisconnected.set(true);
+                            }
+                        }
                     }
-                }
 
-                if (!clientDisconnected.get()) {
-                    if (!safeSend(emitter, "token", Map.of("token", partialResponse), MediaType.APPLICATION_JSON)) {
-                        clientDisconnected.set(true);
-                    }
-                }
-            }
+                    @Override
+                    public void onCompleteResponse(ChatResponse completeResponse) {
+                        // After completion, if we have a thinking buffer, expand it in the background
+                        String rawThinking = thinkingBuffer.toString();
+                        if (rawThinking.contains("<think>")) {
+                            String thinkingContent = extractReasoning(rawThinking);
+                            if (thinkingContent != null && !thinkingContent.isBlank()) {
+                                thinkingNarratorService.expandAsync(thinkingContent).thenAccept(expanded -> {
+                                    log.info("[AiChat] Expanded thinking for session {}", sessionId);
+                                    safeSend(emitter, "thought_expanded", Map.of("expanded", expanded), MediaType.APPLICATION_JSON);
+                                });
+                            }
+                        }
 
-            @Override
-            public void onCompleteResponse(ChatResponse completeResponse) {
-                AiMessage aiMessage = completeResponse.aiMessage();
+                        AiMessage aiMessage = completeResponse.aiMessage();
 
                 if (aiMessage != null && aiMessage.hasToolExecutionRequests()) {
                     ToolLoopState nextToolState = advanceToolLoopState(
