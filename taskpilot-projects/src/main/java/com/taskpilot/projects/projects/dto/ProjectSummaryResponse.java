@@ -5,9 +5,10 @@ public record ProjectSummaryResponse(
         String projectName,
         long totalMembers,
         long totalTasks,
-        long completedTasks,
+        long todoTasks,
         long inProgressTasks,
-        long pendingTasks,
+        long reviewTasks,
+        long doneTasks,
         double completionRate
 ) {
 }

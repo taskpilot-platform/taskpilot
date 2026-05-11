@@ -15,15 +15,18 @@ import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.users.repository.SystemSettingRepository;
 import com.taskpilot.users.repository.UserRepository;
 import com.taskpilot.users.repository.UserSkillRepository;
+import com.taskpilot.contracts.user.port.out.NotificationPort;
+import com.taskpilot.users.notifications.service.NotificationService;
 
 import lombok.RequiredArgsConstructor;
 
 @Component
 @RequiredArgsConstructor
 public class UserModuleAdapter
-        implements UserPort, UserSkillPort, SystemSettingPort, UserIdentityPort {
+        implements UserPort, UserSkillPort, SystemSettingPort, UserIdentityPort, NotificationPort {
 
     private final UserRepository userRepository;
+    private final NotificationService notificationService;
     private final UserSkillRepository userSkillRepository;
     private final SystemSettingRepository systemSettingRepository;
 
@@ -60,5 +63,10 @@ public class UserModuleAdapter
     @Override
     public Optional<Long> findUserIdByEmail(String email) {
         return userRepository.findByEmail(email).map(user -> user.getId());
+    }
+
+    @Override
+    public void sendSystemNotification(Long targetUserId, String title, String message, String linkAction) {
+        notificationService.createSystemNotification(targetUserId, title, message, linkAction);
     }
 }
