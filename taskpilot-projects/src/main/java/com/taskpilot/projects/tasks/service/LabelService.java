@@ -32,7 +32,8 @@ public class LabelService {
     private final UserIdentityPort userIdentityPort;
 
     private Long getCurrentUserIdByEmail(String email) {
-        return userIdentityPort.findUserIdByEmail(email)
+        return userIdentityPort.findByEmail(email)
+                .map(identity -> identity.id())
                 .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"));
     }
 
@@ -80,7 +81,8 @@ public class LabelService {
         String normalizedName = request.name().trim().replaceAll("\\s+", " ");
 
         if (labelRepository.existsByProjectIdAndNameIgnoreCase(projectId, normalizedName)) {
-            throw new BusinessException(HttpStatus.CONFLICT.value(), "Label with this name already exists in the project");
+            throw new BusinessException(HttpStatus.CONFLICT.value(),
+                    "Label with this name already exists in the project");
         }
 
         LabelEntity label = LabelEntity.builder()
@@ -92,7 +94,8 @@ public class LabelService {
         try {
             labelRepository.save(label);
         } catch (DataIntegrityViolationException e) {
-            throw new BusinessException(HttpStatus.CONFLICT.value(), "Label with this name already exists in the project");
+            throw new BusinessException(HttpStatus.CONFLICT.value(),
+                    "Label with this name already exists in the project");
         }
 
         return new LabelDto(label.getId(), label.getName(), label.getColor());

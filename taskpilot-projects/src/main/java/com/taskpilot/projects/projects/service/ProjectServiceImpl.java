@@ -12,6 +12,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.taskpilot.contracts.assignment.port.out.UserPort;
+import com.taskpilot.contracts.user.port.out.NotificationPort;
+import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
@@ -27,9 +30,6 @@ import com.taskpilot.projects.projects.dto.ProjectMemberResponse;
 import com.taskpilot.projects.projects.dto.ProjectResponse;
 import com.taskpilot.projects.projects.dto.ProjectSummaryResponse;
 import com.taskpilot.projects.projects.dto.UpdateProjectRequest;
-import com.taskpilot.contracts.assignment.port.out.UserPort;
-import com.taskpilot.contracts.user.port.out.NotificationPort;
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 
 import lombok.RequiredArgsConstructor;
 
@@ -215,7 +215,7 @@ public class ProjectServiceImpl {
 
         ProjectMemberEntity member = projectMemberRepository.findByProjectIdAndUserId(projectId, userId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(),
-                "You are not a member of this project"));
+                        "You are not a member of this project"));
 
         String leavingMemberName = userPort.findById(userId)
                 .map(user -> user.fullName())
@@ -365,8 +365,7 @@ public class ProjectServiceImpl {
                 inProgressTasks,
                 reviewTasks,
                 doneTasks,
-                Math.round(completionRate * 10.0) / 10.0
-        );
+                Math.round(completionRate * 10.0) / 10.0);
     }
 
     /**
@@ -398,7 +397,7 @@ public class ProjectServiceImpl {
     private void validateUserIsProjectManager(Long projectId, Long userId) {
         ProjectMemberEntity member = projectMemberRepository.findByProjectIdAndUserId(projectId, userId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.FORBIDDEN.value(),
-                "You are not a member of this project"));
+                        "You are not a member of this project"));
 
         if (member.getRole() != MemberRole.MANAGER) {
             throw new BusinessException(HttpStatus.FORBIDDEN.value(),
@@ -413,7 +412,8 @@ public class ProjectServiceImpl {
     }
 
     private Long getCurrentUserIdByEmail(String email) {
-        return userIdentityPort.findUserIdByEmail(email)
+        return userIdentityPort.findByEmail(email)
+                .map(identity -> identity.id())
                 .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"));
     }
 
