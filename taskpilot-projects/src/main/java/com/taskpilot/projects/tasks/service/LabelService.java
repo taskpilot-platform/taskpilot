@@ -51,14 +51,16 @@ public class LabelService {
         Long userId = getCurrentUserIdByEmail(email);
         validateUserIsMember(projectId, userId);
 
-        if (labelRepository.existsByProjectIdAndNameIgnoreCase(projectId, request.name())) {
+        String normalizedName = request.name().trim().replaceAll("\\s+", " ");
+
+        if (labelRepository.existsByProjectIdAndNameIgnoreCase(projectId, normalizedName)) {
             throw new BusinessException(HttpStatus.CONFLICT.value(), "Label with this name already exists in the project");
         }
 
         LabelEntity label = LabelEntity.builder()
                 .projectId(projectId)
-                .name(request.name().trim())
-                .color(request.color() != null ? request.color() : "#6366F1")
+                .name(normalizedName)
+                .color(request.color() != null ? request.color().toUpperCase() : "#6366F1")
                 .build();
 
         labelRepository.save(label);

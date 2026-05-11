@@ -58,7 +58,7 @@ public class SkillService {
     }
 
     public List<SkillDirectoryResponse> searchSkills(String keyword) {
-        PageRequest pageRequest = PageRequest.of(0, 50);
+        PageRequest pageRequest = PageRequest.of(0, 20);
         return skillRepository.findByNameContainingIgnoreCaseAndIsActiveTrue(keyword, pageRequest).stream()
                 .map(SkillDirectoryResponse::fromEntity)
                 .collect(Collectors.toList());

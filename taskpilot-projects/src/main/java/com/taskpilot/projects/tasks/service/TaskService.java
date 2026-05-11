@@ -174,6 +174,13 @@ public class TaskService {
         taskRepository.save(task);
 
         if (request.labelIds() != null && !request.labelIds().isEmpty()) {
+            long validCount = labelRepository.findAllById(request.labelIds()).stream()
+                .filter(l -> l.getProjectId().equals(task.getProjectId()))
+                .count();
+            if (validCount != request.labelIds().size()) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "One or more labels are invalid or do not belong to this project");
+            }
+            
             List<TaskLabelEntity> taskLabels = request.labelIds().stream()
                 .map(labelId -> TaskLabelEntity.builder()
                     .id(new TaskLabelEntity.TaskLabelId(task.getId(), labelId))
@@ -184,6 +191,11 @@ public class TaskService {
         }
         
         if (request.requiredSkillIds() != null && !request.requiredSkillIds().isEmpty()) {
+            List<SkillDto> validSkills = skillPort.findByIds(new java.util.HashSet<>(request.requiredSkillIds()));
+            if (validSkills.size() != request.requiredSkillIds().size()) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "One or more required skills are invalid or inactive");
+            }
+
             List<TaskRequiredSkillEntity> taskSkills = request.requiredSkillIds().stream()
                 .map(skillId -> TaskRequiredSkillEntity.builder()
                     .id(new TaskRequiredSkillEntity.TaskRequiredSkillId(task.getId(), skillId))
@@ -231,6 +243,14 @@ public class TaskService {
         taskRepository.save(task);
         
         if (request.labelIds() != null) {
+            if (!request.labelIds().isEmpty()) {
+                long validCount = labelRepository.findAllById(request.labelIds()).stream()
+                    .filter(l -> l.getProjectId().equals(task.getProjectId()))
+                    .count();
+                if (validCount != request.labelIds().size()) {
+                    throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "One or more labels are invalid or do not belong to this project");
+                }
+            }
             taskLabelRepository.deleteByTaskId(task.getId());
             if (!request.labelIds().isEmpty()) {
                 List<TaskLabelEntity> taskLabels = request.labelIds().stream()
@@ -244,6 +264,12 @@ public class TaskService {
         }
         
         if (request.requiredSkillIds() != null) {
+            if (!request.requiredSkillIds().isEmpty()) {
+                List<SkillDto> validSkills = skillPort.findByIds(new java.util.HashSet<>(request.requiredSkillIds()));
+                if (validSkills.size() != request.requiredSkillIds().size()) {
+                    throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "One or more required skills are invalid or inactive");
+                }
+            }
             taskRequiredSkillRepository.deleteByTaskId(task.getId());
             if (!request.requiredSkillIds().isEmpty()) {
                 List<TaskRequiredSkillEntity> taskSkills = request.requiredSkillIds().stream()
