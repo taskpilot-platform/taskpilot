@@ -5,7 +5,10 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import com.taskpilot.contracts.user.dto.NotificationTypeDto;
+import com.taskpilot.contracts.user.dto.SystemNotificationCommandDto;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.infrastructure.notification.OneSignalService;
 import com.taskpilot.users.entity.NotificationEntity;
@@ -22,6 +25,7 @@ public class NotificationService {
     private final NotificationRepository notificationRepository;
     private final UserRepository userRepository;
     private final OneSignalService oneSignalService;
+    private final NotificationRealtimeService notificationRealtimeService;
 
     public Page<NotificationResponse> getMyNotifications(String email, Pageable pageable) {
         Long userId = getCurrentUserIdByEmail(email);
@@ -50,24 +54,43 @@ public class NotificationService {
         return notificationRepository.countByUserIdAndIsReadFalse(userId);
     }
 
+    public SseEmitter streamMyNotifications(String email) {
+        Long userId = getCurrentUserIdByEmail(email);
+        long unreadCount = notificationRepository.countByUserIdAndIsReadFalse(userId);
+        return notificationRealtimeService.subscribe(userId, unreadCount);
+    }
+
     @Transactional
     public void createSystemNotification(Long targetUserId, String title, String message, String linkAction) {
+        createNotification(new SystemNotificationCommandDto(targetUserId, title, message, linkAction));
+    }
+
+    @Transactional
+    public NotificationResponse createNotification(SystemNotificationCommandDto command) {
         NotificationEntity notification = NotificationEntity.builder()
-                .userId(targetUserId)
-                .title(title)
-                .message(message)
-                .type(NotificationEntity.NotificationType.SYSTEM)
+                .userId(command.targetUserId())
+                .title(command.title())
+                .message(command.message())
+                .type(toEntityType(command.type()))
                 .isRead(false)
-                .linkAction(linkAction)
+                .linkAction(command.linkAction())
                 .build();
 
-        notificationRepository.save(notification);
-        oneSignalService.sendNotificationToUser(String.valueOf(targetUserId), title, message);
+        NotificationResponse response = NotificationResponse.fromEntity(notificationRepository.save(notification));
+        long unreadCount = notificationRepository.countByUserIdAndIsReadFalse(command.targetUserId());
+        notificationRealtimeService.publishCreated(response, unreadCount);
+        oneSignalService.sendNotificationToUser(String.valueOf(command.targetUserId()), command.title(), command.message());
+        return response;
     }
 
     private Long getCurrentUserIdByEmail(String email) {
         return userRepository.findByEmail(email)
                 .map(user -> user.getId())
                 .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"));
+    }
+
+    private NotificationEntity.NotificationType toEntityType(NotificationTypeDto type) {
+        return NotificationEntity.NotificationType.valueOf(
+                (type != null ? type : NotificationTypeDto.SYSTEM).name());
     }
 }

@@ -85,9 +85,30 @@ public class UserModuleAdapter
     }
 
     @Override
-    public void createSystemNotification(SystemNotificationCommandDto command) {
-        notificationService.createSystemNotification(command.targetUserId(), command.title(),
-                command.message(), command.linkAction());
+    public List<UserProfileLiteDto> findLiteByIds(Set<Long> userIds) {
+        if (userIds == null || userIds.isEmpty()) {
+            return List.of();
+        }
+        return userRepository.findAllById(userIds).stream()
+                .map(user -> new UserProfileLiteDto(user.getId(), user.getFullName()))
+                .toList();
+    }
+
+    @Override
+    public List<UserProfileLiteDto> searchLite(String keyword, int limit) {
+        String normalizedKeyword = keyword == null ? "" : keyword.trim();
+        if (normalizedKeyword.isBlank()) {
+            return List.of();
+        }
+        int safeLimit = Math.max(1, Math.min(limit, 1000));
+        return userRepository.findByKeyword(normalizedKeyword, PageRequest.of(0, safeLimit)).stream()
+                .map(user -> new UserProfileLiteDto(user.getId(), user.getFullName()))
+                .toList();
+    }
+
+    @Override
+    public void createNotification(SystemNotificationCommandDto command) {
+        notificationService.createNotification(command);
     }
 
     @Override

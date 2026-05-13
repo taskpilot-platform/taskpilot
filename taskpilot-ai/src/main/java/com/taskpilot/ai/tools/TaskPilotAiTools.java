@@ -7,6 +7,7 @@ import com.taskpilot.contracts.assignment.port.out.ProjectMemberPort;
 import com.taskpilot.contracts.aiquery.dto.*;
 import com.taskpilot.contracts.aiquery.port.out.ProjectInsightsPort;
 import com.taskpilot.contracts.aiquery.port.out.MemberAnalyticsPort;
+import com.taskpilot.contracts.aiquery.port.out.TaskCommentQueryPort;
 import com.taskpilot.contracts.aiquery.port.out.TaskCommandPort;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
@@ -30,6 +31,7 @@ public class TaskPilotAiTools {
     private final ProjectInsightsPort projectInsightsPort;
     private final MemberAnalyticsPort memberAnalyticsPort;
     private final TaskCommandPort taskCommandPort;
+    private final TaskCommentQueryPort taskCommentQueryPort;
 
     @Tool("""
             Use this tool when the user asks about the status, progress, or health of a specific project.
@@ -206,7 +208,8 @@ public class TaskPilotAiTools {
             """)
     public Object getTaskComments(@P("The ID of the task") Long taskId) {
         log.info("[AiTool] getTaskComments called for task {}", taskId);
-        return "Not implemented";
+        Long userId = ToolExecutionContext.requireUserId();
+        return taskCommentQueryPort.getTaskComments(taskId, userId);
     }
 
     @Tool("""
