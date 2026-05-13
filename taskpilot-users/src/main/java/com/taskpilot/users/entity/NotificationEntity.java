@@ -59,6 +59,8 @@ public class NotificationEntity {
     public enum NotificationType {
         SYSTEM,
         ASSIGNED,
-        DEADLINE_NEAR
+        DEADLINE_NEAR,
+        COMMENT,
+        MENTION
     }
 }

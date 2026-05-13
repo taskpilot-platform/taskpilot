@@ -4,5 +4,9 @@ import com.taskpilot.contracts.user.dto.SystemNotificationCommandDto;
 
 public interface UserNotificationPort {
 
-    void createSystemNotification(SystemNotificationCommandDto command);
+    void createNotification(SystemNotificationCommandDto command);
+
+    default void createSystemNotification(SystemNotificationCommandDto command) {
+        createNotification(command);
+    }
 }

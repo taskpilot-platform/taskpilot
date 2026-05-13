@@ -4,12 +4,14 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import com.taskpilot.users.notifications.dto.NotificationResponse;
@@ -45,6 +47,12 @@ public class NotificationController {
                 HttpStatus.OK.value(),
                 "Unread notifications count retrieved successfully",
                 notificationService.getUnreadCount(authentication.getName()));
+    }
+
+    @Operation(summary = "Stream my notifications")
+    @GetMapping(value = "/my/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamMyNotifications(Authentication authentication) {
+        return notificationService.streamMyNotifications(authentication.getName());
     }
 
     @Operation(summary = "Mark one notification as read")
