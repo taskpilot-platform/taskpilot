@@ -69,12 +69,14 @@ public class TaskCommentController {
     }
 
     @DeleteMapping("/{commentId}")
-    public ApiResponse<Void> deleteComment(
+    public ApiResponse<TaskCommentDto> deleteComment(
             @PathVariable Long taskId,
             @PathVariable Long commentId,
             Authentication authentication) {
-        taskCommentService.deleteComment(taskId, commentId, authentication.getName());
-        return ApiResponse.success(HttpStatus.OK.value(), "Task comment deleted successfully", null);
+        return ApiResponse.success(
+                HttpStatus.OK.value(),
+                "Task comment deleted successfully",
+                taskCommentService.deleteComment(taskId, commentId, authentication.getName()));
     }
 
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)

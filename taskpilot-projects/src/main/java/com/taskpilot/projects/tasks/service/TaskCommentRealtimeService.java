@@ -46,8 +46,9 @@ public class TaskCommentRealtimeService {
         publish(comment.taskId(), "comment.updated", comment);
     }
 
-    public void publishDeleted(Long taskId, Long commentId) {
-        publish(taskId, "comment.deleted", new TaskCommentDeletedEvent(taskId, commentId));
+    public void publishDeleted(TaskCommentDto comment) {
+        publish(comment.taskId(), "comment.deleted",
+                new TaskCommentDeletedEvent(comment.taskId(), comment.id(), comment.parentCommentId(), true));
     }
 
     private void publish(Long taskId, String eventName, Object payload) {

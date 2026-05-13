@@ -95,6 +95,18 @@ public class UserModuleAdapter
     }
 
     @Override
+    public List<UserProfileLiteDto> searchLite(String keyword, int limit) {
+        String normalizedKeyword = keyword == null ? "" : keyword.trim();
+        if (normalizedKeyword.isBlank()) {
+            return List.of();
+        }
+        int safeLimit = Math.max(1, Math.min(limit, 1000));
+        return userRepository.findByKeyword(normalizedKeyword, PageRequest.of(0, safeLimit)).stream()
+                .map(user -> new UserProfileLiteDto(user.getId(), user.getFullName()))
+                .toList();
+    }
+
+    @Override
     public void createNotification(SystemNotificationCommandDto command) {
         notificationService.createNotification(command);
     }

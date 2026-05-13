@@ -11,4 +11,6 @@ public interface UserProfilePort {
     Optional<UserProfileLiteDto> findLiteById(Long userId);
 
     List<UserProfileLiteDto> findLiteByIds(Set<Long> userIds);
+
+    List<UserProfileLiteDto> searchLite(String keyword, int limit);
 }

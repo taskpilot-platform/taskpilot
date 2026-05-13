@@ -1,4 +1,4 @@
 package com.taskpilot.projects.tasks.dto;
 
-public record TaskCommentDeletedEvent(Long taskId, Long commentId) {
+public record TaskCommentDeletedEvent(Long taskId, Long commentId, Long parentCommentId, Boolean deleted) {
 }

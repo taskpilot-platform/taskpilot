@@ -5,9 +5,12 @@ import java.util.List;
 
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
 
-public record TaskCommentDto(
+public record CommentSearchResultDto(
         Long id,
+        Long projectId,
+        String projectName,
         Long taskId,
+        String taskTitle,
         Long parentCommentId,
         UserProfileLiteDto author,
         String content,

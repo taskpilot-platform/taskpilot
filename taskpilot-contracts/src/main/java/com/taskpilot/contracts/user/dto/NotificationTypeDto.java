@@ -5,5 +5,6 @@ public enum NotificationTypeDto {
     ASSIGNED,
     DEADLINE_NEAR,
     COMMENT,
-    MENTION
+    MENTION,
+    REPLY
 }

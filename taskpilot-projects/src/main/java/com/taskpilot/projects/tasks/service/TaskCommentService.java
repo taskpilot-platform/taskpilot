@@ -1,13 +1,22 @@
 package com.taskpilot.projects.tasks.service;
 
+import java.time.Instant;
+import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,6 +41,7 @@ import com.taskpilot.projects.common.repository.CommentRepository;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
 import com.taskpilot.projects.common.repository.ProjectRepository;
 import com.taskpilot.projects.common.repository.TaskRepository;
+import com.taskpilot.projects.tasks.dto.CommentSearchResultDto;
 import com.taskpilot.projects.tasks.dto.CreateTaskCommentRequest;
 import com.taskpilot.projects.tasks.dto.TaskCommentDto;
 import com.taskpilot.projects.tasks.dto.UpdateTaskCommentRequest;
@@ -41,8 +51,6 @@ import lombok.RequiredArgsConstructor;
 @Service
 @RequiredArgsConstructor
 public class TaskCommentService implements TaskCommentQueryPort {
-
-    private static final String TASK_LINK_PREFIX = "/tasks?taskId=";
 
     private final CommentRepository commentRepository;
     private final CommentMentionRepository commentMentionRepository;
@@ -72,9 +80,11 @@ public class TaskCommentService implements TaskCommentQueryPort {
 
         Set<Long> mentionedUserIds = validateMentionedUsers(task.getProjectId(), request.mentionedUserIds());
         String content = normalizeContent(request.content());
+        CommentEntity parentComment = validateParentComment(taskId, request.parentCommentId());
 
         CommentEntity comment = CommentEntity.builder()
                 .taskId(taskId)
+                .parentCommentId(parentComment != null ? parentComment.getId() : null)
                 .userId(currentUserId)
                 .content(content)
                 .build();
@@ -82,7 +92,7 @@ public class TaskCommentService implements TaskCommentQueryPort {
         saveMentions(comment.getId(), mentionedUserIds);
 
         TaskCommentDto dto = mapToDto(comment);
-        notifyCommentCreated(task, dto, mentionedUserIds, currentUserId);
+        notifyCommentCreated(task, parentComment, dto, mentionedUserIds, currentUserId);
         realtimeService.publishCreated(dto);
         return dto;
     }
@@ -97,6 +107,9 @@ public class TaskCommentService implements TaskCommentQueryPort {
 
         if (!comment.getUserId().equals(currentUserId)) {
             throw new BusinessException(HttpStatus.FORBIDDEN.value(), "Only the comment author can update it");
+        }
+        if (isDeleted(comment)) {
+            throw new BusinessException(HttpStatus.CONFLICT.value(), "Deleted comments cannot be updated");
         }
 
         Set<Long> previousMentionIds = findMentionedUserIds(commentId);
@@ -113,7 +126,7 @@ public class TaskCommentService implements TaskCommentQueryPort {
     }
 
     @Transactional
-    public void deleteComment(Long taskId, Long commentId, String email) {
+    public TaskCommentDto deleteComment(Long taskId, Long commentId, String email) {
         TaskEntity task = findTask(taskId);
         CommentEntity comment = findComment(taskId, commentId);
         Long currentUserId = getCurrentUserIdByEmail(email);
@@ -129,8 +142,17 @@ public class TaskCommentService implements TaskCommentQueryPort {
                     "Only the comment author or project manager can delete it");
         }
 
-        commentRepository.delete(comment);
-        realtimeService.publishDeleted(taskId, commentId);
+        if (isDeleted(comment)) {
+            return mapToDto(comment);
+        }
+
+        comment.setDeletedAt(Instant.now());
+        comment.setDeletedBy(currentUserId);
+        commentRepository.save(comment);
+
+        TaskCommentDto dto = mapToDto(comment);
+        realtimeService.publishDeleted(dto);
+        return dto;
     }
 
     @Transactional(readOnly = true)
@@ -159,6 +181,44 @@ public class TaskCommentService implements TaskCommentQueryPort {
                 .toList();
     }
 
+    @Transactional(readOnly = true)
+    public Page<CommentSearchResultDto> searchComments(
+            String keyword,
+            Long projectId,
+            Long taskId,
+            Long authorId,
+            boolean mentionedMe,
+            String email,
+            Pageable pageable) {
+        Long currentUserId = getCurrentUserIdByEmail(email);
+        String normalizedKeyword = normalizeOptionalKeyword(keyword);
+        boolean hasKeyword = normalizedKeyword != null;
+        String keywordPattern = hasKeyword
+                ? "%" + normalizedKeyword.toLowerCase(Locale.ROOT) + "%"
+                : "%";
+        Set<Long> keywordAuthorIds = findKeywordAuthorIds(normalizedKeyword);
+        boolean hasKeywordAuthorMatches = !keywordAuthorIds.isEmpty();
+        if (!hasKeywordAuthorMatches) {
+            keywordAuthorIds = Set.of(-1L);
+        }
+
+        Pageable safePageable = buildCommentSearchPageable(pageable);
+        Page<CommentEntity> commentPage = commentRepository.searchAccessibleComments(
+                currentUserId,
+                hasKeyword,
+                keywordPattern,
+                projectId,
+                taskId,
+                authorId,
+                mentionedMe,
+                keywordAuthorIds,
+                hasKeywordAuthorMatches,
+                safePageable);
+
+        List<CommentSearchResultDto> results = mapToSearchResultDtos(commentPage.getContent());
+        return new PageImpl<>(results, safePageable, commentPage.getTotalElements());
+    }
+
     @Override
     @Transactional(readOnly = true)
     public List<TaskCommentSummaryDto> getTaskComments(Long taskId, Long requesterUserId) {
@@ -169,10 +229,12 @@ public class TaskCommentService implements TaskCommentQueryPort {
                 .map(comment -> new TaskCommentSummaryDto(
                         comment.id(),
                         comment.taskId(),
+                        comment.parentCommentId(),
                         comment.author().id(),
                         comment.author().fullName(),
                         comment.content(),
                         comment.mentions().stream().map(UserProfileLiteDto::id).toList(),
+                        comment.deleted(),
                         comment.createdAt(),
                         comment.updatedAt()))
                 .toList();
@@ -186,6 +248,18 @@ public class TaskCommentService implements TaskCommentQueryPort {
     private CommentEntity findComment(Long taskId, Long commentId) {
         return commentRepository.findByIdAndTaskId(commentId, taskId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Comment not found"));
+    }
+
+    private CommentEntity validateParentComment(Long taskId, Long parentCommentId) {
+        if (parentCommentId == null) {
+            return null;
+        }
+
+        CommentEntity parentComment = findComment(taskId, parentCommentId);
+        if (isDeleted(parentComment)) {
+            throw new BusinessException(HttpStatus.CONFLICT.value(), "Cannot reply to a deleted comment");
+        }
+        return parentComment;
     }
 
     private Long getCurrentUserIdByEmail(String email) {
@@ -264,6 +338,66 @@ public class TaskCommentService implements TaskCommentQueryPort {
         return mapToDtos(List.of(comment)).get(0);
     }
 
+    private List<CommentSearchResultDto> mapToSearchResultDtos(List<CommentEntity> comments) {
+        if (comments.isEmpty()) {
+            return List.of();
+        }
+
+        List<Long> commentIds = comments.stream().map(CommentEntity::getId).toList();
+        Map<Long, List<Long>> mentionIdsByComment = commentMentionRepository.findByCommentIdIn(commentIds)
+                .stream()
+                .collect(Collectors.groupingBy(
+                        CommentMentionEntity::getCommentId,
+                        Collectors.mapping(CommentMentionEntity::getUserId, Collectors.toList())));
+
+        Map<Long, TaskEntity> tasksById = taskRepository.findAllById(
+                comments.stream().map(CommentEntity::getTaskId).collect(Collectors.toSet()))
+                .stream()
+                .collect(Collectors.toMap(TaskEntity::getId, Function.identity()));
+
+        Map<Long, ProjectEntity> projectsById = projectRepository.findAllById(
+                tasksById.values().stream().map(TaskEntity::getProjectId).collect(Collectors.toSet()))
+                .stream()
+                .collect(Collectors.toMap(ProjectEntity::getId, Function.identity()));
+
+        Set<Long> profileIds = comments.stream().map(CommentEntity::getUserId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        mentionIdsByComment.values().forEach(profileIds::addAll);
+
+        Map<Long, UserProfileLiteDto> profilesById = loadProfilesById(profileIds);
+
+        return comments.stream()
+                .map(comment -> {
+                    TaskEntity task = tasksById.get(comment.getTaskId());
+                    ProjectEntity project = task == null ? null : projectsById.get(task.getProjectId());
+                    boolean deleted = isDeleted(comment);
+                    UserProfileLiteDto author = profilesById.getOrDefault(comment.getUserId(),
+                            new UserProfileLiteDto(comment.getUserId(), "Unknown User"));
+                    List<UserProfileLiteDto> mentions = deleted ? List.of()
+                            : mentionIdsByComment.getOrDefault(comment.getId(), List.of())
+                                    .stream()
+                                    .map(profilesById::get)
+                                    .filter(profile -> profile != null)
+                                    .toList();
+
+                    return new CommentSearchResultDto(
+                            comment.getId(),
+                            project != null ? project.getId() : null,
+                            project != null ? project.getName() : "Unknown Project",
+                            comment.getTaskId(),
+                            task != null ? task.getTitle() : "Unknown Task",
+                            comment.getParentCommentId(),
+                            author,
+                            deleted ? null : comment.getContent(),
+                            mentions,
+                            deleted,
+                            comment.getDeletedAt(),
+                            comment.getCreatedAt(),
+                            comment.getUpdatedAt());
+                })
+                .toList();
+    }
+
     private List<TaskCommentDto> mapToDtos(List<CommentEntity> comments) {
         if (comments.isEmpty()) {
             return List.of();
@@ -280,8 +414,7 @@ public class TaskCommentService implements TaskCommentQueryPort {
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         mentionIdsByComment.values().forEach(profileIds::addAll);
 
-        Map<Long, UserProfileLiteDto> profilesById = userProfilePort.findLiteByIds(profileIds).stream()
-                .collect(Collectors.toMap(UserProfileLiteDto::id, Function.identity(), (left, right) -> left));
+        Map<Long, UserProfileLiteDto> profilesById = loadProfilesById(profileIds);
 
         return comments.stream()
                 .map(comment -> {
@@ -296,27 +429,48 @@ public class TaskCommentService implements TaskCommentQueryPort {
                     return new TaskCommentDto(
                             comment.getId(),
                             comment.getTaskId(),
+                            comment.getParentCommentId(),
                             author,
-                            comment.getContent(),
-                            mentions,
+                            isDeleted(comment) ? null : comment.getContent(),
+                            isDeleted(comment) ? List.of() : mentions,
+                            isDeleted(comment),
+                            comment.getDeletedAt(),
                             comment.getCreatedAt(),
                             comment.getUpdatedAt());
                 })
                 .toList();
     }
 
-    private void notifyCommentCreated(TaskEntity task, TaskCommentDto comment, Set<Long> mentionedUserIds,
-            Long actorUserId) {
+    private void notifyCommentCreated(TaskEntity task, CommentEntity parentComment, TaskCommentDto comment,
+            Set<Long> mentionedUserIds, Long actorUserId) {
         Set<Long> mentionRecipients = new LinkedHashSet<>(mentionedUserIds);
         mentionRecipients.remove(actorUserId);
+
+        String linkAction = buildCommentLink(task.getId(), comment.id());
 
         for (Long targetUserId : mentionRecipients) {
             userNotificationPort.createNotification(new SystemNotificationCommandDto(
                     targetUserId,
                     "You were mentioned in a task comment",
                     comment.author().fullName() + " mentioned you on task: " + task.getTitle(),
-                    TASK_LINK_PREFIX + task.getId(),
+                    linkAction,
                     NotificationTypeDto.MENTION));
+        }
+
+        Set<Long> replyRecipients = new LinkedHashSet<>();
+        if (parentComment != null && parentComment.getUserId() != null) {
+            replyRecipients.add(parentComment.getUserId());
+        }
+        replyRecipients.remove(actorUserId);
+        replyRecipients.removeAll(mentionRecipients);
+
+        for (Long targetUserId : replyRecipients) {
+            userNotificationPort.createNotification(new SystemNotificationCommandDto(
+                    targetUserId,
+                    "New reply to your task comment",
+                    comment.author().fullName() + " replied on task: " + task.getTitle(),
+                    linkAction,
+                    NotificationTypeDto.REPLY));
         }
 
         Set<Long> commentRecipients = new LinkedHashSet<>();
@@ -329,13 +483,14 @@ public class TaskCommentService implements TaskCommentQueryPort {
         commentRecipients.addAll(commentRepository.findParticipantUserIdsByTaskId(task.getId()));
         commentRecipients.remove(actorUserId);
         commentRecipients.removeAll(mentionRecipients);
+        commentRecipients.removeAll(replyRecipients);
 
         for (Long targetUserId : commentRecipients) {
             userNotificationPort.createNotification(new SystemNotificationCommandDto(
                     targetUserId,
                     "New comment on task",
                     comment.author().fullName() + " commented on task: " + task.getTitle(),
-                    TASK_LINK_PREFIX + task.getId(),
+                    linkAction,
                     NotificationTypeDto.COMMENT));
         }
     }
@@ -351,8 +506,46 @@ public class TaskCommentService implements TaskCommentQueryPort {
                     targetUserId,
                     "You were mentioned in a task comment",
                     comment.author().fullName() + " mentioned you on task: " + task.getTitle(),
-                    TASK_LINK_PREFIX + task.getId(),
+                    buildCommentLink(task.getId(), comment.id()),
                     NotificationTypeDto.MENTION));
         }
+    }
+
+    private String buildCommentLink(Long taskId, Long commentId) {
+        return "/tasks?taskId=" + taskId + "&commentId=" + commentId;
+    }
+
+    private boolean isDeleted(CommentEntity comment) {
+        return comment.getDeletedAt() != null;
+    }
+
+    private Map<Long, UserProfileLiteDto> loadProfilesById(Collection<Long> profileIds) {
+        if (profileIds == null || profileIds.isEmpty()) {
+            return Map.of();
+        }
+
+        return userProfilePort.findLiteByIds(new HashSet<>(profileIds)).stream()
+                .collect(Collectors.toMap(UserProfileLiteDto::id, Function.identity(), (left, right) -> left));
+    }
+
+    private String normalizeOptionalKeyword(String keyword) {
+        String normalizedKeyword = keyword == null ? "" : keyword.trim();
+        return normalizedKeyword.isBlank() ? null : normalizedKeyword;
+    }
+
+    private Set<Long> findKeywordAuthorIds(String keyword) {
+        if (keyword == null) {
+            return Set.of();
+        }
+
+        return userProfilePort.searchLite(keyword, 1000).stream()
+                .map(UserProfileLiteDto::id)
+                .collect(Collectors.toSet());
+    }
+
+    private Pageable buildCommentSearchPageable(Pageable pageable) {
+        int page = Math.max(0, pageable.getPageNumber());
+        int size = Math.max(1, Math.min(pageable.getPageSize(), 100));
+        return PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
     }
 }

@@ -61,6 +61,7 @@ public class NotificationEntity {
         ASSIGNED,
         DEADLINE_NEAR,
         COMMENT,
-        MENTION
+        MENTION,
+        REPLY
     }
 }
