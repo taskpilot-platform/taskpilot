@@ -23,6 +23,7 @@ import com.taskpilot.projects.tasks.dto.CreateTaskRequest;
 import com.taskpilot.projects.tasks.dto.KanbanMoveRequest;
 import com.taskpilot.projects.tasks.dto.TaskDto;
 import com.taskpilot.projects.tasks.dto.TaskDetailDto;
+import com.taskpilot.projects.tasks.dto.UpdateTaskSprintRequest;
 import com.taskpilot.projects.tasks.dto.UpdateTaskRequest;
 import com.taskpilot.projects.tasks.service.TaskService;
 
@@ -94,5 +95,14 @@ public class TaskController {
             Authentication authentication) {
         TaskDto task = taskService.moveTaskKanban(taskId, request, authentication.getName());
         return ApiResponse.success(HttpStatus.OK.value(), "Task moved successfully", task);
+    }
+
+    @PatchMapping("/{taskId}/sprint")
+    public ApiResponse<TaskDto> updateTaskSprint(
+            @PathVariable Long taskId,
+            @RequestBody UpdateTaskSprintRequest request,
+            Authentication authentication) {
+        TaskDto task = taskService.updateTaskSprint(taskId, request, authentication.getName());
+        return ApiResponse.success(HttpStatus.OK.value(), "Task sprint updated successfully", task);
     }
 }

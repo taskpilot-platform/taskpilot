@@ -14,11 +14,13 @@ import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.entity.TaskEntity;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
 import com.taskpilot.projects.common.repository.ProjectRepository;
+import com.taskpilot.projects.common.repository.SprintRepository;
 import com.taskpilot.projects.common.repository.TaskRepository;
 import com.taskpilot.projects.tasks.dto.CreateTaskRequest;
 import com.taskpilot.projects.tasks.dto.KanbanMoveRequest;
 import com.taskpilot.projects.tasks.dto.TaskDto;
 import com.taskpilot.projects.tasks.dto.TaskDetailDto;
+import com.taskpilot.projects.tasks.dto.UpdateTaskSprintRequest;
 import com.taskpilot.projects.tasks.dto.UpdateTaskRequest;
 import com.taskpilot.projects.tasks.dto.LabelDto;
 import com.taskpilot.projects.common.repository.LabelRepository;
@@ -27,6 +29,7 @@ import com.taskpilot.projects.common.repository.TaskRequiredSkillRepository;
 import com.taskpilot.projects.common.entity.TaskLabelEntity;
 import com.taskpilot.projects.common.entity.TaskRequiredSkillEntity;
 import com.taskpilot.projects.common.entity.LabelEntity;
+import com.taskpilot.projects.common.entity.SprintEntity;
 import com.taskpilot.contracts.skill.dto.SkillDto;
 import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.skill.port.out.SkillPort;
@@ -49,6 +52,7 @@ public class TaskService {
     private final LabelRepository labelRepository;
     private final TaskLabelRepository taskLabelRepository;
     private final TaskRequiredSkillRepository taskRequiredSkillRepository;
+    private final SprintRepository sprintRepository;
 
     private Long getCurrentUserIdByEmail(String email) {
         return userIdentityPort.findByEmail(email)
@@ -71,7 +75,7 @@ public class TaskService {
         }
     }
 
-    private List<TaskDto> mapToDtoWithLabels(List<TaskEntity> tasks) {
+    public List<TaskDto> mapToDtoWithLabels(List<TaskEntity> tasks) {
         if (tasks.isEmpty())
             return List.of();
 
@@ -97,8 +101,23 @@ public class TaskService {
                 .collect(Collectors.toList());
     }
 
-    private TaskDto mapToDtoWithLabels(TaskEntity task) {
+    public TaskDto mapToDtoWithLabels(TaskEntity task) {
         return mapToDtoWithLabels(List.of(task)).get(0);
+    }
+
+    private void validateSprintForTask(Long projectId, Long sprintId) {
+        if (sprintId == null) {
+            return;
+        }
+        SprintEntity sprint = sprintRepository.findById(sprintId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Sprint not found"));
+        if (!sprint.getProjectId().equals(projectId)) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                    "Sprint must belong to the same project");
+        }
+        if (sprint.getStatus() == SprintEntity.SprintStatus.COMPLETED) {
+            throw new BusinessException(HttpStatus.CONFLICT.value(), "Completed sprint is readonly");
+        }
     }
 
     @Transactional(readOnly = true)
@@ -166,6 +185,7 @@ public class TaskService {
                         "Parent task must belong to the same project");
             }
         }
+        validateSprintForTask(request.projectId(), request.sprintId());
 
         TaskEntity task = TaskEntity.builder()
                 .projectId(request.projectId())
@@ -347,6 +367,30 @@ public class TaskService {
         task.setStatus(request.status());
         task.setPosition(request.position());
 
+        taskRepository.save(task);
+        return mapToDtoWithLabels(task);
+    }
+
+    @Transactional
+    public TaskDto updateTaskSprint(Long taskId, UpdateTaskSprintRequest request, String email) {
+        TaskEntity task = taskRepository.findById(taskId).orElseThrow(
+                () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found"));
+
+        Long userId = getCurrentUserIdByEmail(email);
+        validateUserIsMember(task.getProjectId(), userId);
+        validateProjectNotArchived(task.getProjectId());
+
+        if (task.getSprintId() != null) {
+            SprintEntity currentSprint = sprintRepository.findById(task.getSprintId())
+                    .orElse(null);
+            if (currentSprint != null && currentSprint.getStatus() == SprintEntity.SprintStatus.COMPLETED) {
+                throw new BusinessException(HttpStatus.CONFLICT.value(),
+                        "Cannot move a task out of a completed sprint");
+            }
+        }
+
+        validateSprintForTask(task.getProjectId(), request.sprintId());
+        task.setSprintId(request.sprintId());
         taskRepository.save(task);
         return mapToDtoWithLabels(task);
     }
