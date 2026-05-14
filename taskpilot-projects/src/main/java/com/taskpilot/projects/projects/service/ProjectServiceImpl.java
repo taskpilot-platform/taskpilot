@@ -149,6 +149,9 @@ public class ProjectServiceImpl {
         if (request.heuristicMode() != null) {
             project.setHeuristicMode(request.heuristicMode());
         }
+        if (request.workflowMode() != null) {
+            project.setWorkflowMode(request.workflowMode());
+        }
         if (request.startDate() != null) {
             project.setStartDate(request.startDate());
         }

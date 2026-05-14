@@ -2,6 +2,7 @@ package com.taskpilot.projects.projects.dto;
 
 import com.taskpilot.projects.common.entity.ProjectEntity.HeuristicMode;
 import com.taskpilot.projects.common.entity.ProjectEntity.ProjectStatus;
+import com.taskpilot.projects.common.entity.ProjectEntity.WorkflowMode;
 import jakarta.validation.constraints.Size;
 
 import java.time.LocalDate;
@@ -16,6 +17,8 @@ public record UpdateProjectRequest(
         ProjectStatus status,
 
         HeuristicMode heuristicMode,
+
+        WorkflowMode workflowMode,
 
         LocalDate startDate,
 

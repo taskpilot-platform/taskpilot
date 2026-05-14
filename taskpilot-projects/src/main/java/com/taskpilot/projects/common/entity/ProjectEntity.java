@@ -50,6 +50,11 @@ public class ProjectEntity {
     @Column(name = "heuristic_mode")
     private HeuristicMode heuristicMode = HeuristicMode.BALANCED;
 
+    @Builder.Default
+    @Enumerated(EnumType.STRING)
+    @Column(name = "workflow_mode", nullable = false)
+    private WorkflowMode workflowMode = WorkflowMode.KANBAN;
+
     @Column(name = "start_date")
     private LocalDate startDate;
 
@@ -65,5 +70,9 @@ public class ProjectEntity {
 
     public enum HeuristicMode {
         BALANCED, URGENT, TRAINING
+    }
+
+    public enum WorkflowMode {
+        KANBAN, SCRUM
     }
 }
