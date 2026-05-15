@@ -53,6 +53,7 @@ public class TaskService {
     private final TaskLabelRepository taskLabelRepository;
     private final TaskRequiredSkillRepository taskRequiredSkillRepository;
     private final SprintRepository sprintRepository;
+    private final TaskDtoMapper taskDtoMapper;
 
     private Long getCurrentUserIdByEmail(String email) {
         return userIdentityPort.findByEmail(email)
@@ -75,34 +76,12 @@ public class TaskService {
         }
     }
 
-    public List<TaskDto> mapToDtoWithLabels(List<TaskEntity> tasks) {
-        if (tasks.isEmpty())
-            return List.of();
-
-        List<Long> taskIds = tasks.stream().map(TaskEntity::getId).toList();
-        List<TaskLabelEntity> taskLabels = taskLabelRepository.findByTaskIdIn(taskIds);
-
-        if (taskLabels.isEmpty()) {
-            return tasks.stream().map(t -> TaskDto.fromEntity(t, List.of())).collect(Collectors.toList());
-        }
-
-        List<Long> labelIds = taskLabels.stream().map(TaskLabelEntity::getLabelId).distinct().toList();
-        Map<Long, LabelDto> labelsMap = labelRepository.findAllById(labelIds).stream()
-                .collect(Collectors.toMap(LabelEntity::getId, l -> new LabelDto(l.getId(), l.getName(), l.getColor())));
-
-        Map<Long, List<LabelDto>> labelsByTask = taskLabels.stream()
-                .filter(tl -> labelsMap.containsKey(tl.getLabelId()))
-                .collect(Collectors.groupingBy(
-                        TaskLabelEntity::getTaskId,
-                        Collectors.mapping(tl -> labelsMap.get(tl.getLabelId()), Collectors.toList())));
-
-        return tasks.stream()
-                .map(task -> TaskDto.fromEntity(task, labelsByTask.getOrDefault(task.getId(), List.of())))
-                .collect(Collectors.toList());
+    private List<TaskDto> mapToDtoWithLabels(List<TaskEntity> tasks) {
+        return taskDtoMapper.mapToDtoWithLabels(tasks);
     }
 
-    public TaskDto mapToDtoWithLabels(TaskEntity task) {
-        return mapToDtoWithLabels(List.of(task)).get(0);
+    private TaskDto mapToDtoWithLabels(TaskEntity task) {
+        return taskDtoMapper.mapToDtoWithLabels(task);
     }
 
     private void validateSprintForTask(Long projectId, Long sprintId) {
