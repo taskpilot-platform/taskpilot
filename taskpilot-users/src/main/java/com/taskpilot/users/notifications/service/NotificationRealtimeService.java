@@ -25,13 +25,21 @@ public class NotificationRealtimeService {
     public SseEmitter subscribe(Long userId, long unreadCount) {
         SseEmitter emitter = new SseEmitter(TIMEOUT_MILLIS);
         emittersByUser.computeIfAbsent(userId, ignored -> new CopyOnWriteArrayList<>()).add(emitter);
+        log.debug("Notification SSE opened for userId={}", userId);
 
-        emitter.onCompletion(() -> remove(userId, emitter));
+        emitter.onCompletion(() -> {
+            log.debug("Notification SSE completed for userId={}", userId);
+            remove(userId, emitter);
+        });
         emitter.onTimeout(() -> {
+            log.warn("Notification SSE timed out for userId={}", userId);
             remove(userId, emitter);
             emitter.complete();
         });
-        emitter.onError(error -> remove(userId, emitter));
+        emitter.onError(error -> {
+            log.debug("Notification SSE error for userId={}: {}", userId, error.getMessage());
+            remove(userId, emitter);
+        });
 
         safeSend(userId, emitter, "notification.unread-count", unreadCount);
         return emitter;
@@ -66,6 +74,7 @@ public class NotificationRealtimeService {
             return;
         }
         emitters.remove(emitter);
+        log.debug("Notification SSE closed for userId={} remaining={}", userId, emitters.size());
         if (emitters.isEmpty()) {
             emittersByUser.remove(userId);
         }

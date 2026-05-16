@@ -26,13 +26,21 @@ public class TaskCommentRealtimeService {
     public SseEmitter subscribe(Long taskId) {
         SseEmitter emitter = new SseEmitter(TIMEOUT_MILLIS);
         emittersByTask.computeIfAbsent(taskId, ignored -> new CopyOnWriteArrayList<>()).add(emitter);
+        log.debug("Comment SSE opened for taskId={}", taskId);
 
-        emitter.onCompletion(() -> remove(taskId, emitter));
+        emitter.onCompletion(() -> {
+            log.debug("Comment SSE completed for taskId={}", taskId);
+            remove(taskId, emitter);
+        });
         emitter.onTimeout(() -> {
+            log.warn("Comment SSE timed out for taskId={}", taskId);
             remove(taskId, emitter);
             emitter.complete();
         });
-        emitter.onError(error -> remove(taskId, emitter));
+        emitter.onError(error -> {
+            log.debug("Comment SSE error for taskId={}: {}", taskId, error.getMessage());
+            remove(taskId, emitter);
+        });
 
         safeSend(taskId, emitter, "comment.connected", Map.of("taskId", taskId));
         return emitter;
@@ -75,6 +83,7 @@ public class TaskCommentRealtimeService {
             return;
         }
         emitters.remove(emitter);
+        log.debug("Comment SSE closed for taskId={} remaining={}", taskId, emitters.size());
         if (emitters.isEmpty()) {
             emittersByTask.remove(taskId);
         }

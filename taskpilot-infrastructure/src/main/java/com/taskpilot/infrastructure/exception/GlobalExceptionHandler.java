@@ -3,6 +3,8 @@ package com.taskpilot.infrastructure.exception;
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import lombok.extern.slf4j.Slf4j;
 import java.io.IOException;
+import java.util.Locale;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -24,9 +26,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(IOException.class)
     public ResponseEntity<Void> handleClientAbortIOException(IOException ex) {
-        String message = ex.getMessage() != null ? ex.getMessage().toLowerCase() : "";
-        if (message.contains("aborted") || message.contains("broken pipe")
-                || message.contains("connection reset") || message.contains("not usable")) {
+        if (isClientDisconnect(ex)) {
             log.debug("Ignore IO abort caused by client disconnect: {}", ex.getMessage());
             return ResponseEntity.status(HttpStatus.NO_CONTENT).build();
         }
@@ -63,11 +63,43 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleGeneralException(Exception ex) {
+        if (isClientDisconnect(ex)) {
+            log.debug("Ignore async response failure caused by client disconnect: {}", ex.getMessage());
+            return ResponseEntity.status(HttpStatus.NO_CONTENT).build();
+        }
+
         log.error("Unhandled Exception caught: ", ex);
 
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ApiResponse.error(HttpStatus.INTERNAL_SERVER_ERROR.value(),
                         "Internal server error. Please try again later!"));
         // hide real internal msg error from client
+    }
+
+    private boolean isClientDisconnect(Throwable ex) {
+        Throwable current = ex;
+        while (current != null) {
+            String className = current.getClass().getName();
+            if ("org.apache.catalina.connector.ClientAbortException".equals(className)
+                    || "org.springframework.web.context.request.async.AsyncRequestNotUsableException".equals(className)) {
+                return true;
+            }
+
+            String message = current.getMessage();
+            if (message != null) {
+                String normalized = message.toLowerCase(Locale.ROOT);
+                if (normalized.contains("aborted")
+                        || normalized.contains("broken pipe")
+                        || normalized.contains("connection reset")
+                        || normalized.contains("not usable")
+                        || normalized.contains("failed to send")
+                        || normalized.contains("servletoutputstream failed to flush")) {
+                    return true;
+                }
+            }
+
+            current = current.getCause();
+        }
+        return false;
     }
 }

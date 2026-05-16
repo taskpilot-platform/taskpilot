@@ -33,6 +33,7 @@ spring:
       initialization-fail-timeout: ${DB_INITIALIZATION_FAIL_TIMEOUT_MS:0}
 
   jpa:
+    open-in-view: false
     properties:
       hibernate:
         jdbc:
