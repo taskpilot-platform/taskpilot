@@ -155,7 +155,6 @@ public class TaskCommentService implements TaskCommentQueryPort {
         return dto;
     }
 
-    @Transactional(readOnly = true)
     public SseEmitter streamComments(Long taskId, String email) {
         TaskEntity task = findTask(taskId);
         Long currentUserId = getCurrentUserIdByEmail(email);

@@ -24,7 +24,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.beans.factory.annotation.Value;
 
@@ -105,12 +104,12 @@ public class AiStreamingService {
         executor.shutdown();
     }
 
-    @Transactional
     public SseEmitter streamChat(Long sessionId, Long userId, String userInput, String clientMessageId) {
         ChatSessionEntity session = sessionRepository.findByIdAndUserId(sessionId, userId)
                 .orElseThrow(() -> new SecurityException("Session not found or access denied"));
 
         SseEmitter emitter = new SseEmitter(180_000L);
+        log.info("[SSE] AI chat stream opened for session {}", sessionId);
         // Bug fix #4: per-request guard so emitter.complete() is never called twice
         AtomicBoolean emitterCompleted = new AtomicBoolean(false);
         long startTime = System.currentTimeMillis();
@@ -180,6 +179,8 @@ public class AiStreamingService {
             log.warn("[SSE] SseEmitter timed out for session {}", sessionId);
             emitter.complete();
         });
+
+        emitter.onCompletion(() -> log.debug("[SSE] AI chat stream completed/closed for session {}", sessionId));
 
         emitter.onError(e -> {
             if (isClientAbort(e)) {
@@ -764,7 +765,7 @@ public class AiStreamingService {
                 emitter.send(SseEmitter.event().name(event).data(data, mediaType));
             }
             return true;
-        } catch (IOException e) {
+        } catch (IOException | IllegalStateException e) {
             // Bug fix #9: log at debug so send failures are traceable without spamming logs
             log.debug("[SSE] safeSend failed for event '{}': {}", event, e.getMessage());
             return false;
