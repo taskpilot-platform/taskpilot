@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 @Service
+@Transactional(readOnly = true)
 @RequiredArgsConstructor
 public class SkillService {
 
@@ -38,7 +39,7 @@ public class SkillService {
 
     public List<UserSkillResponse> getMySkills() {
         UserEntity user = getCurrentUser();
-        return userSkillRepository.findByIdUserId(user.getId()).stream()
+        return userSkillRepository.findByIdUserIdWithSkill(user.getId()).stream()
                 .map(UserSkillResponse::fromEntity)
                 .collect(Collectors.toList());
     }

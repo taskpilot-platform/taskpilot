@@ -34,6 +34,7 @@ import com.taskpilot.projects.projects.dto.UpdateProjectRequest;
 import lombok.RequiredArgsConstructor;
 
 @Service
+@Transactional(readOnly = true)
 @RequiredArgsConstructor
 public class ProjectServiceImpl {
 
