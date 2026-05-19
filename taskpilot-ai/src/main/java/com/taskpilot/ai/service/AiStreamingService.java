@@ -167,7 +167,7 @@ public class AiStreamingService {
                     sessionId, effectiveClientMessageId);
             safeSend(emitter, "phase", Phase.FINALIZED.name(), null);
             safeSend(emitter, "done", "", null);
-            emitter.complete();
+            safeComplete(emitter, emitterCompleted);
             return emitter;
         }
 
@@ -218,7 +218,7 @@ public class AiStreamingService {
 
         emitter.onTimeout(() -> {
             log.warn("[SSE] SseEmitter timed out for session {}", sessionId);
-            emitter.complete();
+            safeComplete(emitter, emitterCompleted);
         });
 
         emitter.onCompletion(() -> log.debug("[SSE] AI chat stream completed/closed for session {}", sessionId));
@@ -395,7 +395,7 @@ public class AiStreamingService {
                         // After completion, if we have a thinking buffer, expand it in the background
                         String rawThinking = thinkingBuffer.toString();
                         if (rawThinking.contains("<think>")) {
-                            String thinkingContent = extractReasoning(rawThinking);
+                            String thinkingContent = extractAllThinkBlocks(rawThinking);
                             if (thinkingContent != null && !thinkingContent.isBlank()) {
                                 thinkingNarratorService.expandAsync(thinkingContent).thenAccept(expanded -> {
                                     log.info("[AiChat] Expanded thinking for session {}", sessionId);
@@ -508,10 +508,12 @@ public class AiStreamingService {
                 }
 
                 long durationMs = System.currentTimeMillis() - startTime;
-                String responseText = fullResponse.toString();
-                if ((responseText == null || responseText.isBlank()) && aiMessage != null && aiMessage.text() != null) {
-                    responseText = aiMessage.text();
+                String rawResponseText = fullResponse.toString();
+                if ((rawResponseText == null || rawResponseText.isBlank()) && aiMessage != null && aiMessage.text() != null) {
+                    rawResponseText = aiMessage.text();
                 }
+                String responseText = stripThinkBlocks(rawResponseText);
+                String extractedReasoning = extractAllThinkBlocks(rawResponseText);
 
                 int estimatedTokens = completeResponse.tokenUsage() != null
                         ? completeResponse.tokenUsage().totalTokenCount()
@@ -526,7 +528,7 @@ public class AiStreamingService {
                 session.setUpdatedAt(Instant.now());
                 if (session.getTitle() == null || session.getTitle().isBlank()) {
                     // Bug fix #8: strip <think> block before using as title
-                    String titleSource = stripThinkTags(responseText);
+                    String titleSource = stripThinkBlocks(responseText);
                     String autoTitle = titleSource.length() > 60
                             ? titleSource.substring(0, 60) + "..."
                             : titleSource;
@@ -538,7 +540,7 @@ public class AiStreamingService {
                 String actionTaken = toolNames.isEmpty() ? null : String.join(",", toolNames);
 
                 aiLogService.saveLog(userId, null, sessionId, assistantMsg.getId(), userInput,
-                        responseText, extractReasoning(responseText), actionTaken, toolOutput, modelName,
+                        responseText, extractedReasoning, actionTaken, toolOutput, modelName,
                         estimatedTokens, (int) durationMs);
 
                 String cleanResponse = sessionChatMemoryService.sanitizeAssistantMessage(responseText);
@@ -667,10 +669,12 @@ public class AiStreamingService {
             @Override
             public void onCompleteResponse(ChatResponse completeResponse) {
                 AiMessage aiMessage = completeResponse.aiMessage();
-                String responseText = roundResponse.toString();
-                if ((responseText == null || responseText.isBlank()) && aiMessage != null && aiMessage.text() != null) {
-                    responseText = aiMessage.text();
+                String rawResponseText = roundResponse.toString();
+                if ((rawResponseText == null || rawResponseText.isBlank()) && aiMessage != null && aiMessage.text() != null) {
+                    rawResponseText = aiMessage.text();
                 }
+                String responseText = stripThinkBlocks(rawResponseText);
+                String extractedReasoning = extractAllThinkBlocks(rawResponseText);
 
                 if (responseText == null || responseText.isBlank()) {
                     responseText = "I couldn't complete the tool-based reasoning safely, so please refine the request and try again.";
@@ -690,7 +694,7 @@ public class AiStreamingService {
                 session.setUpdatedAt(Instant.now());
                 if (session.getTitle() == null || session.getTitle().isBlank()) {
                     // Bug fix #8: strip <think> block before using as title
-                    String titleSource = stripThinkTags(responseText);
+                    String titleSource = stripThinkBlocks(responseText);
                     String autoTitle = titleSource.length() > 60
                             ? titleSource.substring(0, 60) + "..."
                             : titleSource;
@@ -703,7 +707,7 @@ public class AiStreamingService {
 
                 // Log with modelName so it's clear which model actually generated the response
                 aiLogService.saveLog(userId, null, sessionId, assistantMsg.getId(), userInput,
-                        responseText, extractReasoning(responseText), actionTaken, toolOutput, modelName,
+                        responseText, extractedReasoning, actionTaken, toolOutput, modelName,
                         estimatedTokens, (int) durationMs);
 
                 String cleanResponse = sessionChatMemoryService.sanitizeAssistantMessage(responseText);
@@ -1046,24 +1050,41 @@ public class AiStreamingService {
         return safeMessages;
     }
 
-    private static final Pattern THINK_PATTERN = Pattern.compile("<think>(.*?)</think>", Pattern.DOTALL);
+    private static final Pattern THINK_BLOCK_PATTERN = Pattern.compile(
+            "<\\s*think\\b[^>]*>(.*?)<\\s*/\\s*think\\s*>",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    private static final Pattern ORPHAN_THINK_TAG_PATTERN = Pattern.compile(
+            "</?\\s*think\\b[^>]*>",
+            Pattern.CASE_INSENSITIVE);
 
-    private String extractReasoning(String response) {
-        if (response == null) {
+    private String extractAllThinkBlocks(String rawResponse) {
+        if (rawResponse == null || rawResponse.isBlank()) {
             return null;
         }
-        // Bug fix #7: use non-greedy regex to handle multiple/nested think blocks correctly
-        Matcher m = THINK_PATTERN.matcher(response);
-        if (m.find()) {
-            return m.group(1).trim();
+
+        Matcher matcher = THINK_BLOCK_PATTERN.matcher(rawResponse);
+        List<String> blocks = new ArrayList<>();
+        while (matcher.find()) {
+            String block = matcher.group(1);
+            if (block != null && !block.isBlank()) {
+                blocks.add(block.trim());
+            }
         }
-        return null;
+
+        if (blocks.isEmpty()) {
+            return null;
+        }
+        return String.join("\n\n", blocks);
     }
 
-    /** Strip all <think>...</think> blocks from a string. */
-    private String stripThinkTags(String text) {
-        if (text == null) return "";
-        return THINK_PATTERN.matcher(text).replaceAll("").trim();
+    private String stripThinkBlocks(String rawResponse) {
+        if (rawResponse == null || rawResponse.isBlank()) {
+            return "";
+        }
+
+        String withoutCompleteBlocks = THINK_BLOCK_PATTERN.matcher(rawResponse).replaceAll(" ");
+        String withoutOrphanTags = ORPHAN_THINK_TAG_PATTERN.matcher(withoutCompleteBlocks).replaceAll(" ");
+        return withoutOrphanTags.trim();
     }
 
     private String latestUserMessageText(List<ChatMessage> history, String fallbackInput) {
