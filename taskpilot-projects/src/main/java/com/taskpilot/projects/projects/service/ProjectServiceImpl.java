@@ -34,6 +34,7 @@ import com.taskpilot.projects.projects.dto.UpdateProjectRequest;
 import lombok.RequiredArgsConstructor;
 
 @Service
+@Transactional(readOnly = true)
 @RequiredArgsConstructor
 public class ProjectServiceImpl {
 
@@ -148,6 +149,9 @@ public class ProjectServiceImpl {
         }
         if (request.heuristicMode() != null) {
             project.setHeuristicMode(request.heuristicMode());
+        }
+        if (request.workflowMode() != null) {
+            project.setWorkflowMode(request.workflowMode());
         }
         if (request.startDate() != null) {
             project.setStartDate(request.startDate());

@@ -1,6 +1,5 @@
 package com.taskpilot.projects.common.entity;
 
-import java.time.Instant;
 import java.time.LocalDate;
 
 import org.hibernate.annotations.JdbcTypeCode;
@@ -21,39 +20,31 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 @Entity
-@Table(name = "projects")
+@Table(name = "sprints")
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class ProjectEntity {
+public class SprintEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "project_id")
+    private Long projectId;
+
     @Column(nullable = false)
     private String name;
 
     @Column(columnDefinition = "TEXT")
-    private String description;
+    private String goal;
 
     @Builder.Default
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
     @Enumerated(EnumType.STRING)
-    private ProjectStatus status = ProjectStatus.ACTIVE;
-
-    @Builder.Default
-    @JdbcTypeCode(SqlTypes.NAMED_ENUM)
-    @Enumerated(EnumType.STRING)
-    @Column(name = "heuristic_mode")
-    private HeuristicMode heuristicMode = HeuristicMode.BALANCED;
-
-    @Builder.Default
-    @Enumerated(EnumType.STRING)
-    @Column(name = "workflow_mode", nullable = false)
-    private WorkflowMode workflowMode = WorkflowMode.KANBAN;
+    private SprintStatus status = SprintStatus.PLANNING;
 
     @Column(name = "start_date")
     private LocalDate startDate;
@@ -61,18 +52,7 @@ public class ProjectEntity {
     @Column(name = "end_date")
     private LocalDate endDate;
 
-    @Column(name = "created_at", insertable = false, updatable = false)
-    private Instant createdAt;
-
-    public enum ProjectStatus {
-        PLANNING, ACTIVE, COMPLETED, ARCHIVED
-    }
-
-    public enum HeuristicMode {
-        BALANCED, URGENT, TRAINING
-    }
-
-    public enum WorkflowMode {
-        KANBAN, SCRUM
+    public enum SprintStatus {
+        PLANNING, ACTIVE, COMPLETED
     }
 }
