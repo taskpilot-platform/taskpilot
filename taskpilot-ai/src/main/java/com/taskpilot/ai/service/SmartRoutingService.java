@@ -82,13 +82,14 @@ public class SmartRoutingService {
     }
 
     public RoutingDecision route(String userMessage, String contextHistory) {
-        boolean requiresAHP = resolveRequiresAHP(userMessage);
+        String normalized = normalize(userMessage);
+        boolean directAssignmentExecution = isDirectAssignmentExecution(normalized);
+        boolean requiresAHP = directAssignmentExecution ? false : resolveRequiresAHP(userMessage);
 
         int estimatedTokens = tokenEstimationUtil.estimateTotal(userMessage, contextHistory);
         log.debug("[SmartRouting] Estimated tokens: {}, threshold: {}", estimatedTokens, tokenThreshold);
 
-        String normalized = normalize(userMessage);
-        boolean likelyNeedsTools = containsAny(normalized, splitKeywords(toolKeywordsRaw));
+        boolean likelyNeedsTools = directAssignmentExecution || containsAny(normalized, splitKeywords(toolKeywordsRaw));
         boolean heavyContext = estimatedTokens > tokenThreshold;
 
         if (requiresAHP) {
@@ -114,6 +115,21 @@ public class SmartRoutingService {
 
         log.info("[SmartRouting] Routing to LIGHT model ({}) — tokens: {}", fallbackModelName, estimatedTokens);
         return new RoutingDecision(gpt4oFallbackModel, fallbackModelName, false);
+    }
+
+    private boolean isDirectAssignmentExecution(String normalized) {
+        if (normalized == null || normalized.isBlank()) {
+            return false;
+        }
+
+        boolean hasAssignmentIntent = containsAny(normalized, List.of(
+                "phan cong", "phân công", "giao task", "giao viec", "giao việc",
+                "assign", "assignment", "assignee"));
+        boolean hasExecutionIntent = containsAny(normalized, List.of(
+                "thuc hien", "thực hiện", "tien hanh", "tiến hành", "ap dung", "áp dụng",
+                "lam di", "làm đi", "cap nhat", "cập nhật", "execute", "apply", "do it"));
+
+        return hasAssignmentIntent && hasExecutionIntent;
     }
 
     public StreamingChatModel getFallbackModel() {

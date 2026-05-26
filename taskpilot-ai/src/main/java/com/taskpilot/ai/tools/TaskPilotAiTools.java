@@ -7,6 +7,7 @@ import com.taskpilot.contracts.assignment.port.out.ProjectMemberPort;
 import com.taskpilot.contracts.aiquery.dto.*;
 import com.taskpilot.contracts.aiquery.port.out.ProjectInsightsPort;
 import com.taskpilot.contracts.aiquery.port.out.MemberAnalyticsPort;
+import com.taskpilot.contracts.aiquery.port.out.SprintQueryPort;
 import com.taskpilot.contracts.aiquery.port.out.TaskCommentQueryPort;
 import com.taskpilot.contracts.aiquery.port.out.TaskCommandPort;
 import dev.langchain4j.agent.tool.P;
@@ -32,6 +33,18 @@ public class TaskPilotAiTools {
     private final MemberAnalyticsPort memberAnalyticsPort;
     private final TaskCommandPort taskCommandPort;
     private final TaskCommentQueryPort taskCommentQueryPort;
+    private final SprintQueryPort sprintQueryPort;
+
+    @Tool("""
+            Use this tool when the user asks to list projects they participate in, joined projects,
+            their current projects, or "du an cua toi". It returns projects where the current user is
+            a project manager or member, including role and dates.
+            """)
+    public List<ProjectOverviewDto> getMyProjects() {
+        Long userId = ToolExecutionContext.requireUserId();
+        log.info("[AiTool] getMyProjects called for user {}", userId);
+        return projectInsightsPort.getMyProjects(userId);
+    }
 
     @Tool("""
             Use this tool when the user asks about the status, progress, or health of a specific project.
@@ -40,7 +53,8 @@ public class TaskPilotAiTools {
             """)
     public ProjectStatusDto getProjectStatus(@P("The ID of the project to query") Long projectId) {
         log.info("[AiTool] getProjectStatus called for project {}", projectId);
-        return projectInsightsPort.getProjectStatus(projectId);
+        Long userId = ToolExecutionContext.requireUserId();
+        return projectInsightsPort.getProjectStatus(projectId, userId);
     }
 
     @Tool("""
@@ -50,7 +64,8 @@ public class TaskPilotAiTools {
             """)
     public List<MemberWorkloadDto> getMemberWorkload(@P("The ID of the project") Long projectId) {
         log.info("[AiTool] getMemberWorkload called for project {}", projectId);
-        return memberAnalyticsPort.getMemberWorkloadForProject(projectId);
+        Long userId = ToolExecutionContext.requireUserId();
+        return memberAnalyticsPort.getMemberWorkloadForProject(projectId, userId);
     }
 
     @Tool("""
@@ -60,7 +75,8 @@ public class TaskPilotAiTools {
             """)
     public List<ProjectMemberDto> getProjectMembers(@P("The ID of the project") Long projectId) {
         log.info("[AiTool] getProjectMembers called for project {}", projectId);
-        return projectInsightsPort.getProjectMembers(projectId);
+        Long userId = ToolExecutionContext.requireUserId();
+        return projectInsightsPort.getProjectMembers(projectId, userId);
     }
 
     @Tool("""
@@ -70,7 +86,8 @@ public class TaskPilotAiTools {
             """)
     public MemberWorkloadDto getMemberWorkloadByMemberId(@P("The ID of the member") Long memberId) {
         log.info("[AiTool] getMemberWorkloadByMemberId called for member {}", memberId);
-        return memberAnalyticsPort.getMemberWorkload(memberId);
+        Long userId = ToolExecutionContext.requireUserId();
+        return memberAnalyticsPort.getMemberWorkload(memberId, userId);
     }
 
     @Tool("""
@@ -80,7 +97,8 @@ public class TaskPilotAiTools {
             """)
     public TaskDetailDto getTaskDetails(@P("The ID of the task") Long taskId) {
         log.info("[AiTool] getTaskDetails called for task {}", taskId);
-        return taskCommandPort.getTaskDetails(taskId);
+        Long userId = ToolExecutionContext.requireUserId();
+        return taskCommandPort.getTaskDetails(taskId, userId);
     }
 
     @Tool("""
@@ -92,8 +110,8 @@ public class TaskPilotAiTools {
             @P("The ID of the member") Long memberId,
             @P("Reason for the assignment") String reason) {
         log.info("[AiTool] assignTaskToMember called for task {} -> member {}", taskId, memberId);
-        // Sandbox logic simulation is disabled here (false) to perform real operation if connected to real DB
-        return taskCommandPort.assignTaskToMember(taskId, memberId, reason, false);
+        Long userId = ToolExecutionContext.requireUserId();
+        return taskCommandPort.assignTaskToMember(taskId, memberId, reason, userId, false);
     }
 
     @Tool("""
@@ -181,7 +199,7 @@ public class TaskPilotAiTools {
     }
 
     // =========================================================================
-    // NEW CRUD TOOLS (TODO Implementations)
+    // Project/task CRUD tools backed by the real project data ports.
     // =========================================================================
 
     @Tool("""
@@ -190,7 +208,8 @@ public class TaskPilotAiTools {
             """)
     public Object getTasksByProject(@P("The ID of the project") Long projectId) {
         log.info("[AiTool] getTasksByProject called for project {}", projectId);
-        return "Not implemented"; // Replace with actual return type later
+        Long userId = ToolExecutionContext.requireUserId();
+        return taskCommandPort.getTasksByProject(projectId, userId);
     }
 
     @Tool("""
@@ -199,7 +218,8 @@ public class TaskPilotAiTools {
             """)
     public Object getSubtasks(@P("The ID of the parent task") Long parentTaskId) {
         log.info("[AiTool] getSubtasks called for parent task {}", parentTaskId);
-        return "Not implemented";
+        Long userId = ToolExecutionContext.requireUserId();
+        return taskCommandPort.getSubtasks(parentTaskId, userId);
     }
 
     @Tool("""
@@ -215,12 +235,14 @@ public class TaskPilotAiTools {
     @Tool("""
             Use this tool to update the status of a task (e.g. TODO, IN_PROGRESS, REVIEW, DONE).
             Provide the task ID and the new status.
+            This tool updates real task data and should only be used when the user explicitly asks for a status change.
             """)
     public Object updateTaskStatus(
             @P("The ID of the task") Long taskId,
             @P("The new status (TODO, IN_PROGRESS, REVIEW, DONE)") String status) {
         log.info("[AiTool] updateTaskStatus called for task {} -> {}", taskId, status);
-        return "Not implemented";
+        Long userId = ToolExecutionContext.requireUserId();
+        return taskCommandPort.updateTaskStatus(taskId, status, userId);
     }
 
     @Tool("""
@@ -229,19 +251,29 @@ public class TaskPilotAiTools {
             """)
     public Object getSprintsByProject(@P("The ID of the project") Long projectId) {
         log.info("[AiTool] getSprintsByProject called for project {}", projectId);
-        return "Not implemented";
+        Long userId = ToolExecutionContext.requireUserId();
+        return sprintQueryPort.getSprintsByProject(projectId, userId);
     }
 
     @Tool("""
             Use this tool to create a new task in a project.
-            Provide project ID, title, priority, and optional sprint ID.
+            Provide project ID and title. Optional fields include description, priority, parent task ID,
+            sprint ID, difficulty, assignee ID, and dueDate as ISO-8601 or YYYY-MM-DD.
+            This tool creates real task data and should only be used when the user explicitly asks to create a task.
             """)
     public Object createTask(
             @P("The project ID") Long projectId,
             @P("Title of the task") String title,
             @P("Priority (LOW, MEDIUM, HIGH, URGENT)") String priority,
-            @P("Optional sprint ID") Long sprintId) {
+            @P("Optional description") String description,
+            @P("Optional parent task ID") Long parentTaskId,
+            @P("Optional sprint ID") Long sprintId,
+            @P("Optional task difficulty 1-10") Integer difficultyLevel,
+            @P("Optional assignee user ID") Long assigneeId,
+            @P("Optional due date as ISO-8601 instant or YYYY-MM-DD") String dueDate) {
         log.info("[AiTool] createTask called for project {}", projectId);
-        return "Not implemented";
+        Long userId = ToolExecutionContext.requireUserId();
+        return taskCommandPort.createTask(projectId, title, description, priority, parentTaskId, sprintId,
+                difficultyLevel, assigneeId, dueDate, userId);
     }
 }

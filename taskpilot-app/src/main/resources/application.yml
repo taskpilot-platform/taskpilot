@@ -84,7 +84,7 @@ ai:
   routing:
     token-threshold: ${AI_TOKEN_THRESHOLD:6000}
     reasoning-keywords: ${AI_REASONING_KEYWORDS:analyze,reason,strategy,architecture,tradeoff,root cause,plan,optimize,design,deep dive,phân tích,chiến lược,so sánh,vì sao,giải thích,lý do,đánh giá,lựa chọn,phân rã,bóc tách,lộ trình,breakdown,roadmap,rủi ro,trễ hạn,bế tắc,nguyên nhân,giải pháp,bottleneck,risk,quá tải,cân bằng,xung đột,kiến trúc,thiết kế hệ thống,database,tối ưu,architecture,system design,refactor}
-    tool-keywords: ${AI_TOOL_KEYWORDS:project status,workload,assign,candidates,task list,project progress,giao việc,tình trạng,tiến độ,danh sách task,công việc,ứng viên,giao task,gánh bug,chia việc,tạo task}
+    tool-keywords: ${AI_TOOL_KEYWORDS:project status,workload,assign,candidates,task list,project progress,my projects,project list,du an,liet ke project,liet ke du an,giao việc,tình trạng,tiến độ,danh sách task,công việc,ứng viên,giao task,gánh bug,chia việc,tạo task}
 
   heuristic:
     cache-ttl-seconds: ${AI_HEURISTIC_CACHE_TTL:60}
