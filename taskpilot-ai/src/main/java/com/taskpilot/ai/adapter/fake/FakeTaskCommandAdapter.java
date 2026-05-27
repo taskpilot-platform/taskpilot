@@ -22,6 +22,16 @@ public class FakeTaskCommandAdapter implements TaskCommandPort {
     }
 
     @Override
+    public List<TaskDetailDto> getUnassignedTasksByProject(Long projectId, Long requesterUserId) {
+        log.info("[FakeAdapter] getUnassignedTasksByProject called for projectId={}", projectId);
+        return List.of(
+                new TaskDetailDto(75L, projectId, "Sample unassigned task", null, "TODO", "MEDIUM",
+                        5, "", null, null, null),
+                new TaskDetailDto(76L, projectId, "Another unassigned task", null, "TODO", "HIGH",
+                        6, "React, Spring Boot", null, null, null));
+    }
+
+    @Override
     public List<TaskSummaryDto> getSubtasks(Long parentTaskId, Long requesterUserId) {
         log.info("[FakeAdapter] getSubtasks called for parentTaskId={}", parentTaskId);
         return List.of();

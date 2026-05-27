@@ -15,6 +15,7 @@ import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.input.PromptTemplate;
+import dev.langchain4j.model.TokenCountEstimator;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.request.ToolChoice;
@@ -63,9 +64,25 @@ public class AiStreamingService {
     private final ToolCallingRegistryService toolCallingRegistryService;
     private final HeuristicConfigProvider heuristicConfigProvider;
     private final ThinkingNarratorService thinkingNarratorService;
+    private final TokenCountEstimator tokenCountEstimator;
 
     @Value("${ai.chat.max-output-tokens:3500}")
     private int maxOutputTokens;
+
+    @Value("${ai.chat.memory-max-tokens:7000}")
+    private int maxContextTokens;
+
+    @Value("${ai.chat.context-tail-messages:6}")
+    private int contextTailMessages;
+
+    @Value("${ai.chat.compact-summary-max-chars:3000}")
+    private int compactSummaryMaxChars;
+
+    @Value("${ai.chat.compact-message-max-chars:600}")
+    private int compactMessageMaxChars;
+
+    @Value("${ai.chat.max-tool-result-memory-chars:12000}")
+    private int maxToolResultMemoryChars;
 
     private static final String MASTER_PROMPT_TEMPLATE = """
             You are the Senior Project Manager (TaskPilot Agent) of the TaskPilot system. Your task is to
@@ -74,6 +91,28 @@ public class AiStreamingService {
             [CURRENT SYSTEM CONTEXT]
             - Today's Date: {{current_date}}
             - Current Assignment Mode: {{current_mode}}
+
+            [TASKPILOT TOOL WORKFLOW RULES]
+            - If the user asks which tasks are not assigned yet in a project, call getUnassignedTasksByProject.
+              Do not answer from the full task list unless the unassigned-only tool is unavailable.
+            - If the user asks to recommend a suitable assignee and also apply the assignment, call
+              recommendAndAssignTask for each concrete task. This is a real data write action.
+            - If task skills or difficulty are missing, ask for only the missing fields. The frontend may provide
+              those fields as a structured "Task assignment requirements form"; use that structured data directly.
+            - Multi-step user requests are allowed. You may call tools repeatedly across rounds when needed:
+              first read data, then recommend candidates, then write assignments if the user clearly asked to apply.
+            - Any create/update/delete/assignment tool may return confirmationRequired=true instead of writing data.
+              In that case, tell the user exactly what will change and wait for a final confirmation. Do not claim
+              the change has been applied until confirmPendingAction returns a success result.
+            - When you need additional structured information from the user, include a fenced `taskpilot-form`
+              JSON block so the frontend can render an interactive form. Do this for any workflow where a form can
+              represent the missing fields; do not ask only in plain text for structured fields.
+              Supported field types are text, number, textarea, select, date, and checkbox. Ask only for fields
+              that are missing.
+              Example:
+              ```taskpilot-form
+              {"title":"Bo sung thong tin","description":"Nhap cac truong con thieu de tiep tuc.","submitLabel":"Gui thong tin","intent":"continue_previous_request","fields":[{"name":"taskId","label":"Task ID","type":"number","required":true}]}
+              ```
 
             [REASONING OBJECTIVES & TRADE-OFFS]
             You MUST perform an internal reasoning process before providing your final recommendation. You are
@@ -142,7 +181,9 @@ public class AiStreamingService {
 
         String systemPrompt = buildSystemPrompt();
         List<ChatMessage> history = sessionChatMemoryService.appendUserMessage(sessionId, systemPrompt, userInput);
-        List<ChatMessage> requestHistory = withSystemPrompt(history, systemPrompt);
+        List<ChatMessage> requestHistory = compactHistoryForRequest(
+                withSystemPrompt(history, systemPrompt),
+                "initial");
 
         chatStreamStatusService.updatePhase(sessionId, effectiveClientMessageId, Phase.ROUTING, null, null, null);
         safeSend(emitter, "phase", Phase.ROUTING.name(), null);
@@ -262,7 +303,9 @@ public class AiStreamingService {
             int consecutiveToolExecutions,
             List<Map<String, Object>> toolCallSummaries,
             LinkedHashSet<String> toolNames) {
-        List<ChatMessage> sanitizedHistory = sanitizeHistoryForTools(history);
+        List<ChatMessage> sanitizedHistory = compactHistoryForRequest(
+                sanitizeHistoryForTools(history),
+                "tool-round-" + toolRound);
         // Default: No tools, no toolChoice. Only override when explicitly needed.
         List<dev.langchain4j.agent.tool.ToolSpecification> toolSpecs = toolCallingRegistryService
                 .toolSpecifications();
@@ -414,7 +457,8 @@ public class AiStreamingService {
                             toolCallSummaries,
                             toolNames,
                             userId,
-                            sessionId);
+                            sessionId,
+                            userInput);
                     history.addAll(toolResults);
 
                     chatStreamStatusService.updatePhase(sessionId, clientMessageId,
@@ -582,6 +626,7 @@ public class AiStreamingService {
 
         List<ChatMessage> textOnlyHistory = new ArrayList<>(sanitizeHistoryForTools(history));
         textOnlyHistory.add(SystemMessage.from(guardrailInstruction));
+        textOnlyHistory = new ArrayList<>(compactHistoryForRequest(textOnlyHistory, "text-only"));
 
         // Bug fix #2: use a fresh, isolated StringBuilder so we don't contaminate
         // the shared fullResponse with stray partial tokens from earlier rounds.
@@ -722,12 +767,13 @@ public class AiStreamingService {
             List<Map<String, Object>> toolCallSummaries,
             LinkedHashSet<String> toolNames,
             Long userId,
-            Long sessionId) {
+            Long sessionId,
+            String userInput) {
         List<ToolExecutionResultMessage> results = new ArrayList<>();
 
         for (ToolExecutionRequest request : requests) {
             String output;
-            ToolExecutionContext.set(new ToolExecutionContext.Context(userId, sessionId));
+            ToolExecutionContext.set(new ToolExecutionContext.Context(userId, sessionId, userInput));
             try {
                 output = toolCallingRegistryService.execute(request);
             } finally {
@@ -812,6 +858,155 @@ public class AiStreamingService {
         return false;
     }
 
+    private List<ChatMessage> compactHistoryForRequest(List<ChatMessage> messages, String stage) {
+        if (messages == null || messages.isEmpty()) {
+            return List.of();
+        }
+
+        int beforeTokens = estimateTokens(messages);
+        if (beforeTokens <= maxContextTokens || messages.size() <= 3) {
+            return messages;
+        }
+
+        ChatMessage primarySystemPrompt = null;
+        List<ChatMessage> body = new ArrayList<>();
+        for (ChatMessage message : messages) {
+            if (primarySystemPrompt == null && message instanceof SystemMessage) {
+                primarySystemPrompt = message;
+            } else {
+                body.add(message);
+            }
+        }
+
+        int tailSize = Math.min(Math.max(2, contextTailMessages), body.size());
+        if (body.size() <= tailSize) {
+            return messages;
+        }
+
+        List<ChatMessage> older = new ArrayList<>(body.subList(0, body.size() - tailSize));
+        List<ChatMessage> tail = new ArrayList<>(body.subList(body.size() - tailSize, body.size()));
+        List<ChatMessage> compacted = buildCompactedMessages(primarySystemPrompt, older, tail);
+
+        while (estimateTokens(compacted) > maxContextTokens && tail.size() > 2) {
+            older.add(tail.remove(0));
+            compacted = buildCompactedMessages(primarySystemPrompt, older, tail);
+        }
+
+        int afterTokens = estimateTokens(compacted);
+        log.info("[ContextCompaction] stage={} messages {}->{} tokens~{}->{} olderCompacted={} tailKept={}",
+                stage, messages.size(), compacted.size(), beforeTokens, afterTokens, older.size(), tail.size());
+        return compacted;
+    }
+
+    private List<ChatMessage> buildCompactedMessages(
+            ChatMessage primarySystemPrompt,
+            List<ChatMessage> older,
+            List<ChatMessage> tail) {
+        List<ChatMessage> compacted = new ArrayList<>();
+        if (primarySystemPrompt != null) {
+            compacted.add(primarySystemPrompt);
+        }
+        if (!older.isEmpty()) {
+            compacted.add(SystemMessage.from(buildCompactSummary(older)));
+        }
+        compacted.addAll(tail);
+        return compacted;
+    }
+
+    private String buildCompactSummary(List<ChatMessage> olderMessages) {
+        StringBuilder summary = new StringBuilder();
+        summary.append("[COMPACTED CONVERSATION CONTEXT]\n");
+        summary.append("Older messages were compacted to keep the request context small. ");
+        summary.append("Use this only as continuity memory; call tools again when current data is needed.\n\n");
+
+        int omitted = 0;
+        for (int i = 0; i < olderMessages.size(); i++) {
+            ChatMessage message = olderMessages.get(i);
+            String line = "- " + compactRole(message) + ": "
+                    + compactText(messageText(message), compactMessageMaxChars) + "\n";
+
+            if (summary.length() + line.length() > compactSummaryMaxChars) {
+                omitted = olderMessages.size() - i;
+                break;
+            }
+            summary.append(line);
+        }
+
+        if (omitted > 0) {
+            summary.append("- [").append(omitted).append(" older messages omitted]\n");
+        }
+        return summary.toString();
+    }
+
+    private int estimateTokens(List<ChatMessage> messages) {
+        try {
+            return tokenCountEstimator.estimateTokenCountInMessages(messages);
+        } catch (Exception ex) {
+            int total = 0;
+            for (ChatMessage message : messages) {
+                total += messageText(message).length() / 4;
+            }
+            return Math.max(1, total);
+        }
+    }
+
+    private String compactRole(ChatMessage message) {
+        if (message instanceof UserMessage) {
+            return "User";
+        }
+        if (message instanceof AiMessage) {
+            return "Assistant";
+        }
+        if (message instanceof ToolExecutionResultMessage toolResult) {
+            return "Tool " + toolResult.toolName();
+        }
+        if (message instanceof SystemMessage systemMessage
+                && systemMessage.text() != null
+                && systemMessage.text().startsWith("SYSTEM TOOL RESULT")) {
+            return "Tool/System";
+        }
+        if (message instanceof SystemMessage) {
+            return "System";
+        }
+        return message.getClass().getSimpleName();
+    }
+
+    private String messageText(ChatMessage message) {
+        if (message == null) {
+            return "";
+        }
+        if (message instanceof UserMessage userMessage) {
+            return userMessage.singleText();
+        }
+        if (message instanceof AiMessage aiMessage) {
+            return stripThinkTags(aiMessage.text());
+        }
+        if (message instanceof SystemMessage systemMessage) {
+            return systemMessage.text();
+        }
+        if (message instanceof ToolExecutionResultMessage toolResult) {
+            return toolResult.text();
+        }
+        return message.toString();
+    }
+
+    private String compactText(String text, int maxChars) {
+        if (text == null || text.isBlank()) {
+            return "";
+        }
+        String normalized = text.replaceAll("\\s+", " ").trim();
+        if (normalized.length() <= maxChars) {
+            return normalized;
+        }
+
+        int headLength = Math.max(1, (int) (maxChars * 0.65));
+        int tailLength = Math.max(1, maxChars - headLength - 35);
+        String head = normalized.substring(0, Math.min(headLength, normalized.length()));
+        String tail = normalized.substring(Math.max(0, normalized.length() - tailLength));
+        int omitted = Math.max(0, normalized.length() - head.length() - tail.length());
+        return head + " ... [" + omitted + " chars compacted] ... " + tail;
+    }
+
     private List<ChatMessage> sanitizeHistoryForTools(List<ChatMessage> rawMessages) {
         if (rawMessages == null || rawMessages.isEmpty()) {
             return List.of();
@@ -832,7 +1027,7 @@ public class AiStreamingService {
             // without triggering 400 errors
             else if (msg instanceof ToolExecutionResultMessage toolResult) {
                 String toolName = toolResult.toolName();
-                String rawData = toolResult.text();
+                String rawData = truncate(toolResult.text(), maxToolResultMemoryChars);
 
                 // Semantic Role Fix: Inject as SystemMessage so the model treats it as 
                 // ground truth constraint, avoiding role confusion.

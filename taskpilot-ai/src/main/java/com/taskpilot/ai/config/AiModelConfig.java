@@ -49,6 +49,9 @@ public class AiModelConfig {
         @Value("${ai.model.timeout-seconds:60}")
         private int timeoutSeconds;
 
+        @Value("${ai.gemini.timeout-seconds:20}")
+        private int geminiTimeoutSeconds;
+
         @Primary
         @Bean("geminiFlashModel")
         public StreamingChatModel geminiFlashModel() {
@@ -58,7 +61,7 @@ public class AiModelConfig {
                                 .modelName(geminiModelName)
                                 .toolConfig(GeminiMode.AUTO)
                                 .temperature(0.3)
-                                .timeout(Duration.ofSeconds(timeoutSeconds))
+                                .timeout(Duration.ofSeconds(geminiTimeoutSeconds))
                                 .build();
         }
 

@@ -75,6 +75,19 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
 
     @Override
     @Transactional(readOnly = true)
+    public List<TaskDetailDto> getUnassignedTasksByProject(Long projectId, Long requesterUserId) {
+        validateProjectMember(projectId, requesterUserId);
+        return taskRepository.findByProjectId(projectId).stream()
+                .filter(task -> task.getAssigneeId() == null)
+                .sorted(Comparator.comparing(TaskEntity::getStatus)
+                        .thenComparing(task -> task.getPosition() == null ? 0f : task.getPosition())
+                        .thenComparing(TaskEntity::getId))
+                .map(this::toTaskDetail)
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public List<TaskSummaryDto> getSubtasks(Long parentTaskId, Long requesterUserId) {
         TaskEntity parent = findTask(parentTaskId);
         validateProjectMember(parent.getProjectId(), requesterUserId);
@@ -90,25 +103,7 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
         TaskEntity task = findTask(taskId);
         validateProjectMember(task.getProjectId(), requesterUserId);
 
-        String requiredSkills = taskRequiredSkillRepository.findByTaskId(taskId).stream()
-                .map(TaskRequiredSkillEntity::getSkillId)
-                .collect(Collectors.collectingAndThen(Collectors.toSet(), this::resolveSkillNames));
-
-        UserProfileDto assignee = task.getAssigneeId() == null ? null
-                : userPort.findById(task.getAssigneeId()).orElse(null);
-
-        return new TaskDetailDto(
-                task.getId(),
-                task.getProjectId(),
-                task.getTitle(),
-                task.getDescription(),
-                task.getStatus() != null ? task.getStatus().name() : null,
-                task.getPriority() != null ? task.getPriority().name() : null,
-                task.getDifficultyLevel(),
-                requiredSkills,
-                task.getDueDate() != null ? task.getDueDate().toString() : null,
-                assignee != null ? assignee.fullName() : null,
-                task.getAssigneeId());
+        return toTaskDetail(task);
     }
 
     @Override
@@ -343,6 +338,28 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
                 task.getDueDate() != null ? task.getDueDate().toString() : null,
                 task.getCreatedAt() != null ? task.getCreatedAt().toString() : null,
                 task.getUpdatedAt() != null ? task.getUpdatedAt().toString() : null);
+    }
+
+    private TaskDetailDto toTaskDetail(TaskEntity task) {
+        String requiredSkills = taskRequiredSkillRepository.findByTaskId(task.getId()).stream()
+                .map(TaskRequiredSkillEntity::getSkillId)
+                .collect(Collectors.collectingAndThen(Collectors.toSet(), this::resolveSkillNames));
+
+        UserProfileDto assignee = task.getAssigneeId() == null ? null
+                : userPort.findById(task.getAssigneeId()).orElse(null);
+
+        return new TaskDetailDto(
+                task.getId(),
+                task.getProjectId(),
+                task.getTitle(),
+                task.getDescription(),
+                task.getStatus() != null ? task.getStatus().name() : null,
+                task.getPriority() != null ? task.getPriority().name() : null,
+                task.getDifficultyLevel(),
+                requiredSkills,
+                task.getDueDate() != null ? task.getDueDate().toString() : null,
+                assignee != null ? assignee.fullName() : null,
+                task.getAssigneeId());
     }
 
     private SprintSummaryDto toSprintSummary(SprintEntity sprint) {

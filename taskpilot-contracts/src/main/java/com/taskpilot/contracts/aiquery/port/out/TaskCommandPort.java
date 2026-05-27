@@ -8,6 +8,7 @@ import java.util.List;
 
 public interface TaskCommandPort {
     List<TaskSummaryDto> getTasksByProject(Long projectId, Long requesterUserId);
+    List<TaskDetailDto> getUnassignedTasksByProject(Long projectId, Long requesterUserId);
     List<TaskSummaryDto> getSubtasks(Long parentTaskId, Long requesterUserId);
     TaskDetailDto getTaskDetails(Long taskId, Long requesterUserId);
     TaskAssignmentResultDto assignTaskToMember(Long taskId, Long memberId, String reason, Long requesterUserId,

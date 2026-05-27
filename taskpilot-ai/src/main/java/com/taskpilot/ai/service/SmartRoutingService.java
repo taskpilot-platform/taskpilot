@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
+import java.text.Normalizer;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
@@ -21,7 +22,7 @@ public class SmartRoutingService {
     private final StreamingChatModel gpt4oFallbackModel;
     private final StreamingChatModel deepSeekReasoningModel;
     private final StreamingChatModel groqOssReasoningModel;
-    
+
     private final StreamingChatModel gpt4oFallbackTextModel;
     private final StreamingChatModel deepSeekReasoningTextModel;
     private final StreamingChatModel groqOssReasoningTextModel;
@@ -47,10 +48,10 @@ public class SmartRoutingService {
     @Value("${ai.routing.token-threshold:8000}")
     private int tokenThreshold;
 
-    @Value("${ai.routing.tool-keywords:project status,workload,assign,candidates,task list,project progress}")
+    @Value("${ai.routing.tool-keywords:project status,workload,assign,candidates,task list,project progress,confirm,confirm_action,xac nhan}")
     private String toolKeywordsRaw;
 
-    @Value("${ai.routing.ahp-fallback-keywords:phân công,phan cong,giao việc,giao viec,chia việc,chia viec,chọn ai,chon ai,chọn người,chon nguoi,tìm người,tim nguoi,ai rảnh,ai ranh,ứng viên,ung vien,assign,candidate,workload,chia task}")
+    @Value("${ai.routing.ahp-fallback-keywords:phan cong,giao viec,chia viec,chon ai,chon nguoi,tim nguoi,ai ranh,ung vien,assign,candidate,workload,chia task}")
     private String ahpFallbackKeywordsRaw;
 
     public SmartRoutingService(
@@ -84,12 +85,14 @@ public class SmartRoutingService {
     public RoutingDecision route(String userMessage, String contextHistory) {
         String normalized = normalize(userMessage);
         boolean directAssignmentExecution = isDirectAssignmentExecution(normalized);
-        boolean requiresAHP = directAssignmentExecution ? false : resolveRequiresAHP(userMessage);
+        boolean pendingActionConfirmation = isPendingActionConfirmation(normalized);
+        boolean requiresAHP = directAssignmentExecution || pendingActionConfirmation ? false : resolveRequiresAHP(userMessage);
 
         int estimatedTokens = tokenEstimationUtil.estimateTotal(userMessage, contextHistory);
         log.debug("[SmartRouting] Estimated tokens: {}, threshold: {}", estimatedTokens, tokenThreshold);
 
-        boolean likelyNeedsTools = directAssignmentExecution || containsAny(normalized, splitKeywords(toolKeywordsRaw));
+        boolean likelyNeedsTools = pendingActionConfirmation || directAssignmentExecution
+                || containsAny(normalized, splitKeywords(toolKeywordsRaw));
         boolean heavyContext = estimatedTokens > tokenThreshold;
 
         if (requiresAHP) {
@@ -102,18 +105,17 @@ public class SmartRoutingService {
         if (heavyContext) {
             StreamingChatModel reasoningModel = getReasoningModel();
             String name = getModelName(reasoningModel);
-            log.info("[SmartRouting] Routing to REASONING model ({}) — tokens: {}",
-                    name, estimatedTokens);
+            log.info("[SmartRouting] Routing to REASONING model ({}) - tokens: {}", name, estimatedTokens);
             return new RoutingDecision(reasoningModel, name, false);
         }
 
         if (likelyNeedsTools) {
-            log.info("[SmartRouting] Routing to TOOL-FRIENDLY model ({}) — tokens: {}",
+            log.info("[SmartRouting] Routing to TOOL-FRIENDLY model ({}) - tokens: {}",
                     geminiModelName, estimatedTokens);
             return new RoutingDecision(geminiFlashModel, geminiModelName, false);
         }
 
-        log.info("[SmartRouting] Routing to LIGHT model ({}) — tokens: {}", fallbackModelName, estimatedTokens);
+        log.info("[SmartRouting] Routing to LIGHT model ({}) - tokens: {}", fallbackModelName, estimatedTokens);
         return new RoutingDecision(gpt4oFallbackModel, fallbackModelName, false);
     }
 
@@ -123,13 +125,23 @@ public class SmartRoutingService {
         }
 
         boolean hasAssignmentIntent = containsAny(normalized, List.of(
-                "phan cong", "phân công", "giao task", "giao viec", "giao việc",
-                "assign", "assignment", "assignee"));
+                "phan cong", "giao task", "giao viec", "gan task", "gan viec", "gan luon",
+                "chia viec", "assign", "assignment", "assignee"));
         boolean hasExecutionIntent = containsAny(normalized, List.of(
-                "thuc hien", "thực hiện", "tien hanh", "tiến hành", "ap dung", "áp dụng",
-                "lam di", "làm đi", "cap nhat", "cập nhật", "execute", "apply", "do it"));
+                "thuc hien", "tien hanh", "ap dung", "lam di", "cap nhat", "xong gan",
+                "gan luon", "assign it", "immediately", "execute", "apply", "do it"));
 
         return hasAssignmentIntent && hasExecutionIntent;
+    }
+
+    private boolean isPendingActionConfirmation(String normalized) {
+        if (normalized == null || normalized.isBlank()) {
+            return false;
+        }
+        return normalized.contains("confirm_action")
+                || (normalized.matches(".*\\b[a-f0-9-]{24,}\\b.*")
+                        && containsAny(normalized, List.of(
+                                "confirm", "confirmed", "xac nhan", "dong y", "thuc hien", "apply")));
     }
 
     public StreamingChatModel getFallbackModel() {
@@ -159,21 +171,31 @@ public class SmartRoutingService {
     }
 
     public StreamingChatModel getTextModel(String modelName) {
-        if (modelName == null) return getPrimaryModel();
-        if (modelName.equals(fallbackModelName)) return getFallbackTextModel();
-        if (modelName.equals(deepSeekReasoningModelName) || modelName.equals(groqReasoningModelName)) return getReasoningTextModel();
+        if (modelName == null) {
+            return getPrimaryModel();
+        }
+        if (modelName.equals(fallbackModelName)) {
+            return getFallbackTextModel();
+        }
+        if (modelName.equals(deepSeekReasoningModelName) || modelName.equals(groqReasoningModelName)) {
+            return getReasoningTextModel();
+        }
         return getPrimaryModel();
     }
 
     public String getModelName(StreamingChatModel model) {
-        if (model == gpt4oFallbackModel || model == gpt4oFallbackTextModel)
+        if (model == gpt4oFallbackModel || model == gpt4oFallbackTextModel) {
             return fallbackModelName;
-        if (model == geminiFlashModel)
+        }
+        if (model == geminiFlashModel) {
             return geminiModelName;
-        if (model == deepSeekReasoningModel || model == deepSeekReasoningTextModel)
+        }
+        if (model == deepSeekReasoningModel || model == deepSeekReasoningTextModel) {
             return deepSeekReasoningModelName;
-        if (model == groqOssReasoningModel || model == groqOssReasoningTextModel)
+        }
+        if (model == groqOssReasoningModel || model == groqOssReasoningTextModel) {
             return groqReasoningModelName;
+        }
         return model.getClass().getSimpleName();
     }
 
@@ -191,7 +213,12 @@ public class SmartRoutingService {
     }
 
     private String normalize(String text) {
-        return text == null ? "" : text.toLowerCase(Locale.ROOT);
+        if (text == null) {
+            return "";
+        }
+        String lower = text.toLowerCase(Locale.ROOT).replace('đ', 'd');
+        return Normalizer.normalize(lower, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "");
     }
 
     private boolean containsAny(String text, List<String> keywords) {
@@ -212,7 +239,7 @@ public class SmartRoutingService {
             return List.of();
         }
         return Arrays.stream(raw.split(","))
-                .map(s -> s.trim().toLowerCase(Locale.ROOT))
+                .map(s -> normalize(s.trim()))
                 .filter(s -> !s.isBlank())
                 .toList();
     }

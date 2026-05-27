@@ -1,7 +1,11 @@
 package com.taskpilot.ai.tools;
 
 import com.taskpilot.ai.dto.AutoAssignmentResponse;
+import com.taskpilot.ai.dto.CandidateScore;
+import com.taskpilot.ai.dto.ConfirmationRequiredDto;
+import com.taskpilot.ai.dto.RecommendAndAssignResult;
 import com.taskpilot.ai.service.AutoAssignmentService;
+import com.taskpilot.ai.service.PendingAiActionService;
 import com.taskpilot.contracts.assignment.dto.ProjectDueDto;
 import com.taskpilot.contracts.assignment.port.out.ProjectMemberPort;
 import com.taskpilot.contracts.aiquery.dto.*;
@@ -16,10 +20,14 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.text.Normalizer;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -34,6 +42,7 @@ public class TaskPilotAiTools {
     private final TaskCommandPort taskCommandPort;
     private final TaskCommentQueryPort taskCommentQueryPort;
     private final SprintQueryPort sprintQueryPort;
+    private final PendingAiActionService pendingAiActionService;
 
     @Tool("""
             Use this tool when the user asks to list projects they participate in, joined projects,
@@ -105,13 +114,121 @@ public class TaskPilotAiTools {
             Use this tool when the user explicitly asks to assign a task to a member.
             Provide taskId, memberId, and a short reason. This tool performs the assignment.
             """)
-    public TaskAssignmentResultDto assignTaskToMember(
+    public Object assignTaskToMember(
             @P("The ID of the task") Long taskId,
             @P("The ID of the member") Long memberId,
             @P("Reason for the assignment") String reason) {
         log.info("[AiTool] assignTaskToMember called for task {} -> member {}", taskId, memberId);
         Long userId = ToolExecutionContext.requireUserId();
-        return taskCommandPort.assignTaskToMember(taskId, memberId, reason, userId, false);
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        String safeReason = hasText(reason) ? reason : "Task assigned by AI tool";
+
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "assignTaskToMember",
+                "Assign task " + taskId + " to member " + memberId,
+                args("taskId", taskId, "memberId", memberId, "reason", safeReason),
+                null,
+                () -> taskCommandPort.assignTaskToMember(taskId, memberId, safeReason, userId, false));
+    }
+
+    @Tool("""
+            Use this tool when the user asks to recommend the best member for a concrete task and also assign it
+            in the same request, for example: "goi y roi gan luon", "phan cong task nay cho nguoi phu hop",
+            "recommend and assign". This tool reads the task when project ID, skills, or difficulty are omitted,
+            runs candidate scoring, picks the top candidate, and performs the real assignment.
+
+            If neither the task nor the provided arguments contain required skills, this tool will NOT assign and
+            will return a message asking for task skills. Only use it when the user clearly wants assignment applied.
+            """)
+    public Object recommendAndAssignTask(
+            @P("The ID of the task to assign") Long taskId,
+            @P("Optional project ID. If omitted, it is read from task details") Long projectId,
+            @P("Optional comma-separated required skill names. If omitted, task required skills are used") String skills,
+            @P("Optional task difficulty 1-10. If omitted, task difficulty is used") Integer difficulty,
+            @P("Reason to store with the assignment") String reason) {
+        log.info("[AiTool] recommendAndAssignTask called for task {}", taskId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+
+        TaskDetailDto task = taskCommandPort.getTaskDetails(taskId, userId);
+        Long resolvedProjectId = projectId != null ? projectId : task.projectId();
+        String resolvedSkills = hasText(skills) ? skills : task.requiredSkills();
+
+        if (!hasText(resolvedSkills)) {
+            return new RecommendAndAssignResult(false, taskId, resolvedProjectId, null, null, reason,
+                    null, null,
+                    "Task " + taskId + " is missing required skills. Please provide skills before assigning.");
+        }
+
+        int resolvedDifficulty = difficulty != null ? difficulty
+                : (task.difficultyLevel() != null ? task.difficultyLevel() : 5);
+        resolvedDifficulty = Math.max(1, Math.min(10, resolvedDifficulty));
+
+        AutoAssignmentResponse recommendation = autoAssignmentService.recommendCandidates(
+                resolvedProjectId,
+                parseSkills(resolvedSkills),
+                resolvedDifficulty,
+                userId);
+
+        if (recommendation.candidates() == null || recommendation.candidates().isEmpty()) {
+            return new RecommendAndAssignResult(false, taskId, resolvedProjectId, null, null, reason,
+                    recommendation, null,
+                    "No eligible candidate found for task " + taskId + ".");
+        }
+
+        CandidateScore selected = recommendation.candidates().get(0);
+        String safeReason = hasText(reason)
+                ? reason
+                : "AI selected the top-ranked candidate based on skill fit, workload, and project heuristic mode.";
+        RecommendAndAssignResult preview = new RecommendAndAssignResult(false, taskId, resolvedProjectId,
+                selected.getUserId(), selected.getFullName(), safeReason, recommendation, null,
+                "Ready to assign task " + taskId + " to " + selected.getFullName() + " after confirmation.");
+
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "recommendAndAssignTask",
+                "Assign task " + taskId + " to " + selected.getFullName() + " (top recommended candidate)",
+                args("taskId", taskId, "projectId", resolvedProjectId, "skills", resolvedSkills,
+                        "difficulty", resolvedDifficulty, "memberId", selected.getUserId(), "reason", safeReason),
+                preview,
+                () -> {
+                    TaskAssignmentResultDto assignment = taskCommandPort.assignTaskToMember(
+                            taskId,
+                            selected.getUserId(),
+                            safeReason,
+                            userId,
+                            false);
+                    return new RecommendAndAssignResult(true, taskId, resolvedProjectId, selected.getUserId(),
+                            selected.getFullName(), safeReason, recommendation, assignment,
+                            "Task " + taskId + " assigned to " + selected.getFullName() + ".");
+                });
+    }
+
+    @Tool("""
+            Use this tool only after the user explicitly confirms a pending write action by sending the action ID.
+            It performs the previously prepared real database write.
+            """)
+    public Object confirmPendingAction(@P("Pending action ID returned by a confirmationRequired tool result") String actionId) {
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        if (!isCurrentUserConfirming(actionId)) {
+            return "Confirmation not accepted. Ask the user to confirm this exact action ID before executing: "
+                    + actionId;
+        }
+        return pendingAiActionService.confirm(actionId, userId, sessionId);
+    }
+
+    @Tool("""
+            Use this tool when the user explicitly cancels a pending write action by action ID.
+            """)
+    public Object cancelPendingAction(@P("Pending action ID to cancel") String actionId) {
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        pendingAiActionService.cancel(actionId, userId, sessionId);
+        return Map.of("cancelled", true, "actionId", actionId);
     }
 
     @Tool("""
@@ -198,6 +315,10 @@ public class TaskPilotAiTools {
                 .collect(Collectors.toList());
     }
 
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
+    }
+
     // =========================================================================
     // Project/task CRUD tools backed by the real project data ports.
     // =========================================================================
@@ -210,6 +331,18 @@ public class TaskPilotAiTools {
         log.info("[AiTool] getTasksByProject called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
         return taskCommandPort.getTasksByProject(projectId, userId);
+    }
+
+    @Tool("""
+            Use this tool when the user asks which tasks in a project are unassigned, not assigned yet,
+            "chua duoc phan cong", "task nao chua gan", or asks for work that still needs an owner.
+            Provide the project ID. It returns only tasks whose assignee is empty, with required skills and difficulty
+            when available, so the assistant can ask only for missing fields.
+            """)
+    public Object getUnassignedTasksByProject(@P("The ID of the project") Long projectId) {
+        log.info("[AiTool] getUnassignedTasksByProject called for project {}", projectId);
+        Long userId = ToolExecutionContext.requireUserId();
+        return taskCommandPort.getUnassignedTasksByProject(projectId, userId);
     }
 
     @Tool("""
@@ -242,7 +375,15 @@ public class TaskPilotAiTools {
             @P("The new status (TODO, IN_PROGRESS, REVIEW, DONE)") String status) {
         log.info("[AiTool] updateTaskStatus called for task {} -> {}", taskId, status);
         Long userId = ToolExecutionContext.requireUserId();
-        return taskCommandPort.updateTaskStatus(taskId, status, userId);
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "updateTaskStatus",
+                "Update task " + taskId + " status to " + status,
+                args("taskId", taskId, "status", status),
+                null,
+                () -> taskCommandPort.updateTaskStatus(taskId, status, userId));
     }
 
     @Tool("""
@@ -273,7 +414,45 @@ public class TaskPilotAiTools {
             @P("Optional due date as ISO-8601 instant or YYYY-MM-DD") String dueDate) {
         log.info("[AiTool] createTask called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
-        return taskCommandPort.createTask(projectId, title, description, priority, parentTaskId, sprintId,
-                difficultyLevel, assigneeId, dueDate, userId);
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "createTask",
+                "Create task \"" + title + "\" in project " + projectId,
+                args("projectId", projectId, "title", title, "priority", priority, "description", description,
+                        "parentTaskId", parentTaskId, "sprintId", sprintId, "difficultyLevel", difficultyLevel,
+                        "assigneeId", assigneeId, "dueDate", dueDate),
+                null,
+                () -> taskCommandPort.createTask(projectId, title, description, priority, parentTaskId, sprintId,
+                        difficultyLevel, assigneeId, dueDate, userId));
+    }
+
+    private boolean isCurrentUserConfirming(String actionId) {
+        if (!hasText(actionId)) {
+            return false;
+        }
+        String input = normalize(ToolExecutionContext.userInput());
+        return input.contains(normalize(actionId))
+                && (input.contains("confirm") || input.contains("confirmed")
+                        || input.contains("xac nhan") || input.contains("dong y")
+                        || input.contains("thuc hien") || input.contains("apply"));
+    }
+
+    private String normalize(String value) {
+        if (value == null) {
+            return "";
+        }
+        String lower = value.toLowerCase(Locale.ROOT).replace('đ', 'd');
+        return Normalizer.normalize(lower, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "");
+    }
+
+    private Map<String, Object> args(Object... keyValues) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (int i = 0; i + 1 < keyValues.length; i += 2) {
+            result.put(String.valueOf(keyValues[i]), keyValues[i + 1]);
+        }
+        return result;
     }
 }
