@@ -42,6 +42,9 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -67,6 +70,9 @@ public class AiStreamingService {
 
     @Value("${ai.chat.max-output-tokens:3500}")
     private int maxOutputTokens;
+
+    @Value("${ai.chat.stream-first-response-timeout-seconds:25}")
+    private int streamFirstResponseTimeoutSeconds;
 
     @Value("${ai.chat.memory-max-tokens:7000}")
     private int maxContextTokens;
@@ -137,10 +143,12 @@ public class AiStreamingService {
             """;
 
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+    private final ScheduledExecutorService timeoutScheduler = Executors.newSingleThreadScheduledExecutor();
 
     @PreDestroy
     public void shutdown() {
         executor.shutdown();
+        timeoutScheduler.shutdownNow();
     }
 
     public SseEmitter streamChat(Long sessionId, Long userId, String userInput, String clientMessageId) {
@@ -356,12 +364,41 @@ public class AiStreamingService {
 
         ChatRequest request = requestBuilder.build();
 
+                final AtomicBoolean roundClosed = new AtomicBoolean(false);
+                final AtomicBoolean firstModelSignalReceived = new AtomicBoolean(false);
+                final ScheduledFuture<?> timeoutFuture = timeoutScheduler.schedule(() -> {
+                    if (firstModelSignalReceived.get() || clientDisconnected.get() || emitterCompleted.get()) {
+                        return;
+                    }
+                    if (roundClosed.compareAndSet(false, true)) {
+                        handleFirstResponseTimeout(
+                                emitter,
+                                emitterCompleted,
+                                session,
+                                sessionId,
+                                userId,
+                                userInput,
+                                history,
+                                systemPrompt,
+                                model,
+                                modelName,
+                                startTime,
+                                isFallbackAttempt,
+                                clientMessageId,
+                                requiresAHP);
+                    }
+                }, Math.max(1, streamFirstResponseTimeoutSeconds), TimeUnit.SECONDS);
+
                 final StringBuilder thinkingBuffer = new StringBuilder();
                 final AtomicBoolean insideThink = new AtomicBoolean(false);
 
                 model.chat(request, new StreamingChatResponseHandler() {
                     @Override
                     public void onPartialResponse(String partialResponse) {
+                        if (roundClosed.get()) {
+                            return;
+                        }
+                        firstModelSignalReceived.set(true);
                         fullResponse.append(partialResponse);
 
                         // Thinking expansion logic: buffer tokens between <think> and </think>
@@ -392,6 +429,11 @@ public class AiStreamingService {
 
                     @Override
                     public void onCompleteResponse(ChatResponse completeResponse) {
+                        firstModelSignalReceived.set(true);
+                        if (!roundClosed.compareAndSet(false, true)) {
+                            return;
+                        }
+                        timeoutFuture.cancel(false);
                         // After completion, if we have a thinking buffer, expand it in the background
                         String rawThinking = thinkingBuffer.toString();
                         if (rawThinking.contains("<think>")) {
@@ -561,6 +603,11 @@ public class AiStreamingService {
 
             @Override
             public void onError(Throwable error) {
+                firstModelSignalReceived.set(true);
+                if (!roundClosed.compareAndSet(false, true)) {
+                    return;
+                }
+                timeoutFuture.cancel(false);
                 if (clientDisconnected.get() || isClientAbort(error)) {
                     log.debug("[SSE] Client aborted stream for session {} (model {}): {}",
                             sessionId, modelName, error.getMessage());
@@ -571,7 +618,10 @@ public class AiStreamingService {
                         error.getMessage());
 
                 if (!isFallbackAttempt) {
-                    StreamingChatModel fallback = routingService.getFallbackModel();
+                    // Use Gemini waterfall chain first; only go to GPT-4o after exhausting all Gemini fallbacks
+                    StreamingChatModel fallback = routingService.isGeminiModel(model)
+                            ? routingService.getNextGeminiFallback(model)
+                            : routingService.getFallbackModel();
                     if (fallback == model) {
                         chatStreamStatusService.updatePhase(sessionId, clientMessageId,
                                 Phase.FAILED, modelName, null, error.getMessage());
@@ -583,16 +633,17 @@ public class AiStreamingService {
                         return;
                     }
 
+                    boolean isStillGemini = routingService.isGeminiModel(fallback);
                     String fallbackName = routingService.getModelName(fallback);
                     chatStreamStatusService.updatePhase(sessionId, clientMessageId,
                             Phase.THINKING, fallbackName, null, null);
-                    safeSend(emitter, "model", fallbackName + " (fallback)", null);
+                    safeSend(emitter, "model",
+                            fallbackName + (isStillGemini ? " (gemini fallback)" : " (fallback)"), null);
                     safeSend(emitter, "phase", Phase.THINKING.name(), null);
 
-                    // Bug fix #3: pass fresh StringBuilder so fallback doesn't inherit partial tokens
-                    // from the failed primary model's output.
+                    // Pass fresh stream; fallback doesn't inherit partial tokens from the failed model
                     doStream(emitter, emitterCompleted, session, sessionId, userId, userInput, history, systemPrompt, fallback,
-                            fallbackName, startTime, true, clientMessageId, requiresAHP);
+                            fallbackName, startTime, !isStillGemini, clientMessageId, requiresAHP);
                 } else {
                     chatStreamStatusService.updatePhase(sessionId, clientMessageId,
                             Phase.FAILED, modelName, null, error.getMessage());
@@ -604,6 +655,53 @@ public class AiStreamingService {
                 }
             }
         });
+    }
+
+    private void handleFirstResponseTimeout(
+            SseEmitter emitter,
+            AtomicBoolean emitterCompleted,
+            ChatSessionEntity session,
+            Long sessionId,
+            Long userId,
+            String userInput,
+            List<ChatMessage> history,
+            String systemPrompt,
+            StreamingChatModel model,
+            String modelName,
+            long startTime,
+            boolean isFallbackAttempt,
+            String clientMessageId,
+            boolean requiresAHP) {
+        String message = "Model did not produce a first streaming response within "
+                + streamFirstResponseTimeoutSeconds + "s";
+        log.warn("[SSE] {} for session {} using model {}", message, sessionId, modelName);
+
+        if (!isFallbackAttempt) {
+            // Try next Gemini in the waterfall chain first
+            StreamingChatModel fallback = routingService.isGeminiModel(model)
+                    ? routingService.getNextGeminiFallback(model)
+                    : routingService.getFallbackModel();
+            if (fallback != model) {
+                boolean isStillGemini = routingService.isGeminiModel(fallback);
+                String fallbackName = routingService.getModelName(fallback);
+                chatStreamStatusService.updatePhase(sessionId, clientMessageId,
+                        Phase.THINKING, fallbackName, null, null);
+                safeSend(emitter, "model",
+                        fallbackName + (isStillGemini ? " (gemini fallback after timeout)" : " (fallback after timeout)"),
+                        null);
+                safeSend(emitter, "phase", Phase.THINKING.name(), null);
+                doStream(emitter, emitterCompleted, session, sessionId, userId, userInput,
+                        history, systemPrompt, fallback, fallbackName, startTime,
+                        !isStillGemini, clientMessageId, requiresAHP);
+                return;
+            }
+        }
+
+        chatStreamStatusService.updatePhase(sessionId, clientMessageId,
+                Phase.FAILED, modelName, null, message);
+        safeSend(emitter, "phase", Phase.FAILED.name(), null);
+        safeSend(emitter, "error", "AI service is taking too long. Please try again later.", null);
+        safeComplete(emitter, emitterCompleted);
     }
 
     private void forceTextOnlyResponse(SseEmitter emitter,
@@ -993,6 +1091,13 @@ public class AiStreamingService {
             return toolResult.text();
         }
         return message.toString();
+    }
+
+    private String stripThinkTags(String text) {
+        if (text == null) {
+            return "";
+        }
+        return text.replaceAll("<think>[\\s\\S]*?</think>", "").trim();
     }
 
     private String compactText(String text, int maxChars) {

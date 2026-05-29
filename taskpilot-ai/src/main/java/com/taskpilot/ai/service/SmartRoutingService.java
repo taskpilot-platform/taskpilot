@@ -18,7 +18,13 @@ import java.util.Locale;
 @Service
 public class SmartRoutingService {
 
-    private final StreamingChatModel geminiFlashModel;
+    // Quality-first primary, then responsiveness-first Gemini fallbacks.
+    private final StreamingChatModel geminiPrimaryModel;
+    private final StreamingChatModel geminiFallback1Model;
+    private final StreamingChatModel geminiFallback2Model;
+    private final StreamingChatModel geminiFallback3Model;
+    private final StreamingChatModel geminiFallback4Model;
+
     private final StreamingChatModel gpt4oFallbackModel;
     private final StreamingChatModel deepSeekReasoningModel;
     private final StreamingChatModel groqOssReasoningModel;
@@ -30,8 +36,23 @@ public class SmartRoutingService {
     private final TokenEstimationUtil tokenEstimationUtil;
     private final GatekeeperService gatekeeperService;
 
-    @Value("${ai.gemini.model-name}")
+    @Value("${ai.gemini.model-name:gemini-3.5-flash}")
     private String geminiModelName;
+
+    @Value("${ai.gemini.fallback1-model:gemini-3.1-flash-lite}")
+    private String geminiFallback1ModelName;
+
+    @Value("${ai.gemini.fallback2-model:gemini-2.5-flash-lite}")
+    private String geminiFallback2ModelName;
+
+    @Value("${ai.gemini.fallback3-model:gemini-2.5-flash}")
+    private String geminiFallback3ModelName;
+
+    @Value("${ai.gemini.fallback4-model:gemini-3-flash}")
+    private String geminiFallback4ModelName;
+
+    @Value("${ai.gemini.waterfall-max-attempts:3}")
+    private int geminiWaterfallMaxAttempts;
 
     @Value("${ai.github.fallback-model:gpt-4o}")
     private String fallbackModelName;
@@ -55,7 +76,11 @@ public class SmartRoutingService {
     private String ahpFallbackKeywordsRaw;
 
     public SmartRoutingService(
-            @Qualifier("geminiFlashModel") StreamingChatModel geminiFlashModel,
+            @Qualifier("geminiFlashModel") StreamingChatModel geminiPrimaryModel,
+            @Qualifier("geminiFallback1Model") StreamingChatModel geminiFallback1Model,
+            @Qualifier("geminiFallback2Model") StreamingChatModel geminiFallback2Model,
+            @Qualifier("geminiFallback3Model") StreamingChatModel geminiFallback3Model,
+            @Qualifier("geminiFallback4Model") StreamingChatModel geminiFallback4Model,
             @Qualifier("gpt4oFallbackModel") StreamingChatModel gpt4oFallbackModel,
             @Qualifier("deepSeekReasoningModel") StreamingChatModel deepSeekReasoningModel,
             @Qualifier("groqOssReasoningModel") @Nullable StreamingChatModel groqOssReasoningModel,
@@ -64,7 +89,11 @@ public class SmartRoutingService {
             @Qualifier("groqOssReasoningTextModel") @Nullable StreamingChatModel groqOssReasoningTextModel,
             TokenEstimationUtil tokenEstimationUtil,
             GatekeeperService gatekeeperService) {
-        this.geminiFlashModel = geminiFlashModel;
+        this.geminiPrimaryModel = geminiPrimaryModel;
+        this.geminiFallback1Model = geminiFallback1Model;
+        this.geminiFallback2Model = geminiFallback2Model;
+        this.geminiFallback3Model = geminiFallback3Model;
+        this.geminiFallback4Model = geminiFallback4Model;
         this.gpt4oFallbackModel = gpt4oFallbackModel;
         this.deepSeekReasoningModel = deepSeekReasoningModel;
         this.groqOssReasoningModel = groqOssReasoningModel;
@@ -112,7 +141,7 @@ public class SmartRoutingService {
         if (likelyNeedsTools) {
             log.info("[SmartRouting] Routing to TOOL-FRIENDLY model ({}) - tokens: {}",
                     geminiModelName, estimatedTokens);
-            return new RoutingDecision(geminiFlashModel, geminiModelName, false);
+            return new RoutingDecision(geminiPrimaryModel, geminiModelName, false);
         }
 
         log.info("[SmartRouting] Routing to LIGHT model ({}) - tokens: {}", fallbackModelName, estimatedTokens);
@@ -144,12 +173,66 @@ public class SmartRoutingService {
                                 "confirm", "confirmed", "xac nhan", "dong y", "thuc hien", "apply")));
     }
 
+    /**
+     * Quality-first, then response-first. By default, only the primary and two
+     * fast Gemini fallbacks are attempted before switching to the external model.
+     */
+    public StreamingChatModel getNextGeminiFallback(StreamingChatModel currentModel) {
+        if (currentModel == geminiPrimaryModel) {
+            if (maxGeminiAttempts() <= 1) {
+                return externalFallbackAfter("primary");
+            }
+            log.info("[SmartRouting] Gemini waterfall: {} -> {}", geminiModelName, geminiFallback1ModelName);
+            return geminiFallback1Model;
+        }
+        if (currentModel == geminiFallback1Model) {
+            if (maxGeminiAttempts() <= 2) {
+                return externalFallbackAfter(geminiFallback1ModelName);
+            }
+            log.info("[SmartRouting] Gemini waterfall: {} -> {}", geminiFallback1ModelName, geminiFallback2ModelName);
+            return geminiFallback2Model;
+        }
+        if (currentModel == geminiFallback2Model) {
+            if (maxGeminiAttempts() <= 3) {
+                return externalFallbackAfter(geminiFallback2ModelName);
+            }
+            log.info("[SmartRouting] Gemini waterfall: {} -> {}", geminiFallback2ModelName, geminiFallback3ModelName);
+            return geminiFallback3Model;
+        }
+        if (currentModel == geminiFallback3Model) {
+            if (maxGeminiAttempts() <= 4) {
+                return externalFallbackAfter(geminiFallback3ModelName);
+            }
+            log.info("[SmartRouting] Gemini waterfall: {} -> {}", geminiFallback3ModelName, geminiFallback4ModelName);
+            return geminiFallback4Model;
+        }
+        return externalFallbackAfter(geminiFallback4ModelName);
+    }
+
+    private int maxGeminiAttempts() {
+        return Math.max(1, Math.min(5, geminiWaterfallMaxAttempts));
+    }
+
+    private StreamingChatModel externalFallbackAfter(String previousModelName) {
+        log.info("[SmartRouting] Gemini waterfall stopping after {} -> external fallback: {}",
+                previousModelName, fallbackModelName);
+        return gpt4oFallbackModel;
+    }
+
+    public boolean isGeminiModel(StreamingChatModel model) {
+        return model == geminiPrimaryModel
+                || model == geminiFallback1Model
+                || model == geminiFallback2Model
+                || model == geminiFallback3Model
+                || model == geminiFallback4Model;
+    }
+
     public StreamingChatModel getFallbackModel() {
         return gpt4oFallbackModel;
     }
 
     public StreamingChatModel getPrimaryModel() {
-        return geminiFlashModel;
+        return geminiPrimaryModel;
     }
 
     public StreamingChatModel getReasoningModel() {
@@ -184,18 +267,14 @@ public class SmartRoutingService {
     }
 
     public String getModelName(StreamingChatModel model) {
-        if (model == gpt4oFallbackModel || model == gpt4oFallbackTextModel) {
-            return fallbackModelName;
-        }
-        if (model == geminiFlashModel) {
-            return geminiModelName;
-        }
-        if (model == deepSeekReasoningModel || model == deepSeekReasoningTextModel) {
-            return deepSeekReasoningModelName;
-        }
-        if (model == groqOssReasoningModel || model == groqOssReasoningTextModel) {
-            return groqReasoningModelName;
-        }
+        if (model == geminiPrimaryModel) return geminiModelName;
+        if (model == geminiFallback1Model) return geminiFallback1ModelName;
+        if (model == geminiFallback2Model) return geminiFallback2ModelName;
+        if (model == geminiFallback3Model) return geminiFallback3ModelName;
+        if (model == geminiFallback4Model) return geminiFallback4ModelName;
+        if (model == gpt4oFallbackModel || model == gpt4oFallbackTextModel) return fallbackModelName;
+        if (model == deepSeekReasoningModel || model == deepSeekReasoningTextModel) return deepSeekReasoningModelName;
+        if (model == groqOssReasoningModel || model == groqOssReasoningTextModel) return groqReasoningModelName;
         return model.getClass().getSimpleName();
     }
 
@@ -216,7 +295,9 @@ public class SmartRoutingService {
         if (text == null) {
             return "";
         }
-        String lower = text.toLowerCase(Locale.ROOT).replace('đ', 'd');
+        String lower = text.toLowerCase(Locale.ROOT)
+                .replace('\u0111', 'd')
+                .replace('\u0110', 'd');
         return Normalizer.normalize(lower, Normalizer.Form.NFD)
                 .replaceAll("\\p{M}", "");
     }

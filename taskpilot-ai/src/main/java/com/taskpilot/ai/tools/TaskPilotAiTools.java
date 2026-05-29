@@ -428,6 +428,123 @@ public class TaskPilotAiTools {
                         difficultyLevel, assigneeId, dueDate, userId));
     }
 
+    @Tool("""
+            Use this tool to fetch the backlog of a specific project, which contains unscheduled tasks
+            and all sprints (including active, completed, and planned sprints) with their tasks.
+            Typical intents include: "xem backlog", "sprint backlog", "backlog du an".
+            Provide the project ID.
+            """)
+    public Object getSprintBacklog(@P("The ID of the project") Long projectId) {
+        log.info("[AiTool] getSprintBacklog called for project {}", projectId);
+        Long userId = ToolExecutionContext.requireUserId();
+        return sprintQueryPort.getSprintBacklog(projectId, userId);
+    }
+
+    @Tool("""
+            Use this tool to fetch the active sprint board for a specific project, which contains
+            tasks in the active sprint organized by columns/statuses.
+            Typical intents include: "board sprint", "sprint board", "active board", "bang sprint dang chay".
+            Provide the project ID.
+            """)
+    public Object getSprintBoard(@P("The ID of the project") Long projectId) {
+        log.info("[AiTool] getSprintBoard called for project {}", projectId);
+        Long userId = ToolExecutionContext.requireUserId();
+        return sprintQueryPort.getSprintBoard(projectId, userId);
+    }
+
+    @Tool("""
+            Use this tool to plan and create a new sprint in a specific project.
+            Provide the project ID and sprint name. Optional arguments include startDate (YYYY-MM-DD),
+            endDate (YYYY-MM-DD), and goal.
+            This tool creates real database data and requires final user confirmation.
+            """)
+    public Object createSprint(
+            @P("The project ID") Long projectId,
+            @P("Name of the sprint, e.g. 'Sprint 3'") String name,
+            @P("Optional start date in YYYY-MM-DD format") String startDate,
+            @P("Optional end date in YYYY-MM-DD format") String endDate,
+            @P("Optional goal or objective of the sprint") String goal) {
+        log.info("[AiTool] createSprint called for project {}", projectId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "createSprint",
+                "Create planned sprint \"" + name + "\" in project " + projectId,
+                args("projectId", projectId, "name", name, "startDate", startDate, "endDate", endDate, "goal", goal),
+                null,
+                () -> sprintQueryPort.createSprint(projectId, name, startDate, endDate, goal, userId));
+    }
+
+    @Tool("""
+            Use this tool to start a planned sprint in a specific project.
+            Provide the project ID and sprint ID.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object startSprint(
+            @P("The project ID") Long projectId,
+            @P("The ID of the sprint to start") Long sprintId) {
+        log.info("[AiTool] startSprint called for sprint {}", sprintId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "startSprint",
+                "Start planned sprint " + sprintId + " in project " + projectId,
+                args("projectId", projectId, "sprintId", sprintId),
+                null,
+                () -> sprintQueryPort.startSprint(projectId, sprintId, userId));
+    }
+
+    @Tool("""
+            Use this tool to mark an active sprint as completed in a specific project.
+            Provide the project ID and sprint ID.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object completeSprint(
+            @P("The project ID") Long projectId,
+            @P("The ID of the sprint to complete") Long sprintId) {
+        log.info("[AiTool] completeSprint called for sprint {}", sprintId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "completeSprint",
+                "Complete active sprint " + sprintId + " in project " + projectId,
+                args("projectId", projectId, "sprintId", sprintId),
+                null,
+                () -> sprintQueryPort.completeSprint(projectId, sprintId, userId));
+    }
+
+    @Tool("""
+            Use this tool to move or assign a task to a specific sprint (or remove it from sprint by setting sprintId to null).
+            Provide the task ID and the sprint ID (or null to put it in the backlog).
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object assignTaskToSprint(
+            @P("The ID of the task") Long taskId,
+            @P("The ID of the target sprint, or null to move it to the backlog") Long sprintId) {
+        log.info("[AiTool] assignTaskToSprint called for task {} -> sprint {}", taskId, sprintId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+
+        String desc = sprintId == null ? "Move task " + taskId + " to the backlog" : "Move task " + taskId + " to sprint " + sprintId;
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "assignTaskToSprint",
+                desc,
+                args("taskId", taskId, "sprintId", sprintId),
+                null,
+                () -> sprintQueryPort.assignTaskToSprint(taskId, sprintId, userId));
+    }
+
     private boolean isCurrentUserConfirming(String actionId) {
         if (!hasText(actionId)) {
             return false;

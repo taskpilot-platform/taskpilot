@@ -30,6 +30,10 @@ import com.taskpilot.projects.common.repository.ProjectRepository;
 import com.taskpilot.projects.common.repository.SprintRepository;
 import com.taskpilot.projects.common.repository.TaskRepository;
 import com.taskpilot.projects.common.repository.TaskRequiredSkillRepository;
+import com.taskpilot.projects.sprints.service.SprintService;
+import com.taskpilot.projects.tasks.service.TaskService;
+import com.taskpilot.projects.sprints.dto.CreateSprintRequest;
+import com.taskpilot.projects.tasks.dto.UpdateTaskSprintRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpStatus;
@@ -60,6 +64,8 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     private final UserSkillPort userSkillPort;
     private final SkillPort skillPort;
     private final NotificationPort notificationPort;
+    private final SprintService sprintService;
+    private final TaskService taskService;
 
     @Override
     @Transactional(readOnly = true)
@@ -276,6 +282,77 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
                 .toList();
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public Object getSprintBacklog(Long projectId, Long requesterUserId) {
+        validateProjectMember(projectId, requesterUserId);
+        String email = getRequesterEmail(requesterUserId);
+        return sprintService.getBacklog(projectId, email);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Object getSprintBoard(Long projectId, Long requesterUserId) {
+        validateProjectMember(projectId, requesterUserId);
+        String email = getRequesterEmail(requesterUserId);
+        return sprintService.getBoard(projectId, email);
+    }
+
+    @Override
+    @Transactional
+    public SprintSummaryDto createSprint(Long projectId, String name, String startDate, String endDate, String goal, Long requesterUserId) {
+        validateProjectMember(projectId, requesterUserId);
+        String email = getRequesterEmail(requesterUserId);
+        LocalDate start = parseLocalDate(startDate);
+        LocalDate end = parseLocalDate(endDate);
+        CreateSprintRequest request = new CreateSprintRequest(name, goal, start, end);
+        return toSprintSummary(sprintService.createSprint(projectId, request, email));
+    }
+
+    @Override
+    @Transactional
+    public SprintSummaryDto startSprint(Long projectId, Long sprintId, Long requesterUserId) {
+        validateProjectMember(projectId, requesterUserId);
+        String email = getRequesterEmail(requesterUserId);
+        return toSprintSummary(sprintService.startSprint(projectId, sprintId, email));
+    }
+
+    @Override
+    @Transactional
+    public SprintSummaryDto completeSprint(Long projectId, Long sprintId, Long requesterUserId) {
+        validateProjectMember(projectId, requesterUserId);
+        String email = getRequesterEmail(requesterUserId);
+        return toSprintSummary(sprintService.completeSprint(projectId, sprintId, email));
+    }
+
+    @Override
+    @Transactional
+    public Object assignTaskToSprint(Long taskId, Long sprintId, Long requesterUserId) {
+        TaskEntity task = findTask(taskId);
+        validateProjectMember(task.getProjectId(), requesterUserId);
+        String email = getRequesterEmail(requesterUserId);
+        UpdateTaskSprintRequest request = new UpdateTaskSprintRequest(sprintId);
+        return taskService.updateTaskSprint(taskId, request, email);
+    }
+
+    private String getRequesterEmail(Long requesterUserId) {
+        return userPort.findById(requesterUserId)
+                .map(UserProfileDto::email)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
+    }
+
+    private LocalDate parseLocalDate(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(value.trim());
+        } catch (DateTimeParseException ex) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                    "Invalid date. Use YYYY-MM-DD");
+        }
+    }
+
     private TaskEntity findTask(Long taskId) {
         return taskRepository.findById(taskId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found"));
@@ -372,6 +449,18 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
                 sprint.getStartDate() != null ? sprint.getStartDate().toString() : null,
                 sprint.getEndDate() != null ? sprint.getEndDate().toString() : null,
                 sprint.getHeuristicMode() != null ? sprint.getHeuristicMode().name() : null);
+    }
+
+    private SprintSummaryDto toSprintSummary(com.taskpilot.projects.sprints.dto.SprintDto sprint) {
+        return new SprintSummaryDto(
+                sprint.id(),
+                sprint.projectId(),
+                sprint.name(),
+                sprint.goal(),
+                sprint.status() != null ? sprint.status().name() : null,
+                sprint.startDate() != null ? sprint.startDate().toString() : null,
+                sprint.endDate() != null ? sprint.endDate().toString() : null,
+                null);
     }
 
     private MemberWorkloadDto toMemberWorkload(Long memberId, List<TaskEntity> assignedTasks) {
