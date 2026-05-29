@@ -434,7 +434,7 @@ class TaskCommentServiceTest {
 
     private List<UserProfileLiteDto> profiles(Set<Long> userIds) {
         return userIds.stream()
-                .map(userId -> new UserProfileLiteDto(userId, "User " + userId))
+                .map(userId -> new UserProfileLiteDto(userId, "User " + userId, null))
                 .toList();
     }
 

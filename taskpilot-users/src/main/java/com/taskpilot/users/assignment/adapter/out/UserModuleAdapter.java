@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
@@ -81,7 +82,7 @@ public class UserModuleAdapter
     @Override
     public Optional<UserProfileLiteDto> findLiteById(Long userId) {
         return userRepository.findById(userId)
-                .map(user -> new UserProfileLiteDto(user.getId(), user.getFullName()));
+                .map(user -> new UserProfileLiteDto(user.getId(), user.getFullName(), user.getAvatarUrl()));
     }
 
     @Override
@@ -90,8 +91,8 @@ public class UserModuleAdapter
             return List.of();
         }
         return userRepository.findAllById(userIds).stream()
-                .map(user -> new UserProfileLiteDto(user.getId(), user.getFullName()))
-                .toList();
+                .map(user -> new UserProfileLiteDto(user.getId(), user.getFullName(), user.getAvatarUrl()))
+                .collect(Collectors.toList());
     }
 
     @Override
@@ -102,8 +103,8 @@ public class UserModuleAdapter
         }
         int safeLimit = Math.max(1, Math.min(limit, 1000));
         return userRepository.findByKeyword(normalizedKeyword, PageRequest.of(0, safeLimit)).stream()
-                .map(user -> new UserProfileLiteDto(user.getId(), user.getFullName()))
-                .toList();
+                .map(user -> new UserProfileLiteDto(user.getId(), user.getFullName(), user.getAvatarUrl()))
+                .collect(Collectors.toList());
     }
 
     @Override

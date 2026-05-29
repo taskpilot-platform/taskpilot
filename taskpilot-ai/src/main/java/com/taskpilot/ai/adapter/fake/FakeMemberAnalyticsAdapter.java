@@ -14,13 +14,13 @@ import java.util.List;
 public class FakeMemberAnalyticsAdapter implements MemberAnalyticsPort {
 
     @Override
-    public List<MemberWorkloadDto> getMemberWorkloadForProject(Long projectId) {
+    public List<MemberWorkloadDto> getMemberWorkloadForProject(Long projectId, Long requesterUserId) {
         log.info("[FakeAdapter] getMemberWorkloadForProject called for projectId={}", projectId);
         return ScenarioFixtures.getMemberWorkloads(projectId);
     }
 
     @Override
-    public MemberWorkloadDto getMemberWorkload(Long memberId) {
+    public MemberWorkloadDto getMemberWorkload(Long memberId, Long requesterUserId) {
         log.info("[FakeAdapter] getMemberWorkload called for memberId={}", memberId);
         return ScenarioFixtures.getSingleMemberWorkload(memberId);
     }

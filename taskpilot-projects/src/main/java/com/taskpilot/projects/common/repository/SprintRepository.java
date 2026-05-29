@@ -13,6 +13,8 @@ import com.taskpilot.projects.common.entity.SprintEntity.SprintStatus;
 public interface SprintRepository extends JpaRepository<SprintEntity, Long> {
     List<SprintEntity> findByProjectIdOrderByStartDateAsc(Long projectId);
 
+    List<SprintEntity> findByProjectIdOrderByStartDateAscIdAsc(Long projectId);
+
     Optional<SprintEntity> findByProjectIdAndStatus(Long projectId, SprintStatus status);
 
     boolean existsByProjectIdAndStatus(Long projectId, SprintStatus status);

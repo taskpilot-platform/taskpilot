@@ -22,6 +22,15 @@ spring:
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:5}
+      minimum-idle: ${DB_POOL_MIN_IDLE:1}
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:10000}
+      validation-timeout: ${DB_VALIDATION_TIMEOUT_MS:5000}
+      idle-timeout: ${DB_IDLE_TIMEOUT_MS:300000}
+      max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
+      keepalive-time: ${DB_KEEPALIVE_TIME_MS:300000}
+      initialization-fail-timeout: ${DB_INITIALIZATION_FAIL_TIMEOUT_MS:0}
 
   jpa:
     open-in-view: false
@@ -65,7 +74,15 @@ springdoc:
 ai:
   gemini:
     api-key: ${GEMINI_API_KEY}
-    model-name: ${AI_GEMINI_MODEL:gemini-2.5-flash}
+    # Quality-first primary. Fallbacks prefer responsiveness after a 3s first-token timeout.
+    model-name: ${AI_GEMINI_MODEL:gemini-2.5-pro}
+    # Queue: primary -> high-quota/fast Lite -> stable Flash -> external fallback.
+    fallback1-model: ${AI_GEMINI_FALLBACK1_MODEL:gemini-2.5-flash}
+    fallback2-model: ${AI_GEMINI_FALLBACK2_MODEL:gemini-2.5-flash-lite}
+    fallback3-model: ${AI_GEMINI_FALLBACK3_MODEL:gemini-2.0-flash}
+    fallback4-model: ${AI_GEMINI_FALLBACK4_MODEL:gemini-1.5-pro}
+    waterfall-max-attempts: ${AI_GEMINI_WATERFALL_MAX_ATTEMPTS:3}
+    timeout-seconds: ${AI_GEMINI_TIMEOUT_SECONDS:20}
 
   github:
     token: ${GITHUB_TOKEN}
@@ -84,8 +101,9 @@ ai:
 
   routing:
     token-threshold: ${AI_TOKEN_THRESHOLD:6000}
-    reasoning-keywords: ${AI_REASONING_KEYWORDS:analyze,reason,strategy,architecture,tradeoff,root cause,plan,optimize,design,deep dive,phân tích,chiến lược,so sánh,vì sao,giải thích,lý do,đánh giá,lựa chọn,phân rã,bóc tách,lộ trình,breakdown,roadmap,rủi ro,trễ hạn,bế tắc,nguyên nhân,giải pháp,bottleneck,risk,quá tải,cân bằng,xung đột,kiến trúc,thiết kế hệ thống,database,tối ưu,architecture,system design,refactor}
-    tool-keywords: ${AI_TOOL_KEYWORDS:project status,workload,assign,candidates,task list,project progress,giao việc,tình trạng,tiến độ,danh sách task,công việc,ứng viên,giao task,gánh bug,chia việc,tạo task}
+    reasoning-keywords: ${AI_REASONING_KEYWORDS:analyze,reason,strategy,architecture,tradeoff,root cause,plan,optimize,design,deep dive,phan tich,chien luoc,so sanh,vi sao,giai thich,ly do,danh gia,lua chon,phan ra,boc tach,lo trinh,breakdown,roadmap,rui ro,tre han,be tac,nguyen nhan,giai phap,bottleneck,risk,qua tai,can bang,xung dot,kien truc,thiet ke he thong,database,toi uu,system design,refactor}
+    tool-keywords: ${AI_TOOL_KEYWORDS:project status,workload,assign,candidates,task list,project progress,my projects,project list,unassigned,not assigned,confirm,confirm_action,apply,xac nhan,dong y,thuc hien,du an,liet ke project,liet ke du an,chua phan cong,chua duoc phan cong,task chua gan,giao viec,tinh trang,tien do,danh sach task,cong viec,ung vien,giao task,gan task,chia viec,tao task}
+    ahp-fallback-keywords: ${AI_AHP_FALLBACK_KEYWORDS:phan cong,giao viec,chia viec,chon ai,chon nguoi,tim nguoi,ai ranh,ung vien,assign,candidate,workload,chia task}
 
   heuristic:
     cache-ttl-seconds: ${AI_HEURISTIC_CACHE_TTL:60}
@@ -93,6 +111,11 @@ ai:
   chat:
     history-size: ${AI_HISTORY_SIZE:10}
     memory-max-tokens: ${AI_MEMORY_MAX_TOKENS:7000}
+    context-tail-messages: ${AI_CONTEXT_TAIL_MESSAGES:6}
+    compact-summary-max-chars: ${AI_COMPACT_SUMMARY_MAX_CHARS:3000}
+    compact-message-max-chars: ${AI_COMPACT_MESSAGE_MAX_CHARS:600}
+    max-tool-result-memory-chars: ${AI_MAX_TOOL_RESULT_MEMORY_CHARS:12000}
+    stream-first-response-timeout-seconds: ${AI_STREAM_FIRST_RESPONSE_TIMEOUT_SECONDS:3}
     max-user-input-chars: ${AI_MAX_USER_INPUT_CHARS:1500}
     max-user-input-tokens: ${AI_MAX_USER_INPUT_TOKENS:2500}
     max-output-tokens: ${AI_MAX_OUTPUT_TOKENS:3500}
@@ -101,3 +124,12 @@ ai:
 onesignal:
   app-id: ${ONESIGNAL_APP_ID:}
   api-key: ${ONESIGNAL_REST_API_KEY:}
+
+supabase:
+  s3:
+    endpoint: ${SUPABASE_S3_ENDPOINT:https://xxxx.supabase.co/storage/v1/s3}
+    access-key: ${SUPABASE_S3_ACCESS_KEY:key}
+    secret-key: ${SUPABASE_S3_SECRET_KEY:secret}
+    region: ${SUPABASE_S3_REGION:ap-southeast-1}
+    bucket: ${SUPABASE_S3_BUCKET:avatars}
+    public-url: ${SUPABASE_S3_PUBLIC_URL:https://xxxx.supabase.co/storage/v1/object/public/avatars}

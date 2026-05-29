@@ -7,8 +7,8 @@ import dev.langchain4j.model.googleai.GoogleAiGeminiStreamingChatModel;
 import dev.langchain4j.model.openaiofficial.OpenAiOfficialChatModel;
 import dev.langchain4j.model.openaiofficial.OpenAiOfficialStreamingChatModel;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -25,8 +25,21 @@ public class AiModelConfig {
         @Value("${ai.github.token}")
         private String githubToken;
 
-        @Value("${ai.gemini.model-name:gemini-2.5-flash}")
+        @Value("${ai.gemini.model-name:gemini-3.5-flash}")
         private String geminiModelName;
+
+        // Fallbacks are ordered for responsiveness after the quality-first primary model.
+        @Value("${ai.gemini.fallback1-model:gemini-3.1-flash-lite}")
+        private String geminiFallback1ModelName;
+
+        @Value("${ai.gemini.fallback2-model:gemini-2.5-flash-lite}")
+        private String geminiFallback2ModelName;
+
+        @Value("${ai.gemini.fallback3-model:gemini-2.5-flash}")
+        private String geminiFallback3ModelName;
+
+        @Value("${ai.gemini.fallback4-model:gemini-3-flash}")
+        private String geminiFallback4ModelName;
 
         @Value("${ai.github.fallback-model:gpt-4o}")
         private String fallbackModelName;
@@ -49,16 +62,47 @@ public class AiModelConfig {
         @Value("${ai.model.timeout-seconds:60}")
         private int timeoutSeconds;
 
+        @Value("${ai.gemini.timeout-seconds:20}")
+        private int geminiTimeoutSeconds;
+
         @Primary
         @Bean("geminiFlashModel")
         public StreamingChatModel geminiFlashModel() {
-                log.info("[AI Config] Initializing PRIMARY model: {} (GoogleAiGemini)", geminiModelName);
+                log.info("[AI Config] Initializing PRIMARY Gemini model: {} (GoogleAiGemini)", geminiModelName);
+                return geminiStreamingModel(geminiModelName);
+        }
+
+        @Bean("geminiFallback1Model")
+        public StreamingChatModel geminiFallback1Model() {
+                log.info("[AI Config] Initializing Gemini fallback-1: {}", geminiFallback1ModelName);
+                return geminiStreamingModel(geminiFallback1ModelName);
+        }
+
+        @Bean("geminiFallback2Model")
+        public StreamingChatModel geminiFallback2Model() {
+                log.info("[AI Config] Initializing Gemini fallback-2: {}", geminiFallback2ModelName);
+                return geminiStreamingModel(geminiFallback2ModelName);
+        }
+
+        @Bean("geminiFallback3Model")
+        public StreamingChatModel geminiFallback3Model() {
+                log.info("[AI Config] Initializing Gemini fallback-3: {}", geminiFallback3ModelName);
+                return geminiStreamingModel(geminiFallback3ModelName);
+        }
+
+        @Bean("geminiFallback4Model")
+        public StreamingChatModel geminiFallback4Model() {
+                log.info("[AI Config] Initializing Gemini fallback-4: {}", geminiFallback4ModelName);
+                return geminiStreamingModel(geminiFallback4ModelName);
+        }
+
+        private StreamingChatModel geminiStreamingModel(String modelName) {
                 return GoogleAiGeminiStreamingChatModel.builder()
                                 .apiKey(geminiApiKey)
-                                .modelName(geminiModelName)
+                                .modelName(modelName)
                                 .toolConfig(GeminiMode.AUTO)
                                 .temperature(0.3)
-                                .timeout(Duration.ofSeconds(timeoutSeconds))
+                                .timeout(Duration.ofSeconds(geminiTimeoutSeconds))
                                 .build();
         }
 

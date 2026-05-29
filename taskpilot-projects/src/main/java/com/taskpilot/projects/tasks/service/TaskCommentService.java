@@ -371,7 +371,7 @@ public class TaskCommentService implements TaskCommentQueryPort {
                     ProjectEntity project = task == null ? null : projectsById.get(task.getProjectId());
                     boolean deleted = isDeleted(comment);
                     UserProfileLiteDto author = profilesById.getOrDefault(comment.getUserId(),
-                            new UserProfileLiteDto(comment.getUserId(), "Unknown User"));
+                            new UserProfileLiteDto(comment.getUserId(), "Unknown User", null));
                     List<UserProfileLiteDto> mentions = deleted ? List.of()
                             : mentionIdsByComment.getOrDefault(comment.getId(), List.of())
                                     .stream()
@@ -418,7 +418,7 @@ public class TaskCommentService implements TaskCommentQueryPort {
         return comments.stream()
                 .map(comment -> {
                     UserProfileLiteDto author = profilesById.getOrDefault(comment.getUserId(),
-                            new UserProfileLiteDto(comment.getUserId(), "Unknown User"));
+                            new UserProfileLiteDto(comment.getUserId(), "Unknown User", null));
                     List<UserProfileLiteDto> mentions = mentionIdsByComment
                             .getOrDefault(comment.getId(), List.of())
                             .stream()

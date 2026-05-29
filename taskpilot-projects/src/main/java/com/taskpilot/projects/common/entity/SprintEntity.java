@@ -52,6 +52,11 @@ public class SprintEntity {
     @Column(name = "end_date")
     private LocalDate endDate;
 
+    @JdbcTypeCode(SqlTypes.NAMED_ENUM)
+    @Enumerated(EnumType.STRING)
+    @Column(name = "heuristic_mode")
+    private ProjectEntity.HeuristicMode heuristicMode;
+
     public enum SprintStatus {
         PLANNING, ACTIVE, COMPLETED
     }
