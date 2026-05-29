@@ -8,6 +8,8 @@ import com.taskpilot.users.profile.dto.UserProfileResponse;
 import com.taskpilot.users.repository.UserRepository;
 import com.taskpilot.users.auth.service.RefreshTokenService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.web.multipart.MultipartFile;
+import com.taskpilot.infrastructure.storage.StorageService;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -20,6 +22,7 @@ public class ProfileService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final RefreshTokenService refreshTokenService;
+    private final StorageService storageService;
 
     private UserEntity getCurrentUser() {
         String email = SecurityContextHolder.getContext().getAuthentication().getName();
@@ -40,6 +43,25 @@ public class ProfileService {
         }
         userRepository.save(user);
         return getProfile();
+    }
+
+    public UserProfileResponse uploadAvatar(MultipartFile file) {
+        if (file.isEmpty() || file.getSize() > 1_000_000) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "File must be non-empty and max 1MB");
+        }
+        String contentType = file.getContentType();
+        if (contentType == null || !contentType.startsWith("image/")) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "File must be an image");
+        }
+        try {
+            String avatarUrl = storageService.uploadFile(file, "avatars");
+            UserEntity user = getCurrentUser();
+            user.setAvatarUrl(avatarUrl);
+            userRepository.save(user);
+            return getProfile();
+        } catch (Exception e) {
+            throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR.value(), "Failed to upload avatar: " + e.getMessage());
+        }
     }
 
     public void changePassword(ChangePasswordRequest request) {

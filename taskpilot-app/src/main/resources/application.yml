@@ -75,12 +75,12 @@ ai:
   gemini:
     api-key: ${GEMINI_API_KEY}
     # Quality-first primary. Fallbacks prefer responsiveness after a 3s first-token timeout.
-    model-name: ${AI_GEMINI_MODEL:gemini-3.5-flash}
+    model-name: ${AI_GEMINI_MODEL:gemini-2.5-pro}
     # Queue: primary -> high-quota/fast Lite -> stable Flash -> external fallback.
-    fallback1-model: ${AI_GEMINI_FALLBACK1_MODEL:gemini-3.1-flash-lite}
+    fallback1-model: ${AI_GEMINI_FALLBACK1_MODEL:gemini-2.5-flash}
     fallback2-model: ${AI_GEMINI_FALLBACK2_MODEL:gemini-2.5-flash-lite}
-    fallback3-model: ${AI_GEMINI_FALLBACK3_MODEL:gemini-2.5-flash}
-    fallback4-model: ${AI_GEMINI_FALLBACK4_MODEL:gemini-3-flash}
+    fallback3-model: ${AI_GEMINI_FALLBACK3_MODEL:gemini-2.0-flash}
+    fallback4-model: ${AI_GEMINI_FALLBACK4_MODEL:gemini-1.5-pro}
     waterfall-max-attempts: ${AI_GEMINI_WATERFALL_MAX_ATTEMPTS:3}
     timeout-seconds: ${AI_GEMINI_TIMEOUT_SECONDS:20}
 
@@ -124,3 +124,12 @@ ai:
 onesignal:
   app-id: ${ONESIGNAL_APP_ID:}
   api-key: ${ONESIGNAL_REST_API_KEY:}
+
+supabase:
+  s3:
+    endpoint: ${SUPABASE_S3_ENDPOINT:https://xxxx.supabase.co/storage/v1/s3}
+    access-key: ${SUPABASE_S3_ACCESS_KEY:key}
+    secret-key: ${SUPABASE_S3_SECRET_KEY:secret}
+    region: ${SUPABASE_S3_REGION:ap-southeast-1}
+    bucket: ${SUPABASE_S3_BUCKET:avatars}
+    public-url: ${SUPABASE_S3_PUBLIC_URL:https://xxxx.supabase.co/storage/v1/object/public/avatars}

@@ -11,6 +11,8 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+import org.springframework.http.MediaType;
 
 @Tag(name = "02. User Profile", description = "APIs for managing user profile")
 @RestController
@@ -32,6 +34,13 @@ public class ProfileController {
     public ApiResponse<UserProfileResponse> updateProfile(@Valid @RequestBody UpdateProfileRequest request) {
         return ApiResponse.success(HttpStatus.OK.value(), "Profile updated successfully",
                 profileService.updateProfile(request));
+    }
+
+    @Operation(summary = "Upload Avatar", description = "Upload a new avatar image (max 1MB).")
+    @PostMapping(value = "/avatar", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ApiResponse<UserProfileResponse> uploadAvatar(@RequestParam("file") MultipartFile file) {
+        return ApiResponse.success(HttpStatus.OK.value(), "Avatar uploaded successfully",
+                profileService.uploadAvatar(file));
     }
 
     @Operation(summary = "Change Password", description = "Change the password for the current user.")
