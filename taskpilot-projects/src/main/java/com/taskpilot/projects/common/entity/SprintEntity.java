@@ -56,6 +56,7 @@ public class SprintEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "heuristic_mode")
     private ProjectEntity.HeuristicMode heuristicMode;
+
     public enum SprintStatus {
         PLANNING, ACTIVE, COMPLETED
     }
