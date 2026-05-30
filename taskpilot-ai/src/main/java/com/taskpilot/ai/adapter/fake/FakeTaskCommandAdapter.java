@@ -44,6 +44,13 @@ public class FakeTaskCommandAdapter implements TaskCommandPort {
     }
 
     @Override
+    public TaskSummaryDto updateTaskRequiredSkills(Long taskId, String skills, Long requesterUserId) {
+        log.info("[FakeAdapter] updateTaskRequiredSkills called for taskId={} skills={}", taskId, skills);
+        return new TaskSummaryDto(taskId, 1L, null, null, "Sample task", null, "TODO", "MEDIUM",
+                3, null, null, null, null, null);
+    }
+
+    @Override
     public TaskAssignmentResultDto assignTaskToMember(Long taskId, Long memberId, String reason, Long requesterUserId,
             boolean simulate) {
         log.info("[FakeAdapter] assignTaskToMember called. taskId={}, memberId={}, simulate={}", taskId, memberId, simulate);

@@ -33,6 +33,7 @@ import com.taskpilot.contracts.aiquery.port.out.ProjectInsightsPort;
 import com.taskpilot.contracts.aiquery.port.out.SprintQueryPort;
 import com.taskpilot.contracts.aiquery.port.out.TaskCommandPort;
 import com.taskpilot.contracts.aiquery.port.out.TaskCommentQueryPort;
+import com.taskpilot.contracts.skill.port.out.SkillPort;
 
 @ExtendWith(MockitoExtension.class)
 class TaskPilotAiToolsHumanInLoopTest {
@@ -61,6 +62,9 @@ class TaskPilotAiToolsHumanInLoopTest {
     @Mock
     private SprintQueryPort sprintQueryPort;
 
+    @Mock
+    private SkillPort skillPort;
+
     private TaskPilotAiTools tools;
 
     @BeforeEach
@@ -73,6 +77,7 @@ class TaskPilotAiToolsHumanInLoopTest {
                 taskCommandPort,
                 taskCommentQueryPort,
                 sprintQueryPort,
+                skillPort,
                 new PendingAiActionService());
         ToolExecutionContext.set(new ToolExecutionContext.Context(USER_ID, SESSION_ID, "initial request"));
     }
@@ -142,6 +147,52 @@ class TaskPilotAiToolsHumanInLoopTest {
 
         assertEquals(updated, confirm(pending.actionId()));
         verify(taskCommandPort).updateTaskStatus(75L, "IN_PROGRESS", USER_ID);
+    }
+
+    @Test
+    void updateTaskRequiredSkillsWaitsForHumanConfirmationBeforeWriting() {
+        TaskSummaryDto updated = task(75L, "TODO");
+        when(taskCommandPort.updateTaskRequiredSkills(75L, "Java", USER_ID)).thenReturn(updated);
+
+        ConfirmationRequiredDto pending = assertPending(tools.updateTaskRequiredSkills(75L, "Java"),
+                "updateTaskRequiredSkills");
+
+        verify(taskCommandPort, never()).updateTaskRequiredSkills(any(), any(), any());
+
+        assertEquals(updated, confirm(pending.actionId()));
+        verify(taskCommandPort).updateTaskRequiredSkills(75L, "Java", USER_ID);
+    }
+
+    @Test
+    void recommendAndAssignTaskPersistsProvidedSkillsWhenTaskHasNone() {
+        when(taskCommandPort.getTaskDetails(76L, USER_ID))
+                .thenReturn(new TaskDetailDto(76L, 8L, "Test task", "", "TODO", "MEDIUM", 5,
+                        "", null, null, null));
+        when(autoAssignmentService.recommendCandidates(8L, List.of("Java"), 5, USER_ID))
+                .thenReturn(AutoAssignmentResponse.builder()
+                        .projectId(8L)
+                        .requiredSkills(List.of("Java"))
+                        .candidates(List.of(CandidateScore.builder()
+                                .userId(16L)
+                                .fullName("Admin")
+                                .totalScore(0.9)
+                                .build()))
+                        .build());
+        when(taskCommandPort.assignTaskToMember(eq(76L), eq(16L), any(), eq(USER_ID), eq(false)))
+                .thenReturn(TaskAssignmentResultDto.success(76L, 16L, "selected"));
+
+        ConfirmationRequiredDto pending = assertPending(
+                tools.recommendAndAssignTask(76L, null, "Java", 5, null),
+                "recommendAndAssignTask");
+
+        verify(taskCommandPort, never()).updateTaskRequiredSkills(any(), any(), any());
+        verify(taskCommandPort, never()).assignTaskToMember(eq(76L), eq(16L), any(), eq(USER_ID), eq(false));
+
+        Object result = confirm(pending.actionId());
+
+        assertTrue(result.toString().contains("selectedMemberName=Admin"));
+        verify(taskCommandPort).updateTaskRequiredSkills(76L, "Java", USER_ID);
+        verify(taskCommandPort).assignTaskToMember(eq(76L), eq(16L), any(), eq(USER_ID), eq(false));
     }
 
     @Test

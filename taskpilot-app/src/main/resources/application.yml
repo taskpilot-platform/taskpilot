@@ -74,14 +74,18 @@ springdoc:
 ai:
   gemini:
     api-key: ${GEMINI_API_KEY}
-    # Quality-first primary. Fallbacks prefer responsiveness after a 3s first-token timeout.
-    model-name: ${AI_GEMINI_MODEL:gemini-2.5-pro}
-    # Queue: primary -> high-quota/fast Lite -> stable Flash -> external fallback.
+    # Quality-first primary. Fallbacks prefer models that currently have text-out quota.
+    model-name: ${AI_GEMINI_MODEL:gemini-3.5-flash}
+    # Queue: primary -> callable text-out fallbacks -> quota-limited fallbacks -> external fallback.
     fallback1-model: ${AI_GEMINI_FALLBACK1_MODEL:gemini-2.5-flash}
-    fallback2-model: ${AI_GEMINI_FALLBACK2_MODEL:gemini-2.5-flash-lite}
-    fallback3-model: ${AI_GEMINI_FALLBACK3_MODEL:gemini-2.0-flash}
-    fallback4-model: ${AI_GEMINI_FALLBACK4_MODEL:gemini-1.5-pro}
-    waterfall-max-attempts: ${AI_GEMINI_WATERFALL_MAX_ATTEMPTS:3}
+    fallback2-model: ${AI_GEMINI_FALLBACK2_MODEL:gemini-3.1-flash-lite}
+    fallback3-model: ${AI_GEMINI_FALLBACK3_MODEL:gemini-2.5-flash-lite}
+    fallback4-model: ${AI_GEMINI_FALLBACK4_MODEL:gemini-2.5-pro}
+    fallback5-model: ${AI_GEMINI_FALLBACK5_MODEL:gemini-2.0-flash}
+    fallback6-model: ${AI_GEMINI_FALLBACK6_MODEL:gemini-2.0-flash-lite}
+    fallback7-model: ${AI_GEMINI_FALLBACK7_MODEL:gemini-3.1-pro-preview}
+    waterfall-max-attempts: ${AI_GEMINI_WATERFALL_MAX_ATTEMPTS:4}
+    use-for-tools: ${AI_GEMINI_USE_FOR_TOOLS:false}
     timeout-seconds: ${AI_GEMINI_TIMEOUT_SECONDS:20}
 
   github:
@@ -115,7 +119,8 @@ ai:
     compact-summary-max-chars: ${AI_COMPACT_SUMMARY_MAX_CHARS:3000}
     compact-message-max-chars: ${AI_COMPACT_MESSAGE_MAX_CHARS:600}
     max-tool-result-memory-chars: ${AI_MAX_TOOL_RESULT_MEMORY_CHARS:12000}
-    stream-first-response-timeout-seconds: ${AI_STREAM_FIRST_RESPONSE_TIMEOUT_SECONDS:3}
+    stream-first-response-timeout-seconds: ${AI_STREAM_FIRST_RESPONSE_TIMEOUT_SECONDS:10}
+    text-only-first-response-timeout-seconds: ${AI_TEXT_ONLY_FIRST_RESPONSE_TIMEOUT_SECONDS:10}
     max-user-input-chars: ${AI_MAX_USER_INPUT_CHARS:1500}
     max-user-input-tokens: ${AI_MAX_USER_INPUT_TOKENS:2500}
     max-output-tokens: ${AI_MAX_OUTPUT_TOKENS:3500}

@@ -2,7 +2,9 @@ package com.taskpilot.projects.projects.service;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -13,8 +15,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.taskpilot.contracts.assignment.port.out.UserPort;
+import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
 import com.taskpilot.contracts.user.port.out.NotificationPort;
 import com.taskpilot.contracts.user.port.out.UserIdentityPort;
+import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
@@ -46,6 +50,7 @@ public class ProjectServiceImpl {
     private final UserPort userPort;
     private final NotificationPort notificationPort;
     private final TaskRepository taskRepository;
+    private final UserProfilePort userProfilePort;
 
     // ==================== PROJECT CRUD ====================
     /**
@@ -380,8 +385,26 @@ public class ProjectServiceImpl {
         findProjectById(projectId);
         validateUserIsMember(projectId, userId);
 
-        return projectMemberRepository.findMembers(projectId).stream()
-                .map(ProjectMemberResponse::fromEntity)
+        List<ProjectMemberEntity> members = projectMemberRepository.findMembers(projectId);
+
+        // Batch lookup user profiles for efficiency
+        Set<Long> userIds = members.stream()
+                .map(ProjectMemberEntity::getUserId)
+                .collect(Collectors.toSet());
+        Map<Long, UserProfileLiteDto> profileMap = userProfilePort.findLiteByIds(userIds).stream()
+                .collect(Collectors.toMap(UserProfileLiteDto::id, p -> p));
+
+        return members.stream()
+                .map(member -> {
+                    var liteProfile = profileMap.get(member.getUserId());
+                    var fullProfile = userPort.findById(member.getUserId()).orElse(null);
+                    return ProjectMemberResponse.fromEntityWithProfile(
+                            member,
+                            liteProfile != null ? liteProfile.fullName() : null,
+                            fullProfile != null ? fullProfile.email() : null,
+                            liteProfile != null ? liteProfile.avatarUrl() : null
+                    );
+                })
                 .toList();
     }
 

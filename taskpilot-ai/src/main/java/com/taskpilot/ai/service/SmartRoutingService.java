@@ -24,6 +24,9 @@ public class SmartRoutingService {
     private final StreamingChatModel geminiFallback2Model;
     private final StreamingChatModel geminiFallback3Model;
     private final StreamingChatModel geminiFallback4Model;
+    private final StreamingChatModel geminiFallback5Model;
+    private final StreamingChatModel geminiFallback6Model;
+    private final StreamingChatModel geminiFallback7Model;
 
     private final StreamingChatModel gpt4oFallbackModel;
     private final StreamingChatModel deepSeekReasoningModel;
@@ -39,20 +42,32 @@ public class SmartRoutingService {
     @Value("${ai.gemini.model-name:gemini-3.5-flash}")
     private String geminiModelName;
 
-    @Value("${ai.gemini.fallback1-model:gemini-3.1-flash-lite}")
+    @Value("${ai.gemini.fallback1-model:gemini-2.5-flash}")
     private String geminiFallback1ModelName;
 
-    @Value("${ai.gemini.fallback2-model:gemini-2.5-flash-lite}")
+    @Value("${ai.gemini.fallback2-model:gemini-3.1-flash-lite}")
     private String geminiFallback2ModelName;
 
-    @Value("${ai.gemini.fallback3-model:gemini-2.5-flash}")
+    @Value("${ai.gemini.fallback3-model:gemini-2.5-flash-lite}")
     private String geminiFallback3ModelName;
 
-    @Value("${ai.gemini.fallback4-model:gemini-3-flash}")
+    @Value("${ai.gemini.fallback4-model:gemini-2.5-pro}")
     private String geminiFallback4ModelName;
 
-    @Value("${ai.gemini.waterfall-max-attempts:3}")
+    @Value("${ai.gemini.fallback5-model:gemini-2.0-flash}")
+    private String geminiFallback5ModelName;
+
+    @Value("${ai.gemini.fallback6-model:gemini-2.0-flash-lite}")
+    private String geminiFallback6ModelName;
+
+    @Value("${ai.gemini.fallback7-model:gemini-3.1-pro-preview}")
+    private String geminiFallback7ModelName;
+
+    @Value("${ai.gemini.waterfall-max-attempts:4}")
     private int geminiWaterfallMaxAttempts;
+
+    @Value("${ai.gemini.use-for-tools:false}")
+    private boolean useGeminiForTools;
 
     @Value("${ai.github.fallback-model:gpt-4o}")
     private String fallbackModelName;
@@ -81,6 +96,9 @@ public class SmartRoutingService {
             @Qualifier("geminiFallback2Model") StreamingChatModel geminiFallback2Model,
             @Qualifier("geminiFallback3Model") StreamingChatModel geminiFallback3Model,
             @Qualifier("geminiFallback4Model") StreamingChatModel geminiFallback4Model,
+            @Qualifier("geminiFallback5Model") StreamingChatModel geminiFallback5Model,
+            @Qualifier("geminiFallback6Model") StreamingChatModel geminiFallback6Model,
+            @Qualifier("geminiFallback7Model") StreamingChatModel geminiFallback7Model,
             @Qualifier("gpt4oFallbackModel") StreamingChatModel gpt4oFallbackModel,
             @Qualifier("deepSeekReasoningModel") StreamingChatModel deepSeekReasoningModel,
             @Qualifier("groqOssReasoningModel") @Nullable StreamingChatModel groqOssReasoningModel,
@@ -94,6 +112,9 @@ public class SmartRoutingService {
         this.geminiFallback2Model = geminiFallback2Model;
         this.geminiFallback3Model = geminiFallback3Model;
         this.geminiFallback4Model = geminiFallback4Model;
+        this.geminiFallback5Model = geminiFallback5Model;
+        this.geminiFallback6Model = geminiFallback6Model;
+        this.geminiFallback7Model = geminiFallback7Model;
         this.gpt4oFallbackModel = gpt4oFallbackModel;
         this.deepSeekReasoningModel = deepSeekReasoningModel;
         this.groqOssReasoningModel = groqOssReasoningModel;
@@ -113,7 +134,8 @@ public class SmartRoutingService {
 
     public RoutingDecision route(String userMessage, String contextHistory) {
         String normalized = normalize(userMessage);
-        boolean directAssignmentExecution = isDirectAssignmentExecution(normalized);
+        String normalizedContext = normalize(contextHistory);
+        boolean directAssignmentExecution = isDirectAssignmentExecution(normalized, normalizedContext);
         boolean pendingActionConfirmation = isPendingActionConfirmation(normalized);
         boolean requiresAHP = directAssignmentExecution || pendingActionConfirmation ? false : resolveRequiresAHP(userMessage);
 
@@ -139,6 +161,11 @@ public class SmartRoutingService {
         }
 
         if (likelyNeedsTools) {
+            if (!useGeminiForTools) {
+                log.info("[SmartRouting] Routing tool workflow directly to fallback model ({}) - Gemini tool streaming disabled",
+                        fallbackModelName);
+                return new RoutingDecision(gpt4oFallbackModel, fallbackModelName, false);
+            }
             log.info("[SmartRouting] Routing to TOOL-FRIENDLY model ({}) - tokens: {}",
                     geminiModelName, estimatedTokens);
             return new RoutingDecision(geminiPrimaryModel, geminiModelName, false);
@@ -148,19 +175,23 @@ public class SmartRoutingService {
         return new RoutingDecision(gpt4oFallbackModel, fallbackModelName, false);
     }
 
-    private boolean isDirectAssignmentExecution(String normalized) {
+    private boolean isDirectAssignmentExecution(String normalized, String normalizedContext) {
         if (normalized == null || normalized.isBlank()) {
             return false;
         }
 
-        boolean hasAssignmentIntent = containsAny(normalized, List.of(
+        String combined = normalized + "\n" + (normalizedContext == null ? "" : normalizedContext);
+        boolean hasAssignmentIntent = containsAny(combined, List.of(
                 "phan cong", "giao task", "giao viec", "gan task", "gan viec", "gan luon",
-                "chia viec", "assign", "assignment", "assignee"));
+                "chia viec", "assign", "assignment", "assignee", "intent: assign_task"));
         boolean hasExecutionIntent = containsAny(normalized, List.of(
                 "thuc hien", "tien hanh", "ap dung", "lam di", "cap nhat", "xong gan",
                 "gan luon", "assign it", "immediately", "execute", "apply", "do it"));
+        boolean hasConcreteTask = normalized.matches("(?s).*\\btask\\s*\\d+\\b.*")
+                || normalized.matches("(?s).*\\btaskid\\s*[:#]?\\s*\\d+\\b.*")
+                || normalized.matches("(?s).*intent:\\s*assign_task_\\d+.*");
 
-        return hasAssignmentIntent && hasExecutionIntent;
+        return hasAssignmentIntent && (hasExecutionIntent || hasConcreteTask);
     }
 
     private boolean isPendingActionConfirmation(String normalized) {
@@ -206,11 +237,32 @@ public class SmartRoutingService {
             log.info("[SmartRouting] Gemini waterfall: {} -> {}", geminiFallback3ModelName, geminiFallback4ModelName);
             return geminiFallback4Model;
         }
-        return externalFallbackAfter(geminiFallback4ModelName);
+        if (currentModel == geminiFallback4Model) {
+            if (maxGeminiAttempts() <= 5) {
+                return externalFallbackAfter(geminiFallback4ModelName);
+            }
+            log.info("[SmartRouting] Gemini waterfall: {} -> {}", geminiFallback4ModelName, geminiFallback5ModelName);
+            return geminiFallback5Model;
+        }
+        if (currentModel == geminiFallback5Model) {
+            if (maxGeminiAttempts() <= 6) {
+                return externalFallbackAfter(geminiFallback5ModelName);
+            }
+            log.info("[SmartRouting] Gemini waterfall: {} -> {}", geminiFallback5ModelName, geminiFallback6ModelName);
+            return geminiFallback6Model;
+        }
+        if (currentModel == geminiFallback6Model) {
+            if (maxGeminiAttempts() <= 7) {
+                return externalFallbackAfter(geminiFallback6ModelName);
+            }
+            log.info("[SmartRouting] Gemini waterfall: {} -> {}", geminiFallback6ModelName, geminiFallback7ModelName);
+            return geminiFallback7Model;
+        }
+        return externalFallbackAfter(geminiFallback7ModelName);
     }
 
     private int maxGeminiAttempts() {
-        return Math.max(1, Math.min(5, geminiWaterfallMaxAttempts));
+        return Math.max(1, Math.min(8, geminiWaterfallMaxAttempts));
     }
 
     private StreamingChatModel externalFallbackAfter(String previousModelName) {
@@ -224,7 +276,10 @@ public class SmartRoutingService {
                 || model == geminiFallback1Model
                 || model == geminiFallback2Model
                 || model == geminiFallback3Model
-                || model == geminiFallback4Model;
+                || model == geminiFallback4Model
+                || model == geminiFallback5Model
+                || model == geminiFallback6Model
+                || model == geminiFallback7Model;
     }
 
     public StreamingChatModel getFallbackModel() {
@@ -272,6 +327,9 @@ public class SmartRoutingService {
         if (model == geminiFallback2Model) return geminiFallback2ModelName;
         if (model == geminiFallback3Model) return geminiFallback3ModelName;
         if (model == geminiFallback4Model) return geminiFallback4ModelName;
+        if (model == geminiFallback5Model) return geminiFallback5ModelName;
+        if (model == geminiFallback6Model) return geminiFallback6ModelName;
+        if (model == geminiFallback7Model) return geminiFallback7ModelName;
         if (model == gpt4oFallbackModel || model == gpt4oFallbackTextModel) return fallbackModelName;
         if (model == deepSeekReasoningModel || model == deepSeekReasoningTextModel) return deepSeekReasoningModelName;
         if (model == groqOssReasoningModel || model == groqOssReasoningTextModel) return groqReasoningModelName;

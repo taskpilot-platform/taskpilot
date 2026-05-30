@@ -11,6 +11,7 @@ public interface TaskCommandPort {
     List<TaskDetailDto> getUnassignedTasksByProject(Long projectId, Long requesterUserId);
     List<TaskSummaryDto> getSubtasks(Long parentTaskId, Long requesterUserId);
     TaskDetailDto getTaskDetails(Long taskId, Long requesterUserId);
+    TaskSummaryDto updateTaskRequiredSkills(Long taskId, String skills, Long requesterUserId);
     TaskAssignmentResultDto assignTaskToMember(Long taskId, Long memberId, String reason, Long requesterUserId,
             boolean simulate);
     TaskSummaryDto updateTaskStatus(Long taskId, String status, Long requesterUserId);
