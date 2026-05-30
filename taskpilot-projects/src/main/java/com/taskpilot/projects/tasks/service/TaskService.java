@@ -1,5 +1,6 @@
 package com.taskpilot.projects.tasks.service;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.stream.Collectors;
 import java.util.Map;
@@ -99,6 +100,13 @@ public class TaskService {
         }
     }
 
+    private void validateTaskDateRange(Instant startDate, Instant dueDate) {
+        if (startDate != null && dueDate != null && dueDate.isBefore(startDate)) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                    "Task due date cannot be earlier than start date");
+        }
+    }
+
     @Transactional(readOnly = true)
     public List<TaskDto> getTasksByProject(Long projectId, String email) {
         Long userId = getCurrentUserIdByEmail(email);
@@ -154,6 +162,7 @@ public class TaskService {
         Long userId = getCurrentUserIdByEmail(email);
         validateUserIsMember(request.projectId(), userId);
         validateProjectNotArchived(request.projectId());
+        validateTaskDateRange(request.startDate(), request.dueDate());
 
         if (request.parentId() != null) {
             TaskEntity parentTask = taskRepository.findById(request.parentId())
@@ -249,6 +258,11 @@ public class TaskService {
             notificationPort.sendSystemNotification(request.assigneeId(), "Task Assigned",
                     "You have been assigned to task: " + task.getTitle(),
                     "/tasks?taskId=" + task.getId());
+        }
+        if (request.startDate() != null || request.dueDate() != null) {
+            Instant nextStartDate = request.startDate() != null ? request.startDate() : task.getStartDate();
+            Instant nextDueDate = request.dueDate() != null ? request.dueDate() : task.getDueDate();
+            validateTaskDateRange(nextStartDate, nextDueDate);
         }
         if (request.startDate() != null)
             task.setStartDate(request.startDate());
