@@ -29,17 +29,26 @@ public class AiModelConfig {
         private String geminiModelName;
 
         // Fallbacks are ordered for responsiveness after the quality-first primary model.
-        @Value("${ai.gemini.fallback1-model:gemini-3.1-flash-lite}")
+        @Value("${ai.gemini.fallback1-model:gemini-2.5-flash}")
         private String geminiFallback1ModelName;
 
-        @Value("${ai.gemini.fallback2-model:gemini-2.5-flash-lite}")
+        @Value("${ai.gemini.fallback2-model:gemini-3.1-flash-lite}")
         private String geminiFallback2ModelName;
 
-        @Value("${ai.gemini.fallback3-model:gemini-2.5-flash}")
+        @Value("${ai.gemini.fallback3-model:gemini-2.5-flash-lite}")
         private String geminiFallback3ModelName;
 
-        @Value("${ai.gemini.fallback4-model:gemini-3-flash}")
+        @Value("${ai.gemini.fallback4-model:gemini-2.5-pro}")
         private String geminiFallback4ModelName;
+
+        @Value("${ai.gemini.fallback5-model:gemini-2.0-flash}")
+        private String geminiFallback5ModelName;
+
+        @Value("${ai.gemini.fallback6-model:gemini-2.0-flash-lite}")
+        private String geminiFallback6ModelName;
+
+        @Value("${ai.gemini.fallback7-model:gemini-3.1-pro-preview}")
+        private String geminiFallback7ModelName;
 
         @Value("${ai.github.fallback-model:gpt-4o}")
         private String fallbackModelName;
@@ -96,6 +105,24 @@ public class AiModelConfig {
                 return geminiStreamingModel(geminiFallback4ModelName);
         }
 
+        @Bean("geminiFallback5Model")
+        public StreamingChatModel geminiFallback5Model() {
+                log.info("[AI Config] Initializing Gemini fallback-5: {}", geminiFallback5ModelName);
+                return geminiStreamingModel(geminiFallback5ModelName);
+        }
+
+        @Bean("geminiFallback6Model")
+        public StreamingChatModel geminiFallback6Model() {
+                log.info("[AI Config] Initializing Gemini fallback-6: {}", geminiFallback6ModelName);
+                return geminiStreamingModel(geminiFallback6ModelName);
+        }
+
+        @Bean("geminiFallback7Model")
+        public StreamingChatModel geminiFallback7Model() {
+                log.info("[AI Config] Initializing Gemini fallback-7: {}", geminiFallback7ModelName);
+                return geminiStreamingModel(geminiFallback7ModelName);
+        }
+
         private StreamingChatModel geminiStreamingModel(String modelName) {
                 return GoogleAiGeminiStreamingChatModel.builder()
                                 .apiKey(geminiApiKey)
@@ -129,7 +156,6 @@ public class AiModelConfig {
                                 .modelName(fallbackModelName)
                                 .isGitHubModels(true)
                                 .temperature(0.3)
-                                .parallelToolCalls(false)
                                 .timeout(Duration.ofSeconds(timeoutSeconds))
                                 .build();
         }
@@ -157,7 +183,6 @@ public class AiModelConfig {
                                 .modelName(reasoningModelName)
                                 .isGitHubModels(true)
                                 .temperature(0.5)
-                                .parallelToolCalls(false)
                                 .timeout(Duration.ofSeconds(timeoutSeconds * 2))
                                 .build();
         }
@@ -195,7 +220,6 @@ public class AiModelConfig {
                                 .baseUrl(groqBaseUrl)
                                 .modelName(groqReasoningModelName)
                                 .temperature(0.4)
-                                .parallelToolCalls(false)
                                 .timeout(Duration.ofSeconds(timeoutSeconds * 2))
                                 .build();
         }

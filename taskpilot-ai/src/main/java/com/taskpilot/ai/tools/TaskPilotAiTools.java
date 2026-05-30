@@ -14,6 +14,8 @@ import com.taskpilot.contracts.aiquery.port.out.MemberAnalyticsPort;
 import com.taskpilot.contracts.aiquery.port.out.SprintQueryPort;
 import com.taskpilot.contracts.aiquery.port.out.TaskCommentQueryPort;
 import com.taskpilot.contracts.aiquery.port.out.TaskCommandPort;
+import com.taskpilot.contracts.skill.dto.SkillDto;
+import com.taskpilot.contracts.skill.port.out.SkillPort;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
@@ -42,6 +44,7 @@ public class TaskPilotAiTools {
     private final TaskCommandPort taskCommandPort;
     private final TaskCommentQueryPort taskCommentQueryPort;
     private final SprintQueryPort sprintQueryPort;
+    private final SkillPort skillPort;
     private final PendingAiActionService pendingAiActionService;
 
     @Tool("""
@@ -111,6 +114,18 @@ public class TaskPilotAiTools {
     }
 
     @Tool("""
+            Use this tool when you need the active system skill directory for a form, validation, or task assignment.
+            Provide a keyword to search, or an empty keyword to return the first active skills. Use the returned skill
+            names exactly when filling task required skills.
+            """)
+    public List<SkillDto> searchSystemSkills(
+            @P("Skill search keyword. Use empty string to list common active skills.") String keyword) {
+        String safeKeyword = keyword == null ? "" : keyword.trim();
+        log.info("[AiTool] searchSystemSkills called keyword='{}'", safeKeyword);
+        return skillPort.search(safeKeyword);
+    }
+
+    @Tool("""
             Use this tool when the user explicitly asks to assign a task to a member.
             Provide taskId, memberId, and a short reason. This tool performs the assignment.
             """)
@@ -155,6 +170,7 @@ public class TaskPilotAiTools {
         TaskDetailDto task = taskCommandPort.getTaskDetails(taskId, userId);
         Long resolvedProjectId = projectId != null ? projectId : task.projectId();
         String resolvedSkills = hasText(skills) ? skills : task.requiredSkills();
+        boolean shouldPersistProvidedSkills = hasText(skills) && !hasText(task.requiredSkills());
 
         if (!hasText(resolvedSkills)) {
             return new RecommendAndAssignResult(false, taskId, resolvedProjectId, null, null, reason,
@@ -190,11 +206,16 @@ public class TaskPilotAiTools {
                 userId,
                 sessionId,
                 "recommendAndAssignTask",
-                "Assign task " + taskId + " to " + selected.getFullName() + " (top recommended candidate)",
+                (shouldPersistProvidedSkills ? "Save required skills and assign task " : "Assign task ")
+                        + taskId + " to " + selected.getFullName() + " (top recommended candidate)",
                 args("taskId", taskId, "projectId", resolvedProjectId, "skills", resolvedSkills,
-                        "difficulty", resolvedDifficulty, "memberId", selected.getUserId(), "reason", safeReason),
+                        "difficulty", resolvedDifficulty, "memberId", selected.getUserId(), "reason", safeReason,
+                        "persistSkills", shouldPersistProvidedSkills),
                 preview,
                 () -> {
+                    if (shouldPersistProvidedSkills) {
+                        taskCommandPort.updateTaskRequiredSkills(taskId, resolvedSkills, userId);
+                    }
                     TaskAssignmentResultDto assignment = taskCommandPort.assignTaskToMember(
                             taskId,
                             selected.getUserId(),
@@ -205,6 +226,29 @@ public class TaskPilotAiTools {
                             selected.getFullName(), safeReason, recommendation, assignment,
                             "Task " + taskId + " assigned to " + selected.getFullName() + ".");
                 });
+    }
+
+    @Tool("""
+            Use this tool when the user provides or changes the required skills for a task.
+            Provide the task ID and comma-separated skill names exactly from the system skill directory.
+            This updates real task data and therefore returns a pending confirmation action.
+            If the user is filling a missing-skills assignment form, call this before assignment or use
+            recommendAndAssignTask with the provided skills so the confirmation can save skills and assign together.
+            """)
+    public Object updateTaskRequiredSkills(
+            @P("The ID of the task") Long taskId,
+            @P("Comma-separated active skill names from the system skill directory") String skills) {
+        log.info("[AiTool] updateTaskRequiredSkills called for task {} -> {}", taskId, skills);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "updateTaskRequiredSkills",
+                "Update required skills for task " + taskId + " to " + skills,
+                args("taskId", taskId, "skills", skills),
+                null,
+                () -> taskCommandPort.updateTaskRequiredSkills(taskId, skills, userId));
     }
 
     @Tool("""
@@ -325,7 +369,9 @@ public class TaskPilotAiTools {
 
     @Tool("""
             Use this tool to fetch all tasks belonging to a specific project.
-            Provide the project ID.
+            Provide the project ID. Do not use this when the user asks for tasks that are unassigned,
+            not assigned yet, "ch", "chua", "chưa", "ch dc", "ch đc", "chua duoc phan cong",
+            or "chưa được phân công"; use getUnassignedTasksByProject instead.
             """)
     public Object getTasksByProject(@P("The ID of the project") Long projectId) {
         log.info("[AiTool] getTasksByProject called for project {}", projectId);
@@ -335,7 +381,8 @@ public class TaskPilotAiTools {
 
     @Tool("""
             Use this tool when the user asks which tasks in a project are unassigned, not assigned yet,
-            "chua duoc phan cong", "task nao chua gan", or asks for work that still needs an owner.
+            "ch", "chua", "chưa", "ch dc", "ch đc", "chua duoc phan cong", "chưa được phân công",
+            "task nao chua gan", or asks for work that still needs an owner.
             Provide the project ID. It returns only tasks whose assignee is empty, with required skills and difficulty
             when available, so the assistant can ask only for missing fields.
             """)

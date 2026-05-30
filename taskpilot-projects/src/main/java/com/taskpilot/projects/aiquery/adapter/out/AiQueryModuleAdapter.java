@@ -44,7 +44,9 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
+import java.text.Normalizer;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -110,6 +112,29 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
         validateProjectMember(task.getProjectId(), requesterUserId);
 
         return toTaskDetail(task);
+    }
+
+    @Override
+    @Transactional
+    public TaskSummaryDto updateTaskRequiredSkills(Long taskId, String skills, Long requesterUserId) {
+        TaskEntity task = findTask(taskId);
+        validateProjectMember(task.getProjectId(), requesterUserId);
+        validateProjectNotArchived(task.getProjectId());
+
+        List<Long> skillIds = resolveSkillIdsByNames(skills);
+        taskRequiredSkillRepository.deleteByTaskId(task.getId());
+        if (!skillIds.isEmpty()) {
+            List<TaskRequiredSkillEntity> taskSkills = skillIds.stream()
+                    .map(skillId -> TaskRequiredSkillEntity.builder()
+                            .id(new TaskRequiredSkillEntity.TaskRequiredSkillId(task.getId(), skillId))
+                            .taskId(task.getId())
+                            .skillId(skillId)
+                            .build())
+                    .toList();
+            taskRequiredSkillRepository.saveAll(taskSkills);
+        }
+
+        return toTaskSummary(task);
     }
 
     @Override
@@ -481,6 +506,41 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
         return skillPort.findByIds(skillIds).stream()
                 .map(SkillDto::name)
                 .collect(Collectors.joining(", "));
+    }
+
+    private List<Long> resolveSkillIdsByNames(String skills) {
+        if (skills == null || skills.isBlank()) {
+            return List.of();
+        }
+
+        Set<String> requestedNames = java.util.Arrays.stream(skills.split(","))
+                .map(String::trim)
+                .filter(name -> !name.isBlank())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        return requestedNames.stream()
+                .map(this::resolveSkillIdByName)
+                .toList();
+    }
+
+    private Long resolveSkillIdByName(String skillName) {
+        String normalizedName = normalizeSkillName(skillName);
+        return skillPort.search(skillName).stream()
+                .filter(skill -> normalizeSkillName(skill.name()).equals(normalizedName))
+                .findFirst()
+                .map(SkillDto::id)
+                .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                        "Skill not found in active system directory: " + skillName));
+    }
+
+    private String normalizeSkillName(String text) {
+        if (text == null) {
+            return "";
+        }
+        String lower = text.toLowerCase(Locale.ROOT).replace('đ', 'd');
+        return Normalizer.normalize(lower, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .trim();
     }
 
     private boolean isOverdue(TaskEntity task) {

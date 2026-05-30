@@ -1,5 +1,7 @@
 package com.taskpilot.ai.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.taskpilot.ai.entity.AiChatRequestEntity.Phase;
 import com.taskpilot.ai.entity.ChatMessageEntity;
 import com.taskpilot.ai.entity.ChatMessageEntity.SenderType;
@@ -67,12 +69,16 @@ public class AiStreamingService {
     private final HeuristicConfigProvider heuristicConfigProvider;
     private final ThinkingNarratorService thinkingNarratorService;
     private final TokenCountEstimator tokenCountEstimator;
+    private final ObjectMapper objectMapper;
 
     @Value("${ai.chat.max-output-tokens:3500}")
     private int maxOutputTokens;
 
     @Value("${ai.chat.stream-first-response-timeout-seconds:25}")
     private int streamFirstResponseTimeoutSeconds;
+
+    @Value("${ai.chat.text-only-first-response-timeout-seconds:10}")
+    private int textOnlyFirstResponseTimeoutSeconds;
 
     @Value("${ai.chat.memory-max-tokens:7000}")
     private int maxContextTokens;
@@ -98,12 +104,20 @@ public class AiStreamingService {
             - Current Assignment Mode: {{current_mode}}
 
             [TASKPILOT TOOL WORKFLOW RULES]
+            - Vietnamese shorthand matters: "ch", "chua", "chưa", "ch dc", "ch đc", "chua duoc", and
+              "chưa được" mean "not yet". For task assignment questions, interpret them as unassigned/not assigned.
             - If the user asks which tasks are not assigned yet in a project, call getUnassignedTasksByProject.
               Do not answer from the full task list unless the unassigned-only tool is unavailable.
+            - If the user asks for unassigned tasks in the project that contains a task ID (for example
+              "du an co chua task 67"), first call getTaskDetails(taskId) to resolve projectId, then call
+              getUnassignedTasksByProject(projectId).
             - If the user asks to recommend a suitable assignee and also apply the assignment, call
               recommendAndAssignTask for each concrete task. This is a real data write action.
             - If task skills or difficulty are missing, ask for only the missing fields. The frontend may provide
               those fields as a structured "Task assignment requirements form"; use that structured data directly.
+              When the user provides missing task skills for assignment, call recommendAndAssignTask with those
+              skills and difficulty so the pending confirmation saves the task skills and assigns the task together.
+              If the user only wants to update task skills, call updateTaskRequiredSkills.
             - Multi-step user requests are allowed. You may call tools repeatedly across rounds when needed:
               first read data, then recommend candidates, then write assignments if the user clearly asked to apply.
             - Any create/update/delete/assignment tool may return confirmationRequired=true instead of writing data.
@@ -120,23 +134,25 @@ public class AiStreamingService {
               ```
 
             [REASONING OBJECTIVES & TRADE-OFFS]
-            You MUST perform an internal reasoning process before providing your final recommendation. You are
-            not a simple calculator; you are a strategic manager. You must balance the candidates' AHP (Analytic
-            Hierarchy Process) scores, their current workload, and the 'Current Assignment Mode'.
+            Think privately before providing your final recommendation. You are not a simple calculator; you are
+            a strategic manager. Balance the candidates' AHP (Analytic Hierarchy Process) scores, their current
+            workload, and the 'Current Assignment Mode'.
 
-            Your reasoning process MUST be granular and structured. Break it down into clear logical steps:
+            Your private reasoning process should be granular and structured:
             - Step 1: Analyze user intent and project requirements.
             - Step 2: Retrieve relevant data using available tools (if needed).
             - Step 3: Evaluate results, compare candidates, and weigh trade-offs based on the 'Current Assignment Mode'.
             - Step 4: Formulate the final strategic recommendation.
 
             [STRICT OUTPUT RULES]
-            1. Step 1 (Thinking): All of your internal reasoning, comparisons, and strategic trade-offs MUST be
-                enclosed exactly within <think> and </think> tags. Use a "Step-by-step" format internally to
-                make your logic transparent.
-            2. Step 2 (Communicating): After the closing </think> tag, provide your final recommendation clearly
-                and professionally to the user. CRITICAL REQUIREMENT: You MUST extract the key data, metrics, or a markdown table (e.g., AHP scores, workload stats, overdue tasks) and present them IN YOUR FINAL RESPONSE outside the <think> tag. This ensures the user sees the concrete evidence for your decision.
-            3. PROHIBITED ACTION: You MUST NEVER justify your choice by simply stating "because they have the
+            1. Respond in Vietnamese by default. If the user writes in another language, mirror that language.
+            2. Do not output hidden reasoning tags such as <think>, </think>, <Dthink>, or </Dthink>.
+            3. Provide the final recommendation clearly and professionally. Include key data, metrics, or a
+                markdown table when useful so the user sees the concrete evidence for your decision.
+            4. When a write tool returns confirmationRequired=true, explain the pending change in Vietnamese and
+                tell the user they can approve or reject it in the confirmation card. Do not claim the change has
+                been applied until confirmPendingAction returns a success result.
+            5. PROHIBITED ACTION: You MUST NEVER justify your choice by simply stating "because they have the
                 highest score" or "due to the highest AHP score". You must explain your decision using
                 professional management terminology (e.g., "to optimize resource allocation", "to ensure project
                 timelines", or "to foster skill development").
@@ -554,7 +570,7 @@ public class AiStreamingService {
                 if ((rawResponseText == null || rawResponseText.isBlank()) && aiMessage != null && aiMessage.text() != null) {
                     rawResponseText = aiMessage.text();
                 }
-                String responseText = stripThinkBlocks(rawResponseText);
+                String responseText = appendTaskPilotBlocks(stripThinkBlocks(rawResponseText), toolCallSummaries);
                 String extractedReasoning = extractAllThinkBlocks(rawResponseText);
 
                 int estimatedTokens = completeResponse.tokenUsage() != null
@@ -733,25 +749,59 @@ public class AiStreamingService {
         // the shared fullResponse with stray partial tokens from earlier rounds.
         StringBuilder roundResponse = new StringBuilder();
 
-        // Architectural Fix: Dual-Pipeline.
-        // Instead of reusing the tool-enabled model, we fetch the pure TEXT-ONLY variant 
-        // of the same provider to avoid the parallel_tool_calls bug cleanly without dummy tools.
-        StreamingChatModel textModel = routingService.getTextModel(modelName);
-        log.info("[ForceTextOnly] Using text-only pipeline model {} for session {}", modelName, sessionId);
+        // Tool data is already in the prompt at this point. Use the fast text-only
+        // finalizer instead of a reasoning/tool model so the UI gets a real answer quickly.
+        StreamingChatModel textModel = routingService.getFallbackTextModel();
+        String textModelName = routingService.getModelName(textModel);
+        log.info("[ForceTextOnly] Using fast text-only finalizer {} after {} for session {}",
+                textModelName, modelName, sessionId);
 
         ChatRequest request = ChatRequest.builder()
                 .messages(textOnlyHistory)
-                .maxOutputTokens(maxOutputTokens)
+                .maxOutputTokens(Math.min(maxOutputTokens, 1200))
                 .build();
+
+        final AtomicBoolean roundClosed = new AtomicBoolean(false);
+        final AtomicBoolean firstModelSignalReceived = new AtomicBoolean(false);
+        final ScheduledFuture<?> timeoutFuture = timeoutScheduler.schedule(() -> {
+            if (firstModelSignalReceived.get() || clientDisconnected.get() || emitterCompleted.get()) {
+                return;
+            }
+            if (roundClosed.compareAndSet(false, true)) {
+                String fallbackResponse = buildTextOnlyTimeoutResponse(toolCallSummaries);
+                log.warn("[SSE] forceTextOnly first response timed out after {}s for session {} model {}",
+                        textOnlyFirstResponseTimeoutSeconds, sessionId, textModelName);
+                finalizeForceTextOnlyResponse(
+                        emitter,
+                        session,
+                        sessionId,
+                        userId,
+                        userInput,
+                        systemPrompt,
+                        textModelName,
+                        startTime,
+                        clientMessageId,
+                        clientDisconnected,
+                        toolCallSummaries,
+                        toolNames,
+                        fallbackResponse,
+                        null);
+                safeComplete(emitter, emitterCompleted);
+            }
+        }, Math.max(1, textOnlyFirstResponseTimeoutSeconds), TimeUnit.SECONDS);
 
         textModel.chat(request, new StreamingChatResponseHandler() {
             @Override
             public void onPartialResponse(String partialResponse) {
+                if (roundClosed.get()) {
+                    return;
+                }
+                firstModelSignalReceived.set(true);
                 roundResponse.append(partialResponse);
 
                 if (generatingMarked.compareAndSet(false, true)) {
                     chatStreamStatusService.updatePhase(sessionId, clientMessageId,
-                            Phase.GENERATING, modelName, null, null);
+                            Phase.GENERATING, textModelName, null, null);
                     if (!safeSend(emitter, "phase", Phase.GENERATING.name(), null)) {
                         clientDisconnected.set(true);
                     }
@@ -766,76 +816,51 @@ public class AiStreamingService {
 
             @Override
             public void onCompleteResponse(ChatResponse completeResponse) {
+                firstModelSignalReceived.set(true);
+                if (!roundClosed.compareAndSet(false, true)) {
+                    return;
+                }
+                timeoutFuture.cancel(false);
                 AiMessage aiMessage = completeResponse.aiMessage();
                 String rawResponseText = roundResponse.toString();
                 if ((rawResponseText == null || rawResponseText.isBlank()) && aiMessage != null && aiMessage.text() != null) {
                     rawResponseText = aiMessage.text();
                 }
-                String responseText = stripThinkBlocks(rawResponseText);
-                String extractedReasoning = extractAllThinkBlocks(rawResponseText);
-
-                if (responseText == null || responseText.isBlank()) {
-                    responseText = "I couldn't complete the tool-based reasoning safely, so please refine the request and try again.";
-                }
-
-                long durationMs = System.currentTimeMillis() - startTime;
-                int estimatedTokens = completeResponse.tokenUsage() != null
-                        ? completeResponse.tokenUsage().totalTokenCount()
-                        : responseText.length() / 4;
-
-                ChatMessageEntity assistantMsg = messageRepository.save(ChatMessageEntity.builder()
-                        .sessionId(sessionId)
-                        .sender(SenderType.ASSISTANT)
-                        .content(responseText)
-                        .build());
-
-                session.setUpdatedAt(Instant.now());
-                if (session.getTitle() == null || session.getTitle().isBlank()) {
-                    // Bug fix #8: strip <think> block before using as title
-                    String titleSource = stripThinkBlocks(responseText);
-                    String autoTitle = titleSource.length() > 60
-                            ? titleSource.substring(0, 60) + "..."
-                            : titleSource;
-                    session.setTitle(autoTitle);
-                }
-                sessionRepository.save(session);
-
-                Object toolOutput = toolCallSummaries.isEmpty() ? null : toolCallSummaries;
-                String actionTaken = toolNames.isEmpty() ? null : String.join(",", toolNames);
-
-                // Log with modelName so it's clear which model actually generated the response
-                aiLogService.saveLog(userId, null, sessionId, assistantMsg.getId(), userInput,
-                        responseText, extractedReasoning, actionTaken, toolOutput, modelName,
-                        estimatedTokens, (int) durationMs);
-
-                String cleanResponse = sessionChatMemoryService.sanitizeAssistantMessage(responseText);
-                sessionChatMemoryService.appendAssistantMessage(sessionId, cleanResponse, systemPrompt);
-
-                chatStreamStatusService.updatePhase(sessionId, clientMessageId,
-                        Phase.FINALIZED, modelName, assistantMsg.getId(), null);
-
-                if (!clientDisconnected.get()) {
-                    safeSend(emitter, "phase", Phase.FINALIZED.name(), null);
-                    safeSend(emitter, "done", responseText, null);
-                    safeComplete(emitter, emitterCompleted);
-                }
-
-                log.info("[SSE] forceTextOnly finalized session {} via {} in {}ms",
-                        sessionId, modelName, durationMs);
+                finalizeForceTextOnlyResponse(
+                        emitter,
+                        session,
+                        sessionId,
+                        userId,
+                        userInput,
+                        systemPrompt,
+                        textModelName,
+                        startTime,
+                        clientMessageId,
+                        clientDisconnected,
+                        toolCallSummaries,
+                        toolNames,
+                        rawResponseText,
+                        completeResponse);
+                safeComplete(emitter, emitterCompleted);
             }
 
             @Override
             public void onError(Throwable error) {
+                firstModelSignalReceived.set(true);
+                if (!roundClosed.compareAndSet(false, true)) {
+                    return;
+                }
+                timeoutFuture.cancel(false);
                 if (clientDisconnected.get() || isClientAbort(error)) {
                     return;
                 }
 
                 // Always log — this was previously swallowed silently, making bugs invisible
                 log.error("[SSE] forceTextOnlyResponse failed for session {} model {}: {}",
-                        sessionId, modelName, error.getMessage());
+                        sessionId, textModelName, error.getMessage());
 
                 chatStreamStatusService.updatePhase(sessionId, clientMessageId,
-                        Phase.FAILED, modelName, null, error.getMessage());
+                        Phase.FAILED, textModelName, null, error.getMessage());
                 safeSend(emitter, "phase", Phase.FAILED.name(), null);
                 safeSend(emitter, "error",
                         "AI service is currently unavailable. Please try again later.",
@@ -843,6 +868,82 @@ public class AiStreamingService {
                 safeComplete(emitter, emitterCompleted);
             }
         });
+    }
+
+    private void finalizeForceTextOnlyResponse(
+            SseEmitter emitter,
+            ChatSessionEntity session,
+            Long sessionId,
+            Long userId,
+            String userInput,
+            String systemPrompt,
+            String modelName,
+            long startTime,
+            String clientMessageId,
+            AtomicBoolean clientDisconnected,
+            List<Map<String, Object>> toolCallSummaries,
+            LinkedHashSet<String> toolNames,
+            String rawResponseText,
+            ChatResponse completeResponse) {
+        String responseText = appendTaskPilotBlocks(stripThinkBlocks(rawResponseText), toolCallSummaries);
+        String extractedReasoning = extractAllThinkBlocks(rawResponseText);
+
+        if (responseText == null || responseText.isBlank()) {
+            responseText = "Mình chưa tạo được câu trả lời hoàn chỉnh. Bạn thử gửi lại yêu cầu ngắn hơn một chút nhé.";
+        }
+
+        long durationMs = System.currentTimeMillis() - startTime;
+        int estimatedTokens = completeResponse != null && completeResponse.tokenUsage() != null
+                ? completeResponse.tokenUsage().totalTokenCount()
+                : responseText.length() / 4;
+
+        ChatMessageEntity assistantMsg = messageRepository.save(ChatMessageEntity.builder()
+                .sessionId(sessionId)
+                .sender(SenderType.ASSISTANT)
+                .content(responseText)
+                .build());
+
+        session.setUpdatedAt(Instant.now());
+        if (session.getTitle() == null || session.getTitle().isBlank()) {
+            String titleSource = stripThinkBlocks(responseText);
+            String autoTitle = titleSource.length() > 60
+                    ? titleSource.substring(0, 60) + "..."
+                    : titleSource;
+            session.setTitle(autoTitle);
+        }
+        sessionRepository.save(session);
+
+        Object toolOutput = toolCallSummaries.isEmpty() ? null : toolCallSummaries;
+        String actionTaken = toolNames.isEmpty() ? null : String.join(",", toolNames);
+
+        aiLogService.saveLog(userId, null, sessionId, assistantMsg.getId(), userInput,
+                responseText, extractedReasoning, actionTaken, toolOutput, modelName,
+                estimatedTokens, (int) durationMs);
+
+        String cleanResponse = sessionChatMemoryService.sanitizeAssistantMessage(responseText);
+        sessionChatMemoryService.appendAssistantMessage(sessionId, cleanResponse, systemPrompt);
+
+        chatStreamStatusService.updatePhase(sessionId, clientMessageId,
+                Phase.FINALIZED, modelName, assistantMsg.getId(), null);
+
+        if (!clientDisconnected.get()) {
+            safeSend(emitter, "phase", Phase.FINALIZED.name(), null);
+            safeSend(emitter, "done", responseText, null);
+        }
+
+        log.info("[SSE] forceTextOnly finalized session {} via {} in {}ms",
+                sessionId, modelName, durationMs);
+    }
+
+    private String buildTextOnlyTimeoutResponse(List<Map<String, Object>> toolCallSummaries) {
+        boolean hasPendingConfirmation = toolCallSummaries != null && toolCallSummaries.stream()
+                .anyMatch(summary -> summary.get("confirmation") instanceof Map<?, ?>);
+        if (hasPendingConfirmation) {
+            return "Mình đã chuẩn bị thao tác ghi dữ liệu và cần bạn phê duyệt trong thẻ xác nhận bên dưới. "
+                    + "Bước diễn giải cuối của model phản hồi quá lâu nên mình hiển thị ngay hành động cần xác nhận.";
+        }
+        return "Mình đã lấy dữ liệu bằng công cụ nội bộ, nhưng bước diễn giải cuối của model phản hồi quá lâu. "
+                + "Bạn thử gửi lại yêu cầu ngắn hơn hoặc yêu cầu phân công trực tiếp cho một task cụ thể nhé.";
     }
 
     private ToolLoopState advanceToolLoopState(String previousToolName,
@@ -887,6 +988,9 @@ public class AiStreamingService {
             eventPayload.put("name", request.name());
             eventPayload.put("arguments", request.arguments());
             eventPayload.put("result", truncate(output, 1500));
+            parseConfirmationPayload(output).ifPresent(confirmation -> eventPayload.put("confirmation", confirmation));
+            buildMissingAssignmentForm(request.name(), request.arguments(), output)
+                    .ifPresent(form -> eventPayload.put("form", form));
             safeSend(emitter, "tool", eventPayload, MediaType.APPLICATION_JSON);
 
             toolNames.add(request.name());
@@ -1156,11 +1260,22 @@ public class AiStreamingService {
     }
 
     private static final Pattern THINK_BLOCK_PATTERN = Pattern.compile(
-            "<\\s*think\\b[^>]*>(.*?)<\\s*/\\s*think\\s*>",
+            "<\\s*d?think\\b[^>]*>(.*?)<\\s*/\\s*d?think\\s*>",
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     private static final Pattern ORPHAN_THINK_TAG_PATTERN = Pattern.compile(
-            "</?\\s*think\\b[^>]*>",
+            "</?\\s*d?think\\b[^>]*>",
             Pattern.CASE_INSENSITIVE);
+    private static final Pattern RECORD_CONFIRMATION_PATTERN = Pattern.compile(
+            "confirmationRequired\\s*=\\s*true.*?actionId\\s*=\\s*([^,\\]\\s]+)",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    private static final Pattern RECORD_TOOL_NAME_PATTERN = Pattern.compile(
+            "toolName\\s*=\\s*([^,\\]\\s]+)",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern RECORD_SUMMARY_PATTERN = Pattern.compile(
+            "summary\\s*=\\s*(.*?)(?:,\\s*arguments=|,\\s*preview=|,\\s*expiresAt=|\\])",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {
+    };
 
     private String extractAllThinkBlocks(String rawResponse) {
         if (rawResponse == null || rawResponse.isBlank()) {
@@ -1190,6 +1305,124 @@ public class AiStreamingService {
         String withoutCompleteBlocks = THINK_BLOCK_PATTERN.matcher(rawResponse).replaceAll(" ");
         String withoutOrphanTags = ORPHAN_THINK_TAG_PATTERN.matcher(withoutCompleteBlocks).replaceAll(" ");
         return withoutOrphanTags.trim();
+    }
+
+    private Optional<Map<String, Object>> parseConfirmationPayload(String rawToolOutput) {
+        if (rawToolOutput == null || rawToolOutput.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            Map<String, Object> parsed = objectMapper.readValue(rawToolOutput, MAP_TYPE);
+            Object confirmationRequired = parsed.get("confirmationRequired");
+            Object actionId = parsed.get("actionId");
+            if (Boolean.TRUE.equals(confirmationRequired) && actionId instanceof String actionIdText
+                    && !actionIdText.isBlank()) {
+                return Optional.of(parsed);
+            }
+        } catch (Exception ex) {
+            log.debug("[HumanInLoop] Tool output is not a confirmation payload: {}", ex.getMessage());
+        }
+        Matcher recordMatcher = RECORD_CONFIRMATION_PATTERN.matcher(rawToolOutput);
+        if (recordMatcher.find()) {
+            Map<String, Object> fallback = new LinkedHashMap<>();
+            fallback.put("confirmationRequired", true);
+            fallback.put("actionId", recordMatcher.group(1));
+            Matcher toolMatcher = RECORD_TOOL_NAME_PATTERN.matcher(rawToolOutput);
+            if (toolMatcher.find()) {
+                fallback.put("toolName", toolMatcher.group(1));
+            }
+            Matcher summaryMatcher = RECORD_SUMMARY_PATTERN.matcher(rawToolOutput);
+            if (summaryMatcher.find()) {
+                fallback.put("summary", summaryMatcher.group(1).trim());
+            }
+            return Optional.of(fallback);
+        }
+        return Optional.empty();
+    }
+
+    private Optional<Map<String, Object>> buildMissingAssignmentForm(String toolName, String rawArguments, String rawToolOutput) {
+        if (!"recommendAndAssignTask".equals(toolName) || rawToolOutput == null) {
+            return Optional.empty();
+        }
+        String normalized = rawToolOutput.toLowerCase(Locale.ROOT);
+        if (!normalized.contains("missing required skills") && !normalized.contains("missing skills")) {
+            return Optional.empty();
+        }
+
+        Long taskId = null;
+        try {
+            Map<String, Object> args = objectMapper.readValue(rawArguments, MAP_TYPE);
+            Object rawTaskId = args.get("taskId");
+            if (rawTaskId instanceof Number number) {
+                taskId = number.longValue();
+            } else if (rawTaskId instanceof String text && !text.isBlank()) {
+                taskId = Long.valueOf(text);
+            }
+        } catch (Exception ex) {
+            log.debug("[AiForm] Could not parse tool arguments for missing assignment form: {}", ex.getMessage());
+        }
+
+        Map<String, Object> difficultyField = new LinkedHashMap<>();
+        difficultyField.put("name", "difficulty");
+        difficultyField.put("label", "Độ khó (1-10)");
+        difficultyField.put("type", "number");
+        difficultyField.put("required", true);
+        difficultyField.put("min", 1);
+        difficultyField.put("max", 10);
+        difficultyField.put("placeholder", "5");
+
+        Map<String, Object> skillsField = new LinkedHashMap<>();
+        skillsField.put("name", "skills");
+        skillsField.put("label", "Kỹ năng yêu cầu");
+        skillsField.put("type", "select");
+        skillsField.put("required", true);
+        skillsField.put("placeholder", "Chọn skill từ hệ thống");
+
+        Map<String, Object> form = new LinkedHashMap<>();
+        form.put("title", taskId == null ? "Bổ sung skill để phân công task" : "Bổ sung skill để phân công Task " + taskId);
+        form.put("description", "Task chưa có kỹ năng yêu cầu. Chọn skill phù hợp từ danh mục hệ thống rồi tiếp tục phân công.");
+        form.put("submitLabel", "Tiếp tục phân công");
+        form.put("intent", taskId == null ? "assign_task_missing_skills" : "assign_task_" + taskId);
+        form.put("fields", List.of(difficultyField, skillsField));
+        return Optional.of(form);
+    }
+
+    private String appendTaskPilotBlocks(String responseText, List<Map<String, Object>> toolCallSummaries) {
+        if (toolCallSummaries == null || toolCallSummaries.isEmpty()) {
+            return responseText;
+        }
+
+        List<String> blocks = new ArrayList<>();
+        for (Map<String, Object> summary : toolCallSummaries) {
+            Object confirmation = summary.get("confirmation");
+            if (confirmation instanceof Map<?, ?> confirmationMap) {
+                try {
+                    blocks.add("```taskpilot-confirm\n"
+                            + objectMapper.writeValueAsString(confirmationMap)
+                            + "\n```");
+                } catch (Exception ex) {
+                    log.warn("[HumanInLoop] Failed to serialize pending action metadata: {}", ex.getMessage());
+                }
+            }
+
+            Object form = summary.get("form");
+            if (form instanceof Map<?, ?> formMap) {
+                try {
+                    blocks.add("```taskpilot-form\n"
+                            + objectMapper.writeValueAsString(formMap)
+                            + "\n```");
+                } catch (Exception ex) {
+                    log.warn("[AiForm] Failed to serialize dynamic form metadata: {}", ex.getMessage());
+                }
+            }
+        }
+
+        if (blocks.isEmpty()) {
+            return responseText;
+        }
+
+        String visibleText = responseText == null ? "" : responseText.trim();
+        return (visibleText + "\n\n" + String.join("\n\n", blocks)).trim();
     }
 
     private String latestUserMessageText(List<ChatMessage> history, String fallbackInput) {
