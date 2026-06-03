@@ -148,7 +148,7 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
 
         if (!simulate) {
             task.setAssigneeId(memberId);
-            taskRepository.save(task);
+            taskRepository.saveAndFlush(task);
             notificationPort.sendSystemNotification(memberId, "Task Assigned",
                     "You have been assigned to task: " + task.getTitle(),
                     "/tasks?taskId=" + task.getId());

@@ -106,6 +106,10 @@ public class AiStreamingService {
             [TASKPILOT TOOL WORKFLOW RULES]
             - Vietnamese shorthand matters: "ch", "chua", "chưa", "ch dc", "ch đc", "chua duoc", and
               "chưa được" mean "not yet". For task assignment questions, interpret them as unassigned/not assigned.
+            - If the user names a specific assignee (for example "cho Julia Design", "gán cho Ian",
+              "assign task 68 to Julia"), the user's explicit assignee overrides the recommendation algorithm.
+              In that case call assignTaskToMemberByName or assignTaskToMember after resolving the member; do NOT
+              call recommendAndAssignTask, because recommendAndAssignTask always picks the top ranked candidate.
             - If the user asks which tasks are not assigned yet in a project, call getUnassignedTasksByProject.
               Do not answer from the full task list unless the unassigned-only tool is unavailable.
             - If the user asks for unassigned tasks in the project that contains a task ID (for example

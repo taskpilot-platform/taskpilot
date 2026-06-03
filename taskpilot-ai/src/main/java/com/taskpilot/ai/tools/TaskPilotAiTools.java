@@ -128,6 +128,7 @@ public class TaskPilotAiTools {
     @Tool("""
             Use this tool when the user explicitly asks to assign a task to a member.
             Provide taskId, memberId, and a short reason. This tool performs the assignment.
+            If the user names a specific assignee but does not provide memberId, use assignTaskToMemberByName instead.
             """)
     public Object assignTaskToMember(
             @P("The ID of the task") Long taskId,
@@ -146,6 +147,39 @@ public class TaskPilotAiTools {
                 args("taskId", taskId, "memberId", memberId, "reason", safeReason),
                 null,
                 () -> taskCommandPort.assignTaskToMember(taskId, memberId, safeReason, userId, false));
+    }
+
+    @Tool("""
+            Use this tool when the user explicitly asks to assign a task to a named member, for example
+            "assign task 68 to Julia Design" or "phân công task 68 cho Julia".
+            This is a direct user override and must be preferred over recommendAndAssignTask.
+            The tool resolves the task project, finds the member by name in that project, and creates a pending
+            confirmation for the real assignment.
+            """)
+    public Object assignTaskToMemberByName(
+            @P("The ID of the task") Long taskId,
+            @P("Full or partial member name, e.g. Julia Design") String memberName,
+            @P("Reason for the assignment") String reason) {
+        log.info("[AiTool] assignTaskToMemberByName called for task {} -> {}", taskId, memberName);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+
+        TaskDetailDto task = taskCommandPort.getTaskDetails(taskId, userId);
+        ProjectMemberDto member = resolveProjectMemberByName(task.projectId(), memberName, userId);
+        String safeReason = hasText(reason)
+                ? reason
+                : "User explicitly requested assignment to " + member.fullName() + ".";
+
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "assignTaskToMember",
+                "Assign task " + taskId + " to " + member.fullName() + " (user specified)",
+                args("taskId", taskId, "memberId", member.memberId(), "memberName", member.fullName(),
+                        "reason", safeReason, "source", "user_specified_assignee"),
+                Map.of("taskId", taskId, "memberId", member.memberId(), "memberName", member.fullName(),
+                        "projectId", task.projectId(), "reason", safeReason),
+                () -> taskCommandPort.assignTaskToMember(taskId, member.memberId(), safeReason, userId, false));
     }
 
     @Tool("""
@@ -357,6 +391,36 @@ public class TaskPilotAiTools {
                 .map(String::trim)
                 .filter(s -> !s.isBlank())
                 .collect(Collectors.toList());
+    }
+
+    private ProjectMemberDto resolveProjectMemberByName(Long projectId, String memberName, Long userId) {
+        if (!hasText(memberName)) {
+            throw new IllegalArgumentException("Member name is required");
+        }
+        String target = normalizeName(memberName);
+        List<ProjectMemberDto> members = projectInsightsPort.getProjectMembers(projectId, userId);
+        return members.stream()
+                .filter(member -> normalizeName(member.fullName()).equals(target))
+                .findFirst()
+                .or(() -> members.stream()
+                        .filter(member -> normalizeName(member.fullName()).contains(target)
+                                || target.contains(normalizeName(member.fullName())))
+                        .findFirst())
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "No project member matched name '" + memberName + "' in project " + projectId));
+    }
+
+    private String normalizeName(String text) {
+        if (text == null) {
+            return "";
+        }
+        String lower = text.toLowerCase(Locale.ROOT)
+                .replace('\u0111', 'd')
+                .replace('\u0110', 'd');
+        return Normalizer.normalize(lower, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .replaceAll("[^a-z0-9]+", " ")
+                .trim();
     }
 
     private boolean hasText(String value) {

@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -25,6 +27,7 @@ import com.taskpilot.ai.service.AutoAssignmentService;
 import com.taskpilot.ai.service.PendingAiActionService;
 import com.taskpilot.contracts.assignment.port.out.ProjectMemberPort;
 import com.taskpilot.contracts.aiquery.dto.SprintSummaryDto;
+import com.taskpilot.contracts.aiquery.dto.ProjectMemberDto;
 import com.taskpilot.contracts.aiquery.dto.TaskAssignmentResultDto;
 import com.taskpilot.contracts.aiquery.dto.TaskDetailDto;
 import com.taskpilot.contracts.aiquery.dto.TaskSummaryDto;
@@ -102,6 +105,33 @@ class TaskPilotAiToolsHumanInLoopTest {
         TaskAssignmentResultDto assignment = assertInstanceOf(TaskAssignmentResultDto.class, result);
         assertEquals("SUCCESS", assignment.status());
         verify(taskCommandPort).assignTaskToMember(75L, 16L, "test", USER_ID, false);
+    }
+
+    @Test
+    void assignTaskToMemberByNameUsesUserSpecifiedMemberInsteadOfRecommendation() {
+        when(taskCommandPort.getTaskDetails(68L, USER_ID))
+                .thenReturn(new TaskDetailDto(68L, 1L, "Sub task 3", "", "TODO", "MEDIUM", 1,
+                        "Java", null, null, null));
+        when(projectInsightsPort.getProjectMembers(1L, USER_ID))
+                .thenReturn(List.of(
+                        new ProjectMemberDto(18L, "FuTie Neith", "MEMBER", 0.7, "Java"),
+                        new ProjectMemberDto(10L, "Julia Design", "MEMBER", 0.85, "Java")));
+        when(taskCommandPort.assignTaskToMember(eq(68L), eq(10L), any(), eq(USER_ID), eq(false)))
+                .thenReturn(TaskAssignmentResultDto.success(68L, 10L, "selected"));
+
+        ConfirmationRequiredDto pending = assertPending(
+                tools.assignTaskToMemberByName(68L, "Julia Design", "User requested Julia"),
+                "assignTaskToMember");
+
+        assertTrue(pending.summary().contains("Julia Design"));
+        verify(autoAssignmentService, never()).recommendCandidates(anyLong(), any(), anyInt(), anyLong());
+        verify(taskCommandPort, never()).assignTaskToMember(anyLong(), anyLong(), any(), anyLong(), eq(false));
+
+        Object result = confirm(pending.actionId());
+
+        TaskAssignmentResultDto assignment = assertInstanceOf(TaskAssignmentResultDto.class, result);
+        assertEquals(10L, assignment.assignedTo());
+        verify(taskCommandPort).assignTaskToMember(68L, 10L, "User requested Julia", USER_ID, false);
     }
 
     @Test
