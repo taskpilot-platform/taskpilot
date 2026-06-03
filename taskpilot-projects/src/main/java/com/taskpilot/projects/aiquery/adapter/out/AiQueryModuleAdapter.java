@@ -1,6 +1,7 @@
 package com.taskpilot.projects.aiquery.adapter.out;
 
 import com.taskpilot.contracts.aiquery.dto.MemberWorkloadDto;
+import com.taskpilot.contracts.aiquery.dto.LabelSummaryDto;
 import com.taskpilot.contracts.aiquery.dto.ProjectMemberDto;
 import com.taskpilot.contracts.aiquery.dto.ProjectOverviewDto;
 import com.taskpilot.contracts.aiquery.dto.ProjectStatusDto;
@@ -31,9 +32,23 @@ import com.taskpilot.projects.common.repository.SprintRepository;
 import com.taskpilot.projects.common.repository.TaskRepository;
 import com.taskpilot.projects.common.repository.TaskRequiredSkillRepository;
 import com.taskpilot.projects.sprints.service.SprintService;
+import com.taskpilot.projects.tasks.service.LabelService;
 import com.taskpilot.projects.tasks.service.TaskService;
 import com.taskpilot.projects.sprints.dto.CreateSprintRequest;
+import com.taskpilot.projects.sprints.dto.UpdateSprintRequest;
+import com.taskpilot.projects.tasks.dto.CreateLabelRequest;
+import com.taskpilot.projects.tasks.dto.CreateTaskRequest;
+import com.taskpilot.projects.tasks.dto.KanbanMoveRequest;
+import com.taskpilot.projects.tasks.dto.LabelDto;
+import com.taskpilot.projects.tasks.dto.TaskDto;
+import com.taskpilot.projects.tasks.dto.UpdateTaskRequest;
 import com.taskpilot.projects.tasks.dto.UpdateTaskSprintRequest;
+import com.taskpilot.projects.projects.service.ProjectServiceImpl;
+import com.taskpilot.projects.projects.dto.CreateProjectRequest;
+import com.taskpilot.projects.projects.dto.ProjectResponse;
+import com.taskpilot.projects.projects.dto.UpdateProjectRequest;
+import com.taskpilot.projects.projects.dto.JoinProjectRequest;
+import com.taskpilot.projects.projects.dto.ProjectMemberResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpStatus;
@@ -68,6 +83,8 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     private final NotificationPort notificationPort;
     private final SprintService sprintService;
     private final TaskService taskService;
+    private final LabelService labelService;
+    private final ProjectServiceImpl projectService;
 
     @Override
     @Transactional(readOnly = true)
@@ -173,45 +190,59 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
 
     @Override
     @Transactional
-    public TaskSummaryDto createTask(Long projectId, String title, String description, String priority,
-            Long parentTaskId, Long sprintId, Integer difficultyLevel, Long assigneeId, String dueDate,
-            Long requesterUserId) {
-        validateProjectMember(projectId, requesterUserId);
-        validateProjectNotArchived(projectId);
-        validateParentTask(projectId, parentTaskId);
-        validateSprint(projectId, sprintId);
-        if (assigneeId != null) {
-            validateProjectMember(projectId, assigneeId);
-        }
+    public TaskSummaryDto updateTask(Long taskId, String title, String description, String status, String priority,
+            Float position, List<Long> labelIds, Integer difficultyLevel, List<Long> requiredSkillIds,
+            Long assigneeId, String startDate, String dueDate, Long requesterUserId) {
+        TaskEntity task = findTask(taskId);
+        String email = getRequesterEmail(requesterUserId);
+        UpdateTaskRequest request = new UpdateTaskRequest(
+                title,
+                description,
+                parseOptionalStatus(status),
+                parseOptionalPriority(priority),
+                position,
+                labelIds,
+                difficultyLevel,
+                requiredSkillIds,
+                assigneeId,
+                parseInstant(startDate),
+                parseInstant(dueDate));
+        return toTaskSummary(taskService.updateTask(taskId, request, email), task.getProjectId());
+    }
 
-        String safeTitle = title == null ? "" : title.trim();
-        if (safeTitle.isBlank()) {
-            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Task title is required");
-        }
+    @Override
+    @Transactional
+    public TaskSummaryDto createTask(Long projectId, String title, String description, String priority, Float position,
+            Long parentTaskId, Long sprintId, Integer difficultyLevel, List<Long> labelIds,
+            List<Long> requiredSkillIds, Long assigneeId, String startDate, String dueDate, Long requesterUserId) {
+        CreateTaskRequest request = new CreateTaskRequest(
+                projectId,
+                parentTaskId,
+                sprintId,
+                title,
+                description,
+                parsePriority(priority),
+                position,
+                labelIds,
+                difficultyLevel,
+                requiredSkillIds,
+                assigneeId,
+                parseInstant(startDate),
+                parseInstant(dueDate));
+        return toTaskSummary(taskService.createTask(request, getRequesterEmail(requesterUserId)));
+    }
 
-        TaskEntity task = TaskEntity.builder()
-                .projectId(projectId)
-                .parentId(parentTaskId)
-                .sprintId(sprintId)
-                .title(safeTitle)
-                .description(description)
-                .priority(parsePriority(priority))
-                .position(0f)
-                .difficultyLevel(safeDifficulty(difficultyLevel))
-                .assigneeId(assigneeId)
-                .reporterId(requesterUserId)
-                .dueDate(parseInstant(dueDate))
-                .status(TaskEntity.TaskStatus.TODO)
-                .build();
+    @Override
+    @Transactional
+    public void deleteTask(Long taskId, Long requesterUserId) {
+        taskService.deleteTask(taskId, getRequesterEmail(requesterUserId));
+    }
 
-        taskRepository.save(task);
-        if (assigneeId != null) {
-            notificationPort.sendSystemNotification(assigneeId, "Task Assigned",
-                    "You have been assigned to task: " + task.getTitle(),
-                    "/tasks?taskId=" + task.getId());
-        }
-
-        return toTaskSummary(task);
+    @Override
+    @Transactional
+    public TaskSummaryDto moveTaskKanban(Long taskId, String status, Float position, Long requesterUserId) {
+        KanbanMoveRequest request = new KanbanMoveRequest(parseStatus(status), position);
+        return toTaskSummary(taskService.moveTaskKanban(taskId, request, getRequesterEmail(requesterUserId)));
     }
 
     @Override
@@ -269,6 +300,175 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
                             skills);
                 })
                 .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<LabelSummaryDto> getProjectLabels(Long projectId, Long requesterUserId) {
+        return labelService.getLabelsByProject(projectId, getRequesterEmail(requesterUserId)).stream()
+                .map(this::toLabelSummary)
+                .toList();
+    }
+
+    @Override
+    @Transactional
+    public LabelSummaryDto createProjectLabel(Long projectId, String name, String color, Long requesterUserId) {
+        return toLabelSummary(labelService.createLabel(projectId, new CreateLabelRequest(name, color),
+                getRequesterEmail(requesterUserId)));
+    }
+
+    @Override
+    @Transactional
+    public void deleteProjectLabel(Long projectId, Long labelId, Long requesterUserId) {
+        labelService.deleteLabel(projectId, labelId, getRequesterEmail(requesterUserId));
+    }
+
+    @Override
+    @Transactional
+    public ProjectOverviewDto createProject(String name, String description, String startDate, String endDate, Long requesterUserId) {
+        String email = getRequesterEmail(requesterUserId);
+        LocalDate start = parseLocalDate(startDate);
+        LocalDate end = parseLocalDate(endDate);
+
+        CreateProjectRequest request = new CreateProjectRequest(
+                name,
+                description,
+                null,
+                start,
+                end
+        );
+
+        ProjectResponse response = projectService.createProject(request, email);
+        return new ProjectOverviewDto(
+                response.id(),
+                response.name(),
+                response.description(),
+                response.status() != null ? response.status().name() : null,
+                "MANAGER",
+                response.startDate() != null ? response.startDate().toString() : null,
+                response.endDate() != null ? response.endDate().toString() : null,
+                response.createdAt() != null ? response.createdAt().toString() : null
+        );
+    }
+
+    @Override
+    @Transactional
+    public ProjectOverviewDto updateProject(Long projectId, String name, String description, String status, String heuristicMode, String workflowMode, String startDate, String endDate, Long requesterUserId) {
+        String email = getRequesterEmail(requesterUserId);
+        LocalDate start = parseLocalDate(startDate);
+        LocalDate end = parseLocalDate(endDate);
+
+        UpdateProjectRequest request = new UpdateProjectRequest(
+                name,
+                description,
+                parseProjectStatus(status),
+                parseHeuristicMode(heuristicMode),
+                parseWorkflowMode(workflowMode),
+                start,
+                end
+        );
+
+        ProjectResponse response = projectService.updateProject(projectId, request, email);
+        return new ProjectOverviewDto(
+                response.id(),
+                response.name(),
+                response.description(),
+                response.status() != null ? response.status().name() : null,
+                "MANAGER",
+                response.startDate() != null ? response.startDate().toString() : null,
+                response.endDate() != null ? response.endDate().toString() : null,
+                response.createdAt() != null ? response.createdAt().toString() : null
+        );
+    }
+
+    @Override
+    @Transactional
+    public Object joinProject(String projectCode, Long requesterUserId) {
+        String email = getRequesterEmail(requesterUserId);
+        JoinProjectRequest request = new JoinProjectRequest(projectCode);
+        ProjectMemberResponse response = projectService.joinProject(request, email);
+        return response;
+    }
+
+    @Override
+    @Transactional
+    public void leaveProject(Long projectId, Long requesterUserId) {
+        String email = getRequesterEmail(requesterUserId);
+        projectService.leaveProject(projectId, email);
+    }
+
+    @Override
+    @Transactional
+    public void updateMemberRole(Long projectId, Long targetUserId, String role, Long requesterUserId) {
+        String email = getRequesterEmail(requesterUserId);
+        ProjectMemberEntity.MemberRole parsedRole = parseMemberRole(role);
+        projectService.updateMemberRole(projectId, targetUserId, parsedRole, email);
+    }
+
+    @Override
+    @Transactional
+    public void removeMember(Long projectId, Long targetUserId, Long requesterUserId) {
+        String email = getRequesterEmail(requesterUserId);
+        projectService.removeMember(projectId, targetUserId, email);
+    }
+
+    @Override
+    @Transactional
+    public void archiveProject(Long projectId, Long requesterUserId) {
+        String email = getRequesterEmail(requesterUserId);
+        projectService.archiveProject(projectId, email);
+    }
+
+    @Override
+    @Transactional
+    public void restoreProject(Long projectId, Long requesterUserId) {
+        String email = getRequesterEmail(requesterUserId);
+        projectService.restoreProject(projectId, email);
+    }
+
+    @Override
+    @Transactional
+    public void deleteProject(Long projectId, Long requesterUserId) {
+        String email = getRequesterEmail(requesterUserId);
+        projectService.deleteProject(projectId, email);
+    }
+
+    private ProjectEntity.ProjectStatus parseProjectStatus(String status) {
+        if (status == null || status.isBlank()) return null;
+        try {
+            return ProjectEntity.ProjectStatus.valueOf(status.trim().toUpperCase());
+        } catch (IllegalArgumentException ex) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Invalid status. Use ACTIVE, COMPLETED, ARCHIVED");
+        }
+    }
+
+    private ProjectEntity.HeuristicMode parseHeuristicMode(String mode) {
+        if (mode == null || mode.isBlank()) return null;
+        try {
+            return ProjectEntity.HeuristicMode.valueOf(mode.trim().toUpperCase());
+        } catch (IllegalArgumentException ex) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Invalid heuristic mode. Use BALANCED, SKILL_FIT_ONLY, WORKLOAD_ONLY");
+        }
+    }
+
+    private ProjectEntity.WorkflowMode parseWorkflowMode(String mode) {
+        if (mode == null || mode.isBlank()) return null;
+        try {
+            return ProjectEntity.WorkflowMode.valueOf(mode.trim().toUpperCase());
+        } catch (IllegalArgumentException ex) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Invalid workflow mode. Use STANDARD, SCRUM, KANBAN");
+        }
+    }
+
+    private ProjectMemberEntity.MemberRole parseMemberRole(String role) {
+        if (role == null || role.isBlank()) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Role cannot be blank");
+        }
+        try {
+            return ProjectMemberEntity.MemberRole.valueOf(role.trim().toUpperCase());
+        } catch (IllegalArgumentException ex) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Invalid role. Use MANAGER or MEMBER");
+        }
     }
 
     @Override
@@ -332,6 +532,21 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
         LocalDate end = parseLocalDate(endDate);
         CreateSprintRequest request = new CreateSprintRequest(name, goal, start, end);
         return toSprintSummary(sprintService.createSprint(projectId, request, email));
+    }
+
+    @Override
+    @Transactional
+    public SprintSummaryDto updateSprint(Long projectId, Long sprintId, String name, String startDate, String endDate,
+            String goal, Long requesterUserId) {
+        String email = getRequesterEmail(requesterUserId);
+        UpdateSprintRequest request = new UpdateSprintRequest(name, goal, parseLocalDate(startDate), parseLocalDate(endDate));
+        return toSprintSummary(sprintService.updateSprint(projectId, sprintId, request, email));
+    }
+
+    @Override
+    @Transactional
+    public void deleteSprint(Long projectId, Long sprintId, Long requesterUserId) {
+        sprintService.deleteSprint(projectId, sprintId, getRequesterEmail(requesterUserId));
     }
 
     @Override
@@ -440,6 +655,34 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
                 task.getDueDate() != null ? task.getDueDate().toString() : null,
                 task.getCreatedAt() != null ? task.getCreatedAt().toString() : null,
                 task.getUpdatedAt() != null ? task.getUpdatedAt().toString() : null);
+    }
+
+    private TaskSummaryDto toTaskSummary(TaskDto task) {
+        return toTaskSummary(task, task.projectId());
+    }
+
+    private TaskSummaryDto toTaskSummary(TaskDto task, Long fallbackProjectId) {
+        UserProfileDto assignee = task.assigneeId() == null ? null
+                : userPort.findById(task.assigneeId()).orElse(null);
+        return new TaskSummaryDto(
+                task.id(),
+                task.projectId() != null ? task.projectId() : fallbackProjectId,
+                task.parentId(),
+                task.sprintId(),
+                task.title(),
+                task.description(),
+                task.status() != null ? task.status().name() : null,
+                task.priority() != null ? task.priority().name() : null,
+                task.difficultyLevel(),
+                task.assigneeId(),
+                assignee != null ? assignee.fullName() : null,
+                task.dueDate() != null ? task.dueDate().toString() : null,
+                task.createdAt() != null ? task.createdAt().toString() : null,
+                task.updatedAt() != null ? task.updatedAt().toString() : null);
+    }
+
+    private LabelSummaryDto toLabelSummary(LabelDto label) {
+        return new LabelSummaryDto(label.id(), label.name(), label.color());
     }
 
     private TaskDetailDto toTaskDetail(TaskEntity task) {
@@ -568,6 +811,14 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
                     "Invalid task priority. Allowed values: LOW, MEDIUM, HIGH, URGENT");
         }
+    }
+
+    private TaskEntity.TaskStatus parseOptionalStatus(String status) {
+        return status == null || status.isBlank() ? null : parseStatus(status);
+    }
+
+    private TaskEntity.PriorityLevel parseOptionalPriority(String priority) {
+        return priority == null || priority.isBlank() ? null : parsePriority(priority);
     }
 
     private String normalizeEnum(String value) {
