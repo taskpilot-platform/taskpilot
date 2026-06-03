@@ -69,11 +69,33 @@ public class FakeTaskCommandAdapter implements TaskCommandPort {
     }
 
     @Override
-    public TaskSummaryDto createTask(Long projectId, String title, String description, String priority,
-            Long parentTaskId, Long sprintId, Integer difficultyLevel, Long assigneeId, String dueDate,
-            Long requesterUserId) {
+    public TaskSummaryDto updateTask(Long taskId, String title, String description, String status, String priority,
+            Float position, List<Long> labelIds, Integer difficultyLevel, List<Long> requiredSkillIds,
+            Long assigneeId, String startDate, String dueDate, Long requesterUserId) {
+        log.info("[FakeAdapter] updateTask called for taskId={}", taskId);
+        return new TaskSummaryDto(taskId, 1L, null, null, title != null ? title : "Sample task",
+                description, status != null ? status : "TODO", priority != null ? priority : "MEDIUM",
+                difficultyLevel, assigneeId, null, dueDate, null, null);
+    }
+
+    @Override
+    public TaskSummaryDto createTask(Long projectId, String title, String description, String priority, Float position,
+            Long parentTaskId, Long sprintId, Integer difficultyLevel, List<Long> labelIds,
+            List<Long> requiredSkillIds, Long assigneeId, String startDate, String dueDate, Long requesterUserId) {
         log.info("[FakeAdapter] createTask called for projectId={} title={}", projectId, title);
         return new TaskSummaryDto(999L, projectId, parentTaskId, sprintId, title, description, "TODO",
                 priority != null ? priority : "MEDIUM", difficultyLevel, assigneeId, null, dueDate, null, null);
+    }
+
+    @Override
+    public void deleteTask(Long taskId, Long requesterUserId) {
+        log.info("[FakeAdapter] deleteTask called for taskId={}", taskId);
+    }
+
+    @Override
+    public TaskSummaryDto moveTaskKanban(Long taskId, String status, Float position, Long requesterUserId) {
+        log.info("[FakeAdapter] moveTaskKanban called for taskId={} status={} position={}", taskId, status, position);
+        return new TaskSummaryDto(taskId, 1L, null, null, "Sample task", null, status, "MEDIUM",
+                3, null, null, null, null, null);
     }
 }

@@ -228,17 +228,20 @@ class TaskPilotAiToolsHumanInLoopTest {
     @Test
     void createTaskWaitsForHumanConfirmationBeforeWriting() {
         TaskSummaryDto created = task(90L, "TODO");
-        when(taskCommandPort.createTask(8L, "AI test", "desc", "MEDIUM", null, null, 3, null, null, USER_ID))
+        when(taskCommandPort.createTask(8L, "AI test", "desc", "MEDIUM", null, null, null, 3, null, null,
+                null, null, null, USER_ID))
                 .thenReturn(created);
 
         ConfirmationRequiredDto pending = assertPending(
-                tools.createTask(8L, "AI test", "MEDIUM", "desc", null, null, 3, null, null),
+                tools.createTask(8L, "AI test", "MEDIUM", "desc", null, null, null, 3, null, null, null, null, null),
                 "createTask");
 
-        verify(taskCommandPort, never()).createTask(any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        verify(taskCommandPort, never()).createTask(any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any());
 
         assertEquals(created, confirm(pending.actionId()));
-        verify(taskCommandPort).createTask(8L, "AI test", "desc", "MEDIUM", null, null, 3, null, null, USER_ID);
+        verify(taskCommandPort).createTask(8L, "AI test", "desc", "MEDIUM", null, null, null, 3, null, null,
+                null, null, null, USER_ID);
     }
 
     @Test
@@ -272,6 +275,33 @@ class TaskPilotAiToolsHumanInLoopTest {
         verify(sprintQueryPort).startSprint(8L, 31L, USER_ID);
         verify(sprintQueryPort).completeSprint(8L, 31L, USER_ID);
         verify(sprintQueryPort).assignTaskToSprint(75L, 31L, USER_ID);
+    }
+
+    @Test
+    void additionalProjectWriteToolsWaitForHumanConfirmationBeforeWriting() {
+        assertPending(tools.updateTask(75L, "New title", "desc", "REVIEW", "HIGH", 2f,
+                List.of(4L), 5, List.of(7L), 18L, "2026-06-01", "2026-06-08"), "updateTask");
+        assertPending(tools.deleteTask(75L), "deleteTask");
+        assertPending(tools.moveTaskKanban(75L, "DONE", 3f), "moveTaskKanban");
+        assertPending(tools.createTaskComment(75L, "Looks good", null, List.of(18L)), "createTaskComment");
+        assertPending(tools.updateTaskComment(75L, 30L, "Updated", List.of()), "updateTaskComment");
+        assertPending(tools.deleteTaskComment(75L, 30L), "deleteTaskComment");
+        assertPending(tools.createProjectLabel(8L, "urgent", "#EF4444"), "createProjectLabel");
+        assertPending(tools.deleteProjectLabel(8L, 4L), "deleteProjectLabel");
+        assertPending(tools.updateSprint(8L, 31L, "Sprint renamed", null, null, "new goal"), "updateSprint");
+        assertPending(tools.deleteSprint(8L, 31L), "deleteSprint");
+
+        verify(taskCommandPort, never()).updateTask(any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any());
+        verify(taskCommandPort, never()).deleteTask(any(), any());
+        verify(taskCommandPort, never()).moveTaskKanban(any(), any(), any(), any());
+        verify(taskCommentQueryPort, never()).createTaskComment(any(), any(), any(), any(), any());
+        verify(taskCommentQueryPort, never()).updateTaskComment(any(), any(), any(), any(), any());
+        verify(taskCommentQueryPort, never()).deleteTaskComment(any(), any(), any());
+        verify(projectInsightsPort, never()).createProjectLabel(any(), any(), any(), any());
+        verify(projectInsightsPort, never()).deleteProjectLabel(any(), any(), any());
+        verify(sprintQueryPort, never()).updateSprint(any(), any(), any(), any(), any(), any(), any());
+        verify(sprintQueryPort, never()).deleteSprint(any(), any(), any());
     }
 
     private ConfirmationRequiredDto assertPending(Object result, String toolName) {

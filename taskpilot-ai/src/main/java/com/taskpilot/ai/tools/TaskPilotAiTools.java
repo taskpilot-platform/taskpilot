@@ -92,6 +92,16 @@ public class TaskPilotAiTools {
     }
 
     @Tool("""
+            Use this tool to fetch labels configured for a project.
+            Provide the project ID. It returns label IDs, names, and colors.
+            """)
+    public List<LabelSummaryDto> getProjectLabels(@P("The ID of the project") Long projectId) {
+        log.info("[AiTool] getProjectLabels called for project {}", projectId);
+        Long userId = ToolExecutionContext.requireUserId();
+        return projectInsightsPort.getProjectLabels(projectId, userId);
+    }
+
+    @Tool("""
             Use this tool when the user asks for workload details of a specific member.
             Typical intents include: "member workload", "load cua thanh vien", "dang lam bao nhieu task".
             Provide the member ID. This tool returns open tasks, overdue tasks, and estimated hours.
@@ -477,6 +487,77 @@ public class TaskPilotAiTools {
     }
 
     @Tool("""
+            Use this tool to create a comment on a task, or reply to a task comment.
+            Provide task ID and content. parentCommentId is optional for replies; mentionedUserIds is optional.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object createTaskComment(
+            @P("The ID of the task") Long taskId,
+            @P("Comment content") String content,
+            @P("Optional parent comment ID when replying") Long parentCommentId,
+            @P("Optional mentioned user IDs") List<Long> mentionedUserIds) {
+        log.info("[AiTool] createTaskComment called for task {}", taskId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "createTaskComment",
+                "Create comment on task " + taskId,
+                args("taskId", taskId, "content", content, "parentCommentId", parentCommentId,
+                        "mentionedUserIds", mentionedUserIds),
+                null,
+                () -> taskCommentQueryPort.createTaskComment(taskId, content, parentCommentId, mentionedUserIds,
+                        userId));
+    }
+
+    @Tool("""
+            Use this tool to update an existing task comment authored by the current user.
+            Provide task ID, comment ID, new content, and optional mentioned user IDs.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object updateTaskComment(
+            @P("The ID of the task") Long taskId,
+            @P("The ID of the comment") Long commentId,
+            @P("Updated comment content") String content,
+            @P("Optional mentioned user IDs") List<Long> mentionedUserIds) {
+        log.info("[AiTool] updateTaskComment called for task {} comment {}", taskId, commentId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "updateTaskComment",
+                "Update comment " + commentId + " on task " + taskId,
+                args("taskId", taskId, "commentId", commentId, "content", content,
+                        "mentionedUserIds", mentionedUserIds),
+                null,
+                () -> taskCommentQueryPort.updateTaskComment(taskId, commentId, content, mentionedUserIds,
+                        userId));
+    }
+
+    @Tool("""
+            Use this tool to delete a task comment. Authors and project managers may delete comments according
+            to project permissions.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object deleteTaskComment(
+            @P("The ID of the task") Long taskId,
+            @P("The ID of the comment") Long commentId) {
+        log.info("[AiTool] deleteTaskComment called for task {} comment {}", taskId, commentId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "deleteTaskComment",
+                "Delete comment " + commentId + " on task " + taskId,
+                args("taskId", taskId, "commentId", commentId),
+                null,
+                () -> taskCommentQueryPort.deleteTaskComment(taskId, commentId, userId));
+    }
+
+    @Tool("""
             Use this tool to update the status of a task (e.g. TODO, IN_PROGRESS, REVIEW, DONE).
             Provide the task ID and the new status.
             This tool updates real task data and should only be used when the user explicitly asks for a status change.
@@ -498,6 +579,86 @@ public class TaskPilotAiTools {
     }
 
     @Tool("""
+            Use this tool to update task fields such as title, description, status, priority, position, labels,
+            difficulty, required skills, assignee, start date, or due date.
+            For unchanged fields pass null. Dates should be ISO-8601 instants or YYYY-MM-DD.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object updateTask(
+            @P("The ID of the task") Long taskId,
+            @P("Optional title") String title,
+            @P("Optional description") String description,
+            @P("Optional status (TODO, IN_PROGRESS, REVIEW, DONE)") String status,
+            @P("Optional priority (LOW, MEDIUM, HIGH, URGENT)") String priority,
+            @P("Optional kanban position") Float position,
+            @P("Optional full replacement label ID list") List<Long> labelIds,
+            @P("Optional difficulty 1-10") Integer difficultyLevel,
+            @P("Optional full replacement required skill ID list") List<Long> requiredSkillIds,
+            @P("Optional assignee user ID") Long assigneeId,
+            @P("Optional start date as ISO-8601 instant or YYYY-MM-DD") String startDate,
+            @P("Optional due date as ISO-8601 instant or YYYY-MM-DD") String dueDate) {
+        log.info("[AiTool] updateTask called for task {}", taskId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "updateTask",
+                "Update task " + taskId,
+                args("taskId", taskId, "title", title, "description", description, "status", status,
+                        "priority", priority, "position", position, "labelIds", labelIds,
+                        "difficultyLevel", difficultyLevel, "requiredSkillIds", requiredSkillIds,
+                        "assigneeId", assigneeId, "startDate", startDate, "dueDate", dueDate),
+                null,
+                () -> taskCommandPort.updateTask(taskId, title, description, status, priority, position, labelIds,
+                        difficultyLevel, requiredSkillIds, assigneeId, startDate, dueDate, userId));
+    }
+
+    @Tool("""
+            Use this tool to delete a task. The backend enforces whether the current user can delete it
+            (reporter or project manager).
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object deleteTask(@P("The ID of the task to delete") Long taskId) {
+        log.info("[AiTool] deleteTask called for task {}", taskId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "deleteTask",
+                "Delete task " + taskId,
+                args("taskId", taskId),
+                null,
+                () -> {
+                    taskCommandPort.deleteTask(taskId, userId);
+                    return "Task deleted successfully";
+                });
+    }
+
+    @Tool("""
+            Use this tool to move a task on the kanban board by setting status and position.
+            Provide the task ID, target status, and target position.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object moveTaskKanban(
+            @P("The ID of the task") Long taskId,
+            @P("Target status (TODO, IN_PROGRESS, REVIEW, DONE)") String status,
+            @P("Target kanban position") Float position) {
+        log.info("[AiTool] moveTaskKanban called for task {} -> {} @ {}", taskId, status, position);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "moveTaskKanban",
+                "Move task " + taskId + " to " + status,
+                args("taskId", taskId, "status", status, "position", position),
+                null,
+                () -> taskCommandPort.moveTaskKanban(taskId, status, position, userId));
+    }
+
+    @Tool("""
             Use this tool to fetch all sprints belonging to a specific project.
             Provide the project ID.
             """)
@@ -508,9 +669,275 @@ public class TaskPilotAiTools {
     }
 
     @Tool("""
+            Use this tool to create a label in a project. Only project managers can perform this.
+            Provide project ID, label name, and optional hex color (#RRGGBB).
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object createProjectLabel(
+            @P("The ID of the project") Long projectId,
+            @P("Label name") String name,
+            @P("Optional hex color, e.g. #6366F1") String color) {
+        log.info("[AiTool] createProjectLabel called for project {}", projectId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "createProjectLabel",
+                "Create label \"" + name + "\" in project " + projectId,
+                args("projectId", projectId, "name", name, "color", color),
+                null,
+                () -> projectInsightsPort.createProjectLabel(projectId, name, color, userId));
+    }
+
+    @Tool("""
+            Use this tool to delete a project label. Only project managers can perform this.
+            Provide project ID and label ID.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object deleteProjectLabel(
+            @P("The ID of the project") Long projectId,
+            @P("The ID of the label") Long labelId) {
+        log.info("[AiTool] deleteProjectLabel called for project {} label {}", projectId, labelId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "deleteProjectLabel",
+                "Delete label " + labelId + " from project " + projectId,
+                args("projectId", projectId, "labelId", labelId),
+                null,
+                () -> {
+                    projectInsightsPort.deleteProjectLabel(projectId, labelId, userId);
+                    return "Label deleted successfully";
+                });
+    }
+
+    @Tool("""
+            Use this tool to create a new project.
+            Provide the project name. Optional fields include description, startDate (YYYY-MM-DD),
+            and endDate (YYYY-MM-DD).
+            This tool creates real database data and requires final user confirmation.
+            """)
+    public Object createProject(
+            @P("Name of the project") String projectName,
+            @P("Optional description of the project") String description,
+            @P("Optional start date in YYYY-MM-DD format") String startDate,
+            @P("Optional end date in YYYY-MM-DD format") String endDate) {
+        log.info("[AiTool] createProject called with name={}", projectName);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "createProject",
+                "Create new project \"" + projectName + "\"",
+                args("projectName", projectName, "description", description, "startDate", startDate, "endDate", endDate),
+                null,
+                () -> projectInsightsPort.createProject(projectName, description, startDate, endDate, userId));
+    }
+
+    @Tool("""
+            Use this tool to update details of an existing project.
+            Provide the project ID. Optional fields include name, description, status (ACTIVE, COMPLETED, ARCHIVED),
+            heuristicMode (BALANCED, SKILL_FIT_ONLY, WORKLOAD_ONLY), workflowMode (STANDARD, SCRUM, KANBAN),
+            startDate (YYYY-MM-DD), and endDate (YYYY-MM-DD).
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object updateProject(
+            @P("The ID of the project to update") Long projectId,
+            @P("Optional name of the project") String name,
+            @P("Optional description") String description,
+            @P("Optional status (ACTIVE, COMPLETED, ARCHIVED)") String status,
+            @P("Optional heuristic mode (BALANCED, SKILL_FIT_ONLY, WORKLOAD_ONLY)") String heuristicMode,
+            @P("Optional workflow mode (STANDARD, SCRUM, KANBAN)") String workflowMode,
+            @P("Optional start date in YYYY-MM-DD format") String startDate,
+            @P("Optional end date in YYYY-MM-DD format") String endDate) {
+        log.info("[AiTool] updateProject called for project {}", projectId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "updateProject",
+                "Update project details for project ID " + projectId,
+                args("projectId", projectId, "name", name, "description", description, "status", status,
+                        "heuristicMode", heuristicMode, "workflowMode", workflowMode, "startDate", startDate, "endDate", endDate),
+                null,
+                () -> projectInsightsPort.updateProject(projectId, name, description, status, heuristicMode, workflowMode, startDate, endDate, userId));
+    }
+
+    @Tool("""
+            Use this tool to join an existing project using an invitation code.
+            Provide the projectCode (invitation code).
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object joinProject(@P("The invitation project code") String projectCode) {
+        log.info("[AiTool] joinProject called with code={}", projectCode);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "joinProject",
+                "Join project with code \"" + projectCode + "\"",
+                args("projectCode", projectCode),
+                null,
+                () -> projectInsightsPort.joinProject(projectCode, userId));
+    }
+
+    @Tool("""
+            Use this tool to leave an existing project (remove membership).
+            Provide the project ID.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object leaveProject(@P("The ID of the project to leave") Long projectId) {
+        log.info("[AiTool] leaveProject called for project {}", projectId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "leaveProject",
+                "Leave project ID " + projectId,
+                args("projectId", projectId),
+                null,
+                () -> {
+                    projectInsightsPort.leaveProject(projectId, userId);
+                    return "Left project successfully";
+                });
+    }
+
+    @Tool("""
+            Use this tool to update the role of a project member. Only project managers can perform this.
+            Provide the project ID, target user ID, and new role (MANAGER, MEMBER).
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object updateMemberRole(
+            @P("The ID of the project") Long projectId,
+            @P("The ID of the target user to update role") Long targetUserId,
+            @P("The new role (MANAGER, MEMBER)") String role) {
+        log.info("[AiTool] updateMemberRole called for project {} target {} role {}", projectId, targetUserId, role);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "updateMemberRole",
+                "Update member role of user " + targetUserId + " to " + role + " in project " + projectId,
+                args("projectId", projectId, "targetUserId", targetUserId, "role", role),
+                null,
+                () -> {
+                    projectInsightsPort.updateMemberRole(projectId, targetUserId, role, userId);
+                    return "Member role updated successfully";
+                });
+    }
+
+    @Tool("""
+            Use this tool to remove a member from a project. Only project managers can perform this.
+            Provide the project ID and target user ID to remove.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object removeMember(
+            @P("The ID of the project") Long projectId,
+            @P("The ID of the target user to remove") Long targetUserId) {
+        log.info("[AiTool] removeMember called for project {} target {}", projectId, targetUserId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "removeMember",
+                "Remove member " + targetUserId + " from project " + projectId,
+                args("projectId", projectId, "targetUserId", targetUserId),
+                null,
+                () -> {
+                    projectInsightsPort.removeMember(projectId, targetUserId, userId);
+                    return "Member removed successfully";
+                });
+    }
+
+    @Tool("""
+            Use this tool to archive a project to make it read-only. Only project managers can perform this.
+            Provide the project ID.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object archiveProject(@P("The ID of the project to archive") Long projectId) {
+        log.info("[AiTool] archiveProject called for project {}", projectId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "archiveProject",
+                "Archive project ID " + projectId,
+                args("projectId", projectId),
+                null,
+                () -> {
+                    projectInsightsPort.archiveProject(projectId, userId);
+                    return "Project archived successfully";
+                });
+    }
+
+    @Tool("""
+            Use this tool to restore an archived project to active status. Only project managers can perform this.
+            Provide the project ID.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object restoreProject(@P("The ID of the project to restore") Long projectId) {
+        log.info("[AiTool] restoreProject called for project {}", projectId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "restoreProject",
+                "Restore project ID " + projectId,
+                args("projectId", projectId),
+                null,
+                () -> {
+                    projectInsightsPort.restoreProject(projectId, userId);
+                    return "Project restored successfully";
+                });
+    }
+
+    @Tool("""
+            Use this tool to permanently delete a project and all its data. Only project managers can perform this.
+            Provide the project ID.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object deleteProject(@P("The ID of the project to delete") Long projectId) {
+        log.info("[AiTool] deleteProject called for project {}", projectId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "deleteProject",
+                "Permanently delete project ID " + projectId,
+                args("projectId", projectId),
+                null,
+                () -> {
+                    projectInsightsPort.deleteProject(projectId, userId);
+                    return "Project deleted successfully";
+                });
+    }
+
+    @Tool("""
             Use this tool to create a new task in a project.
             Provide project ID and title. Optional fields include description, priority, parent task ID,
-            sprint ID, difficulty, assignee ID, and dueDate as ISO-8601 or YYYY-MM-DD.
+            sprint ID, position, label IDs, required skill IDs, difficulty, assignee ID, startDate, and dueDate.
+            Dates should be ISO-8601 instants or YYYY-MM-DD.
             This tool creates real task data and should only be used when the user explicitly asks to create a task.
             """)
     public Object createTask(
@@ -518,10 +945,14 @@ public class TaskPilotAiTools {
             @P("Title of the task") String title,
             @P("Priority (LOW, MEDIUM, HIGH, URGENT)") String priority,
             @P("Optional description") String description,
+            @P("Optional kanban position") Float position,
             @P("Optional parent task ID") Long parentTaskId,
             @P("Optional sprint ID") Long sprintId,
             @P("Optional task difficulty 1-10") Integer difficultyLevel,
+            @P("Optional label ID list") List<Long> labelIds,
+            @P("Optional required skill ID list") List<Long> requiredSkillIds,
             @P("Optional assignee user ID") Long assigneeId,
+            @P("Optional start date as ISO-8601 instant or YYYY-MM-DD") String startDate,
             @P("Optional due date as ISO-8601 instant or YYYY-MM-DD") String dueDate) {
         log.info("[AiTool] createTask called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
@@ -532,11 +963,14 @@ public class TaskPilotAiTools {
                 "createTask",
                 "Create task \"" + title + "\" in project " + projectId,
                 args("projectId", projectId, "title", title, "priority", priority, "description", description,
-                        "parentTaskId", parentTaskId, "sprintId", sprintId, "difficultyLevel", difficultyLevel,
-                        "assigneeId", assigneeId, "dueDate", dueDate),
+                        "position", position, "parentTaskId", parentTaskId, "sprintId", sprintId,
+                        "difficultyLevel", difficultyLevel, "labelIds", labelIds,
+                        "requiredSkillIds", requiredSkillIds, "assigneeId", assigneeId,
+                        "startDate", startDate, "dueDate", dueDate),
                 null,
-                () -> taskCommandPort.createTask(projectId, title, description, priority, parentTaskId, sprintId,
-                        difficultyLevel, assigneeId, dueDate, userId));
+                () -> taskCommandPort.createTask(projectId, title, description, priority, position, parentTaskId,
+                        sprintId, difficultyLevel, labelIds, requiredSkillIds, assigneeId, startDate, dueDate,
+                        userId));
     }
 
     @Tool("""
@@ -587,6 +1021,56 @@ public class TaskPilotAiTools {
                 args("projectId", projectId, "name", name, "startDate", startDate, "endDate", endDate, "goal", goal),
                 null,
                 () -> sprintQueryPort.createSprint(projectId, name, startDate, endDate, goal, userId));
+    }
+
+    @Tool("""
+            Use this tool to update a planning or active sprint's details.
+            Provide project ID and sprint ID. Optional fields include name, startDate, endDate, and goal.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object updateSprint(
+            @P("The project ID") Long projectId,
+            @P("The ID of the sprint") Long sprintId,
+            @P("Optional sprint name") String name,
+            @P("Optional start date in YYYY-MM-DD format") String startDate,
+            @P("Optional end date in YYYY-MM-DD format") String endDate,
+            @P("Optional sprint goal") String goal) {
+        log.info("[AiTool] updateSprint called for sprint {}", sprintId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "updateSprint",
+                "Update sprint " + sprintId + " in project " + projectId,
+                args("projectId", projectId, "sprintId", sprintId, "name", name, "startDate", startDate,
+                        "endDate", endDate, "goal", goal),
+                null,
+                () -> sprintQueryPort.updateSprint(projectId, sprintId, name, startDate, endDate, goal, userId));
+    }
+
+    @Tool("""
+            Use this tool to delete a planning sprint. Only project managers can perform this.
+            Provide project ID and sprint ID.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object deleteSprint(
+            @P("The project ID") Long projectId,
+            @P("The ID of the sprint") Long sprintId) {
+        log.info("[AiTool] deleteSprint called for sprint {}", sprintId);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "deleteSprint",
+                "Delete sprint " + sprintId + " in project " + projectId,
+                args("projectId", projectId, "sprintId", sprintId),
+                null,
+                () -> {
+                    sprintQueryPort.deleteSprint(projectId, sprintId, userId);
+                    return "Sprint deleted successfully";
+                });
     }
 
     @Tool("""

@@ -13,6 +13,9 @@ public interface SprintQueryPort {
 
     // Write Tools
     SprintSummaryDto createSprint(Long projectId, String name, String startDate, String endDate, String goal, Long requesterUserId);
+    SprintSummaryDto updateSprint(Long projectId, Long sprintId, String name, String startDate, String endDate, String goal,
+            Long requesterUserId);
+    void deleteSprint(Long projectId, Long sprintId, Long requesterUserId);
     SprintSummaryDto startSprint(Long projectId, Long sprintId, Long requesterUserId);
     SprintSummaryDto completeSprint(Long projectId, Long sprintId, Long requesterUserId);
     Object assignTaskToSprint(Long taskId, Long sprintId, Long requesterUserId);

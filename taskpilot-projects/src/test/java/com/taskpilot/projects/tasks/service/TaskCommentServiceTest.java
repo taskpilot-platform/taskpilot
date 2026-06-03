@@ -35,6 +35,7 @@ import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
 import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserNotificationPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
+import com.taskpilot.contracts.assignment.port.out.UserPort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.CommentEntity;
 import com.taskpilot.projects.common.entity.CommentMentionEntity;
@@ -74,6 +75,8 @@ class TaskCommentServiceTest {
     @Mock
     private UserIdentityPort userIdentityPort;
     @Mock
+    private UserPort userPort;
+    @Mock
     private UserProfilePort userProfilePort;
     @Mock
     private UserNotificationPort userNotificationPort;
@@ -91,6 +94,7 @@ class TaskCommentServiceTest {
                 projectRepository,
                 projectMemberRepository,
                 userIdentityPort,
+                userPort,
                 userProfilePort,
                 userNotificationPort,
                 realtimeService);

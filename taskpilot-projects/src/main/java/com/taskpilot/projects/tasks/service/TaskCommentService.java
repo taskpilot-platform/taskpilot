@@ -24,6 +24,8 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.taskpilot.contracts.aiquery.dto.TaskCommentSummaryDto;
 import com.taskpilot.contracts.aiquery.port.out.TaskCommentQueryPort;
+import com.taskpilot.contracts.assignment.dto.UserProfileDto;
+import com.taskpilot.contracts.assignment.port.out.UserPort;
 import com.taskpilot.contracts.user.dto.NotificationTypeDto;
 import com.taskpilot.contracts.user.dto.SystemNotificationCommandDto;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
@@ -58,6 +60,7 @@ public class TaskCommentService implements TaskCommentQueryPort {
     private final ProjectRepository projectRepository;
     private final ProjectMemberRepository projectMemberRepository;
     private final UserIdentityPort userIdentityPort;
+    private final UserPort userPort;
     private final UserProfilePort userProfilePort;
     private final UserNotificationPort userNotificationPort;
     private final TaskCommentRealtimeService realtimeService;
@@ -225,18 +228,56 @@ public class TaskCommentService implements TaskCommentQueryPort {
         validateUserIsMember(task.getProjectId(), requesterUserId);
 
         return mapToDtos(commentRepository.findByTaskIdOrderByCreatedAtAsc(taskId)).stream()
-                .map(comment -> new TaskCommentSummaryDto(
-                        comment.id(),
-                        comment.taskId(),
-                        comment.parentCommentId(),
-                        comment.author().id(),
-                        comment.author().fullName(),
-                        comment.content(),
-                        comment.mentions().stream().map(UserProfileLiteDto::id).toList(),
-                        comment.deleted(),
-                        comment.createdAt(),
-                        comment.updatedAt()))
+                .map(this::toSummaryDto)
                 .toList();
+    }
+
+    @Override
+    @Transactional
+    public TaskCommentSummaryDto createTaskComment(Long taskId, String content, Long parentCommentId,
+            List<Long> mentionedUserIds, Long requesterUserId) {
+        return toSummaryDto(createComment(taskId,
+                new CreateTaskCommentRequest(content, parentCommentId, toMentionSet(mentionedUserIds)),
+                getRequesterEmail(requesterUserId)));
+    }
+
+    @Override
+    @Transactional
+    public TaskCommentSummaryDto updateTaskComment(Long taskId, Long commentId, String content,
+            List<Long> mentionedUserIds, Long requesterUserId) {
+        return toSummaryDto(updateComment(taskId, commentId,
+                new UpdateTaskCommentRequest(content, toMentionSet(mentionedUserIds)),
+                getRequesterEmail(requesterUserId)));
+    }
+
+    @Override
+    @Transactional
+    public TaskCommentSummaryDto deleteTaskComment(Long taskId, Long commentId, Long requesterUserId) {
+        return toSummaryDto(deleteComment(taskId, commentId, getRequesterEmail(requesterUserId)));
+    }
+
+    private String getRequesterEmail(Long requesterUserId) {
+        return userPort.findById(requesterUserId)
+                .map(UserProfileDto::email)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
+    }
+
+    private Set<Long> toMentionSet(List<Long> mentionedUserIds) {
+        return mentionedUserIds == null ? Set.of() : new LinkedHashSet<>(mentionedUserIds);
+    }
+
+    private TaskCommentSummaryDto toSummaryDto(TaskCommentDto comment) {
+        return new TaskCommentSummaryDto(
+                comment.id(),
+                comment.taskId(),
+                comment.parentCommentId(),
+                comment.author().id(),
+                comment.author().fullName(),
+                comment.content(),
+                comment.mentions().stream().map(UserProfileLiteDto::id).toList(),
+                comment.deleted(),
+                comment.createdAt(),
+                comment.updatedAt());
     }
 
     private TaskEntity findTask(Long taskId) {
