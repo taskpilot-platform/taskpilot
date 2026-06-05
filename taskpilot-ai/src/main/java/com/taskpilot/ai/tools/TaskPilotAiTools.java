@@ -63,10 +63,10 @@ public class TaskPilotAiTools {
             Typical intents include: "tien do du an", "bao cao du an", "project status", "progress report".
             Provide the project ID, and this tool returns a short status summary for that project.
             """)
-    public ProjectStatusDto getProjectStatus(@P("The ID of the project to query") Long projectId) {
+    public ProjectStatusDto getProjectStatus(@P("The ID of the project to query") String projectId) {
         log.info("[AiTool] getProjectStatus called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
-        return projectInsightsPort.getProjectStatus(projectId, userId);
+        return projectInsightsPort.getProjectStatus(toLong(projectId), userId);
     }
 
     @Tool("""
@@ -74,10 +74,10 @@ public class TaskPilotAiTools {
             Typical intents include: "ai ranh", "load team", "workload", "team availability".
             Provide the project ID to get a workload snapshot of members in that project.
             """)
-    public List<MemberWorkloadDto> getMemberWorkload(@P("The ID of the project") Long projectId) {
+    public List<MemberWorkloadDto> getMemberWorkload(@P("The ID of the project") String projectId) {
         log.info("[AiTool] getMemberWorkload called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
-        return memberAnalyticsPort.getMemberWorkloadForProject(projectId, userId);
+        return memberAnalyticsPort.getMemberWorkloadForProject(toLong(projectId), userId);
     }
 
     @Tool("""
@@ -85,20 +85,20 @@ public class TaskPilotAiTools {
             Typical intents include: "thanh vien du an", "ai trong du an", "project members".
             Provide the project ID. This tool returns member IDs, names, roles, and skills for that project.
             """)
-    public List<ProjectMemberDto> getProjectMembers(@P("The ID of the project") Long projectId) {
+    public List<ProjectMemberDto> getProjectMembers(@P("The ID of the project") String projectId) {
         log.info("[AiTool] getProjectMembers called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
-        return projectInsightsPort.getProjectMembers(projectId, userId);
+        return projectInsightsPort.getProjectMembers(toLong(projectId), userId);
     }
 
     @Tool("""
             Use this tool to fetch labels configured for a project.
             Provide the project ID. It returns label IDs, names, and colors.
             """)
-    public List<LabelSummaryDto> getProjectLabels(@P("The ID of the project") Long projectId) {
+    public List<LabelSummaryDto> getProjectLabels(@P("The ID of the project") String projectId) {
         log.info("[AiTool] getProjectLabels called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
-        return projectInsightsPort.getProjectLabels(projectId, userId);
+        return projectInsightsPort.getProjectLabels(toLong(projectId), userId);
     }
 
     @Tool("""
@@ -106,10 +106,10 @@ public class TaskPilotAiTools {
             Typical intents include: "member workload", "load cua thanh vien", "dang lam bao nhieu task".
             Provide the member ID. This tool returns open tasks, overdue tasks, and estimated hours.
             """)
-    public MemberWorkloadDto getMemberWorkloadByMemberId(@P("The ID of the member") Long memberId) {
+    public MemberWorkloadDto getMemberWorkloadByMemberId(@P("The ID of the member") String memberId) {
         log.info("[AiTool] getMemberWorkloadByMemberId called for member {}", memberId);
         Long userId = ToolExecutionContext.requireUserId();
-        return memberAnalyticsPort.getMemberWorkload(memberId, userId);
+        return memberAnalyticsPort.getMemberWorkload(toLong(memberId), userId);
     }
 
     @Tool("""
@@ -117,10 +117,10 @@ public class TaskPilotAiTools {
             Typical intents include: "task details", "chi tiet cong viec", "yeu cau task".
             Provide the task ID. This tool returns task name, description, difficulty, skills, and deadline.
             """)
-    public TaskDetailDto getTaskDetails(@P("The ID of the task") Long taskId) {
+    public TaskDetailDto getTaskDetails(@P("The ID of the task") String taskId) {
         log.info("[AiTool] getTaskDetails called for task {}", taskId);
         Long userId = ToolExecutionContext.requireUserId();
-        return taskCommandPort.getTaskDetails(taskId, userId);
+        return taskCommandPort.getTaskDetails(toLong(taskId), userId);
     }
 
     @Tool("""
@@ -141,22 +141,24 @@ public class TaskPilotAiTools {
             If the user names a specific assignee but does not provide memberId, use assignTaskToMemberByName instead.
             """)
     public Object assignTaskToMember(
-            @P("The ID of the task") Long taskId,
-            @P("The ID of the member") Long memberId,
+            @P("The ID of the task") String taskId,
+            @P("The ID of the member") String memberId,
             @P("Reason for the assignment") String reason) {
         log.info("[AiTool] assignTaskToMember called for task {} -> member {}", taskId, memberId);
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
         String safeReason = hasText(reason) ? reason : "Task assigned by AI tool";
 
+        Long resolvedTaskId = toLong(taskId);
+        Long resolvedMemberId = toLong(memberId);
         return pendingAiActionService.create(
                 userId,
                 sessionId,
                 "assignTaskToMember",
                 "Assign task " + taskId + " to member " + memberId,
-                args("taskId", taskId, "memberId", memberId, "reason", safeReason),
+                args("taskId", resolvedTaskId, "memberId", resolvedMemberId, "reason", safeReason),
                 null,
-                () -> taskCommandPort.assignTaskToMember(taskId, memberId, safeReason, userId, false));
+                () -> taskCommandPort.assignTaskToMember(resolvedTaskId, resolvedMemberId, safeReason, userId, false));
     }
 
     @Tool("""
@@ -167,14 +169,15 @@ public class TaskPilotAiTools {
             confirmation for the real assignment.
             """)
     public Object assignTaskToMemberByName(
-            @P("The ID of the task") Long taskId,
+            @P("The ID of the task") String taskId,
             @P("Full or partial member name, e.g. Julia Design") String memberName,
             @P("Reason for the assignment") String reason) {
         log.info("[AiTool] assignTaskToMemberByName called for task {} -> {}", taskId, memberName);
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
 
-        TaskDetailDto task = taskCommandPort.getTaskDetails(taskId, userId);
+        Long resolvedTaskId = toLong(taskId);
+        TaskDetailDto task = taskCommandPort.getTaskDetails(resolvedTaskId, userId);
         ProjectMemberDto member = resolveProjectMemberByName(task.projectId(), memberName, userId);
         String safeReason = hasText(reason)
                 ? reason
@@ -185,11 +188,11 @@ public class TaskPilotAiTools {
                 sessionId,
                 "assignTaskToMember",
                 "Assign task " + taskId + " to " + member.fullName() + " (user specified)",
-                args("taskId", taskId, "memberId", member.memberId(), "memberName", member.fullName(),
+                args("taskId", resolvedTaskId, "memberId", member.memberId(), "memberName", member.fullName(),
                         "reason", safeReason, "source", "user_specified_assignee"),
-                Map.of("taskId", taskId, "memberId", member.memberId(), "memberName", member.fullName(),
+                Map.of("taskId", resolvedTaskId, "memberId", member.memberId(), "memberName", member.fullName(),
                         "projectId", task.projectId(), "reason", safeReason),
-                () -> taskCommandPort.assignTaskToMember(taskId, member.memberId(), safeReason, userId, false));
+                () -> taskCommandPort.assignTaskToMember(resolvedTaskId, member.memberId(), safeReason, userId, false));
     }
 
     @Tool("""
@@ -202,29 +205,32 @@ public class TaskPilotAiTools {
             will return a message asking for task skills. Only use it when the user clearly wants assignment applied.
             """)
     public Object recommendAndAssignTask(
-            @P("The ID of the task to assign") Long taskId,
-            @P("Optional project ID. If omitted, it is read from task details") Long projectId,
+            @P("The ID of the task to assign") String taskId,
+            @P("Optional project ID. If omitted, it is read from task details") String projectId,
             @P("Optional comma-separated required skill names. If omitted, task required skills are used") String skills,
-            @P("Optional task difficulty 1-10. If omitted, task difficulty is used") Integer difficulty,
+            @P("Optional task difficulty 1-10. If omitted, task difficulty is used. Note: send as string like '5'") String difficulty,
             @P("Reason to store with the assignment") String reason) {
         log.info("[AiTool] recommendAndAssignTask called for task {}", taskId);
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
 
-        TaskDetailDto task = taskCommandPort.getTaskDetails(taskId, userId);
-        Long resolvedProjectId = projectId != null ? projectId : task.projectId();
+        Long resolvedTaskId = toLong(taskId);
+        TaskDetailDto task = taskCommandPort.getTaskDetails(resolvedTaskId, userId);
+        Long resolvedProjectId = hasText(projectId) ? toLong(projectId) : task.projectId();
         String resolvedSkills = hasText(skills) ? skills : task.requiredSkills();
         boolean shouldPersistProvidedSkills = hasText(skills) && !hasText(task.requiredSkills());
 
         if (!hasText(resolvedSkills)) {
-            return new RecommendAndAssignResult(false, taskId, resolvedProjectId, null, null, reason,
+            return new RecommendAndAssignResult(false, resolvedTaskId, resolvedProjectId, null, null, reason,
                     null, null,
                     "Task " + taskId + " is missing required skills. Please provide skills before assigning.");
         }
 
-        int resolvedDifficulty = difficulty != null ? difficulty
-                : (task.difficultyLevel() != null ? task.difficultyLevel() : 5);
-        resolvedDifficulty = Math.max(1, Math.min(10, resolvedDifficulty));
+        int parsedDifficulty = task.difficultyLevel() != null ? task.difficultyLevel() : 5;
+        if (difficulty != null && !difficulty.isBlank()) {
+            try { parsedDifficulty = Integer.parseInt(difficulty.trim()); } catch (Exception ignored) {}
+        }
+        int resolvedDifficulty = Math.max(1, Math.min(10, parsedDifficulty));
 
         AutoAssignmentResponse recommendation = autoAssignmentService.recommendCandidates(
                 resolvedProjectId,
@@ -233,7 +239,7 @@ public class TaskPilotAiTools {
                 userId);
 
         if (recommendation.candidates() == null || recommendation.candidates().isEmpty()) {
-            return new RecommendAndAssignResult(false, taskId, resolvedProjectId, null, null, reason,
+            return new RecommendAndAssignResult(false, resolvedTaskId, resolvedProjectId, null, null, reason,
                     recommendation, null,
                     "No eligible candidate found for task " + taskId + ".");
         }
@@ -242,7 +248,7 @@ public class TaskPilotAiTools {
         String safeReason = hasText(reason)
                 ? reason
                 : "AI selected the top-ranked candidate based on skill fit, workload, and project heuristic mode.";
-        RecommendAndAssignResult preview = new RecommendAndAssignResult(false, taskId, resolvedProjectId,
+        RecommendAndAssignResult preview = new RecommendAndAssignResult(false, resolvedTaskId, resolvedProjectId,
                 selected.getUserId(), selected.getFullName(), safeReason, recommendation, null,
                 "Ready to assign task " + taskId + " to " + selected.getFullName() + " after confirmation.");
 
@@ -252,21 +258,21 @@ public class TaskPilotAiTools {
                 "recommendAndAssignTask",
                 (shouldPersistProvidedSkills ? "Save required skills and assign task " : "Assign task ")
                         + taskId + " to " + selected.getFullName() + " (top recommended candidate)",
-                args("taskId", taskId, "projectId", resolvedProjectId, "skills", resolvedSkills,
+                args("taskId", resolvedTaskId, "projectId", resolvedProjectId, "skills", resolvedSkills,
                         "difficulty", resolvedDifficulty, "memberId", selected.getUserId(), "reason", safeReason,
                         "persistSkills", shouldPersistProvidedSkills),
                 preview,
                 () -> {
                     if (shouldPersistProvidedSkills) {
-                        taskCommandPort.updateTaskRequiredSkills(taskId, resolvedSkills, userId);
+                        taskCommandPort.updateTaskRequiredSkills(resolvedTaskId, resolvedSkills, userId);
                     }
                     TaskAssignmentResultDto assignment = taskCommandPort.assignTaskToMember(
-                            taskId,
+                            resolvedTaskId,
                             selected.getUserId(),
                             safeReason,
                             userId,
                             false);
-                    return new RecommendAndAssignResult(true, taskId, resolvedProjectId, selected.getUserId(),
+                    return new RecommendAndAssignResult(true, resolvedTaskId, resolvedProjectId, selected.getUserId(),
                             selected.getFullName(), safeReason, recommendation, assignment,
                             "Task " + taskId + " assigned to " + selected.getFullName() + ".");
                 });
@@ -325,9 +331,9 @@ public class TaskPilotAiTools {
             Provide the project ID and a comma-separated list of skills. This tool uses a default difficulty of 5.
             """)
     public AutoAssignmentResponse findBestCandidates(
-            @P("The project ID") Long projectId,
+            @P("The project ID") String projectId,
             @P("Comma-separated list of required skill names, e.g. 'Java, Spring Boot, React'") String skills) {
-        return recommendAssignmentCandidates(projectId, skills, 5);
+        return recommendAssignmentCandidates(projectId, skills, "5");
     }
 
     @Tool("""
@@ -339,16 +345,20 @@ public class TaskPilotAiTools {
             with the current heuristic mode and returns ranked candidates.
             """)
     public AutoAssignmentResponse recommendAssignmentCandidates(
-            @P("The project ID") Long projectId,
+            @P("The project ID") String projectId,
             @P("Comma-separated list of required skill names") String skills,
-            @P("Task difficulty 1-10") Integer difficulty) {
+            @P("Task difficulty 1-10. Note: send as string like '5'") String difficulty) {
         log.info("[AiTool] recommendAssignmentCandidates called for project {}", projectId);
 
         Long userId = ToolExecutionContext.requireUserId();
-        int safeDifficulty = difficulty == null ? 5 : Math.max(1, Math.min(10, difficulty));
+        int parsedDifficulty = 5;
+        if (difficulty != null && !difficulty.isBlank()) {
+            try { parsedDifficulty = Integer.parseInt(difficulty.trim()); } catch (Exception ignored) {}
+        }
+        int safeDifficulty = Math.max(1, Math.min(10, parsedDifficulty));
         List<String> requiredSkills = parseSkills(skills);
 
-        return autoAssignmentService.recommendCandidates(projectId, requiredSkills, safeDifficulty, userId);
+        return autoAssignmentService.recommendCandidates(toLong(projectId), requiredSkills, safeDifficulty, userId);
     }
 
     @Tool("""
@@ -357,8 +367,12 @@ public class TaskPilotAiTools {
             Provide daysAhead (default 7). This tool returns projects with due dates in that window.
             """)
     public List<ProjectDueDto> getUpcomingProjects(
-            @P("Number of days ahead to check (default 7)") Integer daysAhead) {
-        int safeDays = daysAhead == null ? 7 : Math.max(1, Math.min(90, daysAhead));
+            @P("Number of days ahead to check (default 7). Note: send as string like '7'") String daysAhead) {
+        int parsedDays = 7;
+        if (daysAhead != null && !daysAhead.isBlank()) {
+            try { parsedDays = Integer.parseInt(daysAhead.trim()); } catch (Exception ignored) {}
+        }
+        int safeDays = Math.max(1, Math.min(90, parsedDays));
         Long userId = ToolExecutionContext.requireUserId();
 
         LocalDate fromDate = LocalDate.now();
@@ -391,6 +405,25 @@ public class TaskPilotAiTools {
 
         Long userId = ToolExecutionContext.requireUserId();
         return projectMemberPort.findUpcomingProjects(userId, from, to, 20);
+    }
+
+    private Long toLong(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        String s = value.toString().trim();
+        if (s.isEmpty() || "null".equalsIgnoreCase(s)) {
+            return null;
+        }
+        try {
+            return Long.valueOf(s);
+        } catch (NumberFormatException e) {
+            log.warn("[AiTool] Failed to parse Long from: {}", s);
+            return null;
+        }
     }
 
     private List<String> parseSkills(String skills) {
@@ -447,10 +480,10 @@ public class TaskPilotAiTools {
             not assigned yet, "ch", "chua", "chưa", "ch dc", "ch đc", "chua duoc phan cong",
             or "chưa được phân công"; use getUnassignedTasksByProject instead.
             """)
-    public Object getTasksByProject(@P("The ID of the project") Long projectId) {
+    public Object getTasksByProject(@P("The ID of the project") String projectId) {
         log.info("[AiTool] getTasksByProject called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
-        return taskCommandPort.getTasksByProject(projectId, userId);
+        return taskCommandPort.getTasksByProject(toLong(projectId), userId);
     }
 
     @Tool("""
@@ -460,10 +493,10 @@ public class TaskPilotAiTools {
             Provide the project ID. It returns only tasks whose assignee is empty, with required skills and difficulty
             when available, so the assistant can ask only for missing fields.
             """)
-    public Object getUnassignedTasksByProject(@P("The ID of the project") Long projectId) {
+    public Object getUnassignedTasksByProject(@P("The ID of the project") String projectId) {
         log.info("[AiTool] getUnassignedTasksByProject called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
-        return taskCommandPort.getUnassignedTasksByProject(projectId, userId);
+        return taskCommandPort.getUnassignedTasksByProject(toLong(projectId), userId);
     }
 
     @Tool("""
@@ -592,7 +625,7 @@ public class TaskPilotAiTools {
             @P("Optional priority (LOW, MEDIUM, HIGH, URGENT)") String priority,
             @P("Optional kanban position") Float position,
             @P("Optional full replacement label ID list") List<Long> labelIds,
-            @P("Optional difficulty 1-10") Integer difficultyLevel,
+            @P("Optional difficulty 1-10. Note: send as string like '5'") String difficultyLevel,
             @P("Optional full replacement required skill ID list") List<Long> requiredSkillIds,
             @P("Optional assignee user ID") Long assigneeId,
             @P("Optional start date as ISO-8601 instant or YYYY-MM-DD") String startDate,
@@ -600,6 +633,13 @@ public class TaskPilotAiTools {
         log.info("[AiTool] updateTask called for task {}", taskId);
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
+
+        Integer parsedDifficultyLevel = null;
+        if (difficultyLevel != null && !difficultyLevel.isBlank()) {
+            try { parsedDifficultyLevel = Integer.valueOf(difficultyLevel.trim()); } catch (Exception ignored) {}
+        }
+        final Integer finalDifficultyLevel = parsedDifficultyLevel;
+
         return pendingAiActionService.create(
                 userId,
                 sessionId,
@@ -607,11 +647,11 @@ public class TaskPilotAiTools {
                 "Update task " + taskId,
                 args("taskId", taskId, "title", title, "description", description, "status", status,
                         "priority", priority, "position", position, "labelIds", labelIds,
-                        "difficultyLevel", difficultyLevel, "requiredSkillIds", requiredSkillIds,
+                        "difficultyLevel", finalDifficultyLevel, "requiredSkillIds", requiredSkillIds,
                         "assigneeId", assigneeId, "startDate", startDate, "dueDate", dueDate),
                 null,
                 () -> taskCommandPort.updateTask(taskId, title, description, status, priority, position, labelIds,
-                        difficultyLevel, requiredSkillIds, assigneeId, startDate, dueDate, userId));
+                        finalDifficultyLevel, requiredSkillIds, assigneeId, startDate, dueDate, userId));
     }
 
     @Tool("""
@@ -642,30 +682,31 @@ public class TaskPilotAiTools {
             This tool performs a real database modification and requires final user confirmation.
             """)
     public Object moveTaskKanban(
-            @P("The ID of the task") Long taskId,
+            @P("The ID of the task") String taskId,
             @P("Target status (TODO, IN_PROGRESS, REVIEW, DONE)") String status,
             @P("Target kanban position") Float position) {
         log.info("[AiTool] moveTaskKanban called for task {} -> {} @ {}", taskId, status, position);
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
+        Long resolvedTaskId = toLong(taskId);
         return pendingAiActionService.create(
                 userId,
                 sessionId,
                 "moveTaskKanban",
                 "Move task " + taskId + " to " + status,
-                args("taskId", taskId, "status", status, "position", position),
+                args("taskId", resolvedTaskId, "status", status, "position", position),
                 null,
-                () -> taskCommandPort.moveTaskKanban(taskId, status, position, userId));
+                () -> taskCommandPort.moveTaskKanban(resolvedTaskId, status, position, userId));
     }
 
     @Tool("""
             Use this tool to fetch all sprints belonging to a specific project.
             Provide the project ID.
             """)
-    public Object getSprintsByProject(@P("The ID of the project") Long projectId) {
+    public Object getSprintsByProject(@P("The ID of the project") String projectId) {
         log.info("[AiTool] getSprintsByProject called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
-        return sprintQueryPort.getSprintsByProject(projectId, userId);
+        return sprintQueryPort.getSprintsByProject(toLong(projectId), userId);
     }
 
     @Tool("""
@@ -934,44 +975,51 @@ public class TaskPilotAiTools {
     }
 
     @Tool("""
-            Use this tool to create a new task in a project.
-            Provide project ID and title. Optional fields include description, priority, parent task ID,
-            sprint ID, position, label IDs, required skill IDs, difficulty, assignee ID, startDate, and dueDate.
-            Dates should be ISO-8601 instants or YYYY-MM-DD.
-            This tool creates real task data and should only be used when the user explicitly asks to create a task.
+            Use this tool to create a new root-level task in a project.
+            Required: projectId, title. Optional: description, priority (LOW/MEDIUM/HIGH/URGENT),
+            sprintId, difficultyLevel (1-10 as string), labelIds, requiredSkillIds, assigneeId,
+            startDate, dueDate (ISO-8601 or YYYY-MM-DD format).
+            Do NOT set parentTaskId - only root-level tasks are supported via this tool.
+            This tool creates real task data and must only be used when the user explicitly requests task creation.
+            Before calling, collect all necessary info from the user or their context.
             """)
     public Object createTask(
             @P("The project ID") Long projectId,
             @P("Title of the task") String title,
-            @P("Priority (LOW, MEDIUM, HIGH, URGENT)") String priority,
+            @P("Priority: LOW, MEDIUM, HIGH, or URGENT. Default to MEDIUM if not specified.") String priority,
             @P("Optional description") String description,
-            @P("Optional kanban position") Float position,
-            @P("Optional parent task ID") Long parentTaskId,
-            @P("Optional sprint ID") Long sprintId,
-            @P("Optional task difficulty 1-10") Integer difficultyLevel,
+            @P("Optional sprint ID to place the task in") Long sprintId,
+            @P("Optional task difficulty 1-10. Send as string e.g. '5'") String difficultyLevel,
             @P("Optional label ID list") List<Long> labelIds,
             @P("Optional required skill ID list") List<Long> requiredSkillIds,
-            @P("Optional assignee user ID") Long assigneeId,
-            @P("Optional start date as ISO-8601 instant or YYYY-MM-DD") String startDate,
-            @P("Optional due date as ISO-8601 instant or YYYY-MM-DD") String dueDate) {
+            @P("Optional assignee user ID. IMPORTANT: Leave NULL unless explicitly requested by user. Do NOT guess or invent IDs.") Long assigneeId,
+            @P("Optional start date as ISO-8601 or YYYY-MM-DD") String startDate,
+            @P("Optional due date as ISO-8601 or YYYY-MM-DD") String dueDate) {
         log.info("[AiTool] createTask called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
+
+        Integer parsedDifficultyLevel = null;
+        if (difficultyLevel != null && !difficultyLevel.isBlank()) {
+            try { parsedDifficultyLevel = Integer.valueOf(difficultyLevel.trim()); } catch (Exception ignored) {}
+        }
+        final Integer finalDifficultyLevel = parsedDifficultyLevel;
+
         return pendingAiActionService.create(
                 userId,
                 sessionId,
                 "createTask",
                 "Create task \"" + title + "\" in project " + projectId,
                 args("projectId", projectId, "title", title, "priority", priority, "description", description,
-                        "position", position, "parentTaskId", parentTaskId, "sprintId", sprintId,
-                        "difficultyLevel", difficultyLevel, "labelIds", labelIds,
+                        "sprintId", sprintId, "difficultyLevel", finalDifficultyLevel, "labelIds", labelIds,
                         "requiredSkillIds", requiredSkillIds, "assigneeId", assigneeId,
                         "startDate", startDate, "dueDate", dueDate),
                 null,
-                () -> taskCommandPort.createTask(projectId, title, description, priority, position, parentTaskId,
-                        sprintId, difficultyLevel, labelIds, requiredSkillIds, assigneeId, startDate, dueDate,
+                () -> taskCommandPort.createTask(projectId, title, description, priority, null, null,
+                        sprintId, finalDifficultyLevel, labelIds, requiredSkillIds, assigneeId, startDate, dueDate,
                         userId));
     }
+
 
     @Tool("""
             Use this tool to fetch the backlog of a specific project, which contains unscheduled tasks

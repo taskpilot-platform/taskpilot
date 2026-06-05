@@ -84,9 +84,9 @@ ai:
     fallback5-model: ${AI_GEMINI_FALLBACK5_MODEL:gemini-2.0-flash}
     fallback6-model: ${AI_GEMINI_FALLBACK6_MODEL:gemini-2.0-flash-lite}
     fallback7-model: ${AI_GEMINI_FALLBACK7_MODEL:gemini-3.1-pro-preview}
-    waterfall-max-attempts: ${AI_GEMINI_WATERFALL_MAX_ATTEMPTS:4}
-    use-for-tools: ${AI_GEMINI_USE_FOR_TOOLS:false}
-    timeout-seconds: ${AI_GEMINI_TIMEOUT_SECONDS:20}
+    waterfall-max-attempts: ${AI_GEMINI_WATERFALL_MAX_ATTEMPTS:2}
+    use-for-tools: ${AI_GEMINI_USE_FOR_TOOLS:true}
+    timeout-seconds: ${AI_GEMINI_TIMEOUT_SECONDS:45}
 
   github:
     token: ${GITHUB_TOKEN}
@@ -100,13 +100,30 @@ ai:
     reasoning-model: ${AI_GROQ_REASONING_MODEL:openai/gpt-oss-120b}
     gatekeeper-model: ${AI_GROQ_GATEKEEPER_MODEL:llama-3.1-8b-instant}
 
+  openrouter:
+    enabled: ${AI_OPENROUTER_ENABLED:false}
+    api-key: ${OPENROUTER_API_KEY:}
+    api-keys: ${OPENROUTER_API_KEYS:}
+    base-url: ${AI_OPENROUTER_BASE_URL:https://openrouter.ai/api/v1}
+    reasoning-model: ${AI_OPENROUTER_REASONING_MODEL:openai/gpt-oss-120b:free}
+    reasoning-fallback1-model: ${AI_OPENROUTER_REASONING_FALLBACK1_MODEL:moonshotai/kimi-k2.6:free}
+    reasoning-fallback2-model: ${AI_OPENROUTER_REASONING_FALLBACK2_MODEL:z-ai/glm-4.5-air:free}
+    reasoning-fallback3-model: ${AI_OPENROUTER_REASONING_FALLBACK3_MODEL:poolside/laguna-xs.2:free}
+    reasoning-fallback4-model: ${AI_OPENROUTER_REASONING_FALLBACK4_MODEL:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free}
+    reasoning-fallback5-model: ${AI_OPENROUTER_REASONING_FALLBACK5_MODEL:google/gemma-4-31b-it:free}
+    reasoning-fallback6-model: ${AI_OPENROUTER_REASONING_FALLBACK6_MODEL:google/gemma-4-26b-a4b-it:free}
+    reasoning-fallback7-model: ${AI_OPENROUTER_REASONING_FALLBACK7_MODEL:openai/gpt-oss-20b:free}
+    reasoning-fallback8-model: ${AI_OPENROUTER_REASONING_FALLBACK8_MODEL:}
+    reasoning-fallback9-model: ${AI_OPENROUTER_REASONING_FALLBACK9_MODEL:}
+    reasoning-fallback10-model: ${AI_OPENROUTER_REASONING_FALLBACK10_MODEL:}
+
   model:
     timeout-seconds: ${AI_MODEL_TIMEOUT:60}
 
   routing:
     token-threshold: ${AI_TOKEN_THRESHOLD:6000}
     reasoning-keywords: ${AI_REASONING_KEYWORDS:analyze,reason,strategy,architecture,tradeoff,root cause,plan,optimize,design,deep dive,phan tich,chien luoc,so sanh,vi sao,giai thich,ly do,danh gia,lua chon,phan ra,boc tach,lo trinh,breakdown,roadmap,rui ro,tre han,be tac,nguyen nhan,giai phap,bottleneck,risk,qua tai,can bang,xung dot,kien truc,thiet ke he thong,database,toi uu,system design,refactor}
-    tool-keywords: ${AI_TOOL_KEYWORDS:project status,workload,assign,candidates,task list,project progress,my projects,project list,unassigned,not assigned,confirm,confirm_action,apply,xac nhan,dong y,thuc hien,du an,liet ke project,liet ke du an,chua phan cong,chua duoc phan cong,task chua gan,giao viec,tinh trang,tien do,danh sach task,cong viec,ung vien,giao task,gan task,chia viec,tao task}
+    tool-keywords: ${AI_TOOL_KEYWORDS:project,task,sprint,comment,member,role,status,project status,workload,assign,candidates,task list,project progress,my projects,project list,unassigned,not assigned,confirm,confirm_action,apply,xac nhan,dong y,thuc hien,du an,liet ke project,liet ke du an,chua phan cong,chua duoc phan cong,task chua gan,giao viec,tinh trang,tien do,danh sach task,cong viec,ung vien,giao task,gan task,chia viec,tao task}
     ahp-fallback-keywords: ${AI_AHP_FALLBACK_KEYWORDS:phan cong,giao viec,chia viec,chon ai,chon nguoi,tim nguoi,ai ranh,ung vien,assign,candidate,workload,chia task}
 
   heuristic:
@@ -114,16 +131,16 @@ ai:
 
   chat:
     history-size: ${AI_HISTORY_SIZE:10}
-    memory-max-tokens: ${AI_MEMORY_MAX_TOKENS:7000}
+    memory-max-tokens: ${AI_MEMORY_MAX_TOKENS:4000}
     context-tail-messages: ${AI_CONTEXT_TAIL_MESSAGES:6}
     compact-summary-max-chars: ${AI_COMPACT_SUMMARY_MAX_CHARS:3000}
     compact-message-max-chars: ${AI_COMPACT_MESSAGE_MAX_CHARS:600}
     max-tool-result-memory-chars: ${AI_MAX_TOOL_RESULT_MEMORY_CHARS:12000}
-    stream-first-response-timeout-seconds: ${AI_STREAM_FIRST_RESPONSE_TIMEOUT_SECONDS:10}
+    stream-first-response-timeout-seconds: ${AI_STREAM_FIRST_RESPONSE_TIMEOUT_SECONDS:30}
     text-only-first-response-timeout-seconds: ${AI_TEXT_ONLY_FIRST_RESPONSE_TIMEOUT_SECONDS:10}
     max-user-input-chars: ${AI_MAX_USER_INPUT_CHARS:1500}
     max-user-input-tokens: ${AI_MAX_USER_INPUT_TOKENS:2500}
-    max-output-tokens: ${AI_MAX_OUTPUT_TOKENS:3500}
+    max-output-tokens: ${AI_MAX_OUTPUT_TOKENS:2000}
     max-assistant-memory-chars: ${AI_MAX_ASSISTANT_MEMORY_CHARS:1500}
 
 onesignal:

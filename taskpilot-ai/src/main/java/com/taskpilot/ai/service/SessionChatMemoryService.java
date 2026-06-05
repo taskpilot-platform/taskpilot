@@ -136,7 +136,14 @@ public class SessionChatMemoryService {
         }
 
         String lastText = userMessage.singleText();
-        return lastText != null && lastText.equals(userInput);
+        if (lastText == null || userInput == null) {
+            return false;
+        }
+        return normalizeMessageText(lastText).equals(normalizeMessageText(userInput));
+    }
+
+    private String normalizeMessageText(String text) {
+        return text.replace("\r\n", "\n").trim();
     }
 
     private String normalizeUserInputForMemory(String userInput) {
