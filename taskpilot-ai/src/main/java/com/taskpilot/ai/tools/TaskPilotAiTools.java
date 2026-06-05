@@ -992,7 +992,7 @@ public class TaskPilotAiTools {
             @P("Optional task difficulty 1-10. Send as string e.g. '5'") String difficultyLevel,
             @P("Optional label ID list") List<Long> labelIds,
             @P("Optional required skill ID list") List<Long> requiredSkillIds,
-            @P("Optional assignee user ID") Long assigneeId,
+            @P("Optional assignee user ID. IMPORTANT: Leave NULL unless explicitly requested by user. Do NOT guess or invent IDs.") Long assigneeId,
             @P("Optional start date as ISO-8601 or YYYY-MM-DD") String startDate,
             @P("Optional due date as ISO-8601 or YYYY-MM-DD") String dueDate) {
         log.info("[AiTool] createTask called for project {}", projectId);
