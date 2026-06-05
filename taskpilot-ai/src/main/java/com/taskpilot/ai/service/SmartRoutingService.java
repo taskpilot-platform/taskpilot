@@ -344,14 +344,20 @@ public class SmartRoutingService {
     }
 
     public StreamingChatModel getNextStreamingFallback(StreamingChatModel currentModel) {
+        StreamingChatModel next = getNextStreamingFallbackInternal(currentModel);
+        if (isOpenRouterReasoningModel(currentModel)) {
+            log.info("[SmartRouting] OpenRouter reasoning waterfall: {} -> {}",
+                    getModelName(currentModel), getModelName(next));
+        }
+        return next;
+    }
+
+    private StreamingChatModel getNextStreamingFallbackInternal(StreamingChatModel currentModel) {
         if (isGeminiModel(currentModel)) {
             return getNextGeminiFallback(currentModel);
         }
         if (isOpenRouterReasoningModel(currentModel)) {
-            StreamingChatModel next = getNextOpenRouterReasoningFallback(currentModel);
-            log.info("[SmartRouting] OpenRouter reasoning waterfall: {} -> {}",
-                    getModelName(currentModel), getModelName(next));
-            return next;
+            return getNextOpenRouterReasoningFallback(currentModel);
         }
         if (currentModel == groqOssReasoningModel) {
             return deepSeekReasoningModel;
@@ -363,7 +369,7 @@ public class SmartRoutingService {
     }
 
     public boolean hasStreamingFallbackAfter(StreamingChatModel currentModel) {
-        return getNextStreamingFallback(currentModel) != currentModel;
+        return getNextStreamingFallbackInternal(currentModel) != currentModel;
     }
 
     private StreamingChatModel getNextOpenRouterReasoningFallback(StreamingChatModel currentModel) {

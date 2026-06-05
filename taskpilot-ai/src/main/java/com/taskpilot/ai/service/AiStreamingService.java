@@ -6,6 +6,7 @@ import com.taskpilot.ai.entity.AiChatRequestEntity.Phase;
 import com.taskpilot.ai.entity.ChatMessageEntity;
 import com.taskpilot.ai.entity.ChatMessageEntity.SenderType;
 import com.taskpilot.ai.entity.ChatSessionEntity;
+import com.taskpilot.ai.config.OpenRouterMultiKeyStreamingChatModel;
 import com.taskpilot.ai.heuristic.HeuristicConfigProvider;
 import com.taskpilot.ai.repository.ChatMessageRepository;
 import com.taskpilot.ai.repository.ChatSessionRepository;
@@ -276,6 +277,39 @@ public class AiStreamingService {
             boolean isFallbackAttempt,
             String clientMessageId,
             boolean requiresAHP) {
+        doStreamWithKeyAttempts(
+                emitter,
+                emitterCompleted,
+                session,
+                sessionId,
+                userId,
+                userInput,
+                history,
+                systemPrompt,
+                model,
+                modelName,
+                startTime,
+                isFallbackAttempt,
+                clientMessageId,
+                requiresAHP,
+                1);
+    }
+
+    private void doStreamWithKeyAttempts(SseEmitter emitter,
+            AtomicBoolean emitterCompleted,
+            ChatSessionEntity session,
+            Long sessionId,
+            Long userId,
+            String userInput,
+            List<ChatMessage> history,
+            String systemPrompt,
+            StreamingChatModel model,
+            String modelName,
+            long startTime,
+            boolean isFallbackAttempt,
+            String clientMessageId,
+            boolean requiresAHP,
+            int initialModelKeyAttempts) {
 
         List<ChatMessage> workingHistory = new ArrayList<>(history);
         StringBuilder fullResponse = new StringBuilder();
@@ -307,7 +341,8 @@ public class AiStreamingService {
                 null,
                 0,
                 toolCallSummaries,
-                toolNames);
+                toolNames,
+                initialModelKeyAttempts);
     }
 
     private void streamRound(SseEmitter emitter,
@@ -331,7 +366,8 @@ public class AiStreamingService {
             String lastToolName,
             int consecutiveToolExecutions,
             List<Map<String, Object>> toolCallSummaries,
-            LinkedHashSet<String> toolNames) {
+            LinkedHashSet<String> toolNames,
+            int modelKeyAttempts) {
         List<ChatMessage> sanitizedHistory = compactHistoryForRequest(
                 sanitizeHistoryForTools(history),
                 "tool-round-" + toolRound);
@@ -386,7 +422,6 @@ public class AiStreamingService {
 
                 final AtomicBoolean roundClosed = new AtomicBoolean(false);
                 final AtomicBoolean firstModelSignalReceived = new AtomicBoolean(false);
-                final boolean suppressTextUntilToolCall = requiresAHP && toolRound == 0;
                 final ScheduledFuture<?> timeoutFuture = timeoutScheduler.schedule(() -> {
                     if (firstModelSignalReceived.get() || clientDisconnected.get() || emitterCompleted.get()) {
                         return;
@@ -406,7 +441,8 @@ public class AiStreamingService {
                                 startTime,
                                 isFallbackAttempt,
                                 clientMessageId,
-                                requiresAHP);
+                                requiresAHP,
+                                modelKeyAttempts);
                     }
                 }, Math.max(1, streamFirstResponseTimeoutSeconds), TimeUnit.SECONDS);
 
@@ -420,9 +456,6 @@ public class AiStreamingService {
                             return;
                         }
                         firstModelSignalReceived.set(true);
-                        if (suppressTextUntilToolCall) {
-                            return;
-                        }
                         fullResponse.append(partialResponse);
 
                         // Thinking expansion logic: buffer tokens between <think> and </think>
@@ -568,57 +601,9 @@ public class AiStreamingService {
                                 nextToolState.toolName(),
                                 nextToolState.consecutiveCount(),
                                 toolCallSummaries,
-                                toolNames);
+                                toolNames,
+                                modelKeyAttempts);
                     }
-                    return;
-                }
-
-                if (requiresAHP && toolRound == 0) {
-                    String nonToolText = aiMessage == null ? "" : aiMessage.text();
-                    log.warn("[Gatekeeper] requiresAHP=true but model {} completed without recommendAssignmentCandidates. Retrying fallback. Text was: {}",
-                            modelName, abbreviateForLog(nonToolText, 160));
-
-                    if (routingService.hasStreamingFallbackAfter(model)) {
-                        StreamingChatModel fallback = routingService.getNextStreamingFallback(model);
-                        String fallbackName = routingService.getModelName(fallback);
-                        chatStreamStatusService.updatePhase(sessionId, clientMessageId,
-                                Phase.THINKING, fallbackName, null, null);
-                        safeSend(emitter, "model", fallbackName + " (tool-call fallback)", null);
-                        safeSend(emitter, "phase", Phase.THINKING.name(), null);
-                        streamRound(
-                                emitter,
-                                emitterCompleted,
-                                session,
-                                sessionId,
-                                userId,
-                                userInput,
-                                history,
-                                systemPrompt,
-                                fallback,
-                                fallbackName,
-                                startTime,
-                                !routingService.hasStreamingFallbackAfter(fallback),
-                                clientMessageId,
-                                fullResponse,
-                                clientDisconnected,
-                                generatingMarked,
-                                toolRound,
-                                requiresAHP,
-                                lastToolName,
-                                consecutiveToolExecutions,
-                                toolCallSummaries,
-                                toolNames);
-                        return;
-                    }
-
-                    chatStreamStatusService.updatePhase(sessionId, clientMessageId,
-                            Phase.FAILED, modelName, null,
-                            "Model completed without required AHP tool call");
-                    safeSend(emitter, "phase", Phase.FAILED.name(), null);
-                    safeSend(emitter, "error",
-                            "AI service could not start the assignment workflow. Please try again.",
-                            null);
-                    safeComplete(emitter, emitterCompleted);
                     return;
                 }
 
@@ -741,10 +726,25 @@ public class AiStreamingService {
             long startTime,
             boolean isFallbackAttempt,
             String clientMessageId,
-            boolean requiresAHP) {
+            boolean requiresAHP,
+            int modelKeyAttempts) {
         String message = "Model did not produce a first streaming response within "
                 + streamFirstResponseTimeoutSeconds + "s";
         log.warn("[SSE] {} for session {} using model {}", message, sessionId, modelName);
+
+        if (hasRemainingOpenRouterKeys(model, modelKeyAttempts)) {
+            int nextAttempt = modelKeyAttempts + 1;
+            chatStreamStatusService.updatePhase(sessionId, clientMessageId,
+                    Phase.THINKING, modelName, null, null);
+            safeSend(emitter, "model",
+                    modelName + " (next OpenRouter key " + nextAttempt + "/" + openRouterKeyCount(model) + ")",
+                    null);
+            safeSend(emitter, "phase", Phase.THINKING.name(), null);
+            doStreamWithKeyAttempts(emitter, emitterCompleted, session, sessionId, userId, userInput,
+                    history, systemPrompt, model, modelName, startTime,
+                    isFallbackAttempt, clientMessageId, requiresAHP, nextAttempt);
+            return;
+        }
 
         if (!isFallbackAttempt || routingService.hasStreamingFallbackAfter(model)) {
             StreamingChatModel fallback = routingService.getNextStreamingFallback(model);
@@ -757,9 +757,9 @@ public class AiStreamingService {
                         fallbackName + (isStillGemini ? " (gemini fallback after timeout)" : " (fallback after timeout)"),
                         null);
                 safeSend(emitter, "phase", Phase.THINKING.name(), null);
-                doStream(emitter, emitterCompleted, session, sessionId, userId, userInput,
+                doStreamWithKeyAttempts(emitter, emitterCompleted, session, sessionId, userId, userInput,
                         history, systemPrompt, fallback, fallbackName, startTime,
-                        !routingService.hasStreamingFallbackAfter(fallback), clientMessageId, requiresAHP);
+                        !routingService.hasStreamingFallbackAfter(fallback), clientMessageId, requiresAHP, 1);
                 return;
             }
         }
@@ -1514,15 +1514,16 @@ public class AiStreamingService {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
-    private String abbreviateForLog(String text, int maxLength) {
-        if (text == null || text.isBlank()) {
-            return "";
+    private boolean hasRemainingOpenRouterKeys(StreamingChatModel model, int modelKeyAttempts) {
+        return model instanceof OpenRouterMultiKeyStreamingChatModel openRouterModel
+                && modelKeyAttempts < openRouterModel.keyCount();
+    }
+
+    private int openRouterKeyCount(StreamingChatModel model) {
+        if (model instanceof OpenRouterMultiKeyStreamingChatModel openRouterModel) {
+            return openRouterModel.keyCount();
         }
-        String normalized = text.replaceAll("\\s+", " ").trim();
-        if (normalized.length() <= maxLength) {
-            return normalized;
-        }
-        return normalized.substring(0, Math.max(0, maxLength - 3)) + "...";
+        return 1;
     }
 
     private record ToolLoopState(String toolName, int consecutiveCount) {

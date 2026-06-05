@@ -103,6 +103,7 @@ ai:
   openrouter:
     enabled: ${AI_OPENROUTER_ENABLED:false}
     api-key: ${OPENROUTER_API_KEY:}
+    api-keys: ${OPENROUTER_API_KEYS:}
     base-url: ${AI_OPENROUTER_BASE_URL:https://openrouter.ai/api/v1}
     reasoning-model: ${AI_OPENROUTER_REASONING_MODEL:openai/gpt-oss-120b:free}
     reasoning-fallback1-model: ${AI_OPENROUTER_REASONING_FALLBACK1_MODEL:moonshotai/kimi-k2.6:free}
@@ -135,7 +136,7 @@ ai:
     compact-summary-max-chars: ${AI_COMPACT_SUMMARY_MAX_CHARS:3000}
     compact-message-max-chars: ${AI_COMPACT_MESSAGE_MAX_CHARS:600}
     max-tool-result-memory-chars: ${AI_MAX_TOOL_RESULT_MEMORY_CHARS:12000}
-    stream-first-response-timeout-seconds: ${AI_STREAM_FIRST_RESPONSE_TIMEOUT_SECONDS:5}
+    stream-first-response-timeout-seconds: ${AI_STREAM_FIRST_RESPONSE_TIMEOUT_SECONDS:30}
     text-only-first-response-timeout-seconds: ${AI_TEXT_ONLY_FIRST_RESPONSE_TIMEOUT_SECONDS:10}
     max-user-input-chars: ${AI_MAX_USER_INPUT_CHARS:1500}
     max-user-input-tokens: ${AI_MAX_USER_INPUT_TOKENS:2500}

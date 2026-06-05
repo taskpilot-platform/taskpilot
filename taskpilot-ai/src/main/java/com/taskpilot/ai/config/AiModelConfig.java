@@ -15,6 +15,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
 
 @Slf4j
 @Configuration
@@ -71,6 +73,9 @@ public class AiModelConfig {
 
         @Value("${ai.openrouter.api-key:}")
         private String openRouterApiKey;
+
+        @Value("${ai.openrouter.api-keys:}")
+        private String openRouterApiKeys;
 
         @Value("${ai.openrouter.base-url:https://openrouter.ai/api/v1}")
         private String openRouterBaseUrl;
@@ -358,14 +363,24 @@ public class AiModelConfig {
         }
 
         private StreamingChatModel openRouterReasoningModel(String modelName, boolean parallelToolCalls) {
-                if (openRouterApiKey == null || openRouterApiKey.isBlank()) {
-                        throw new IllegalStateException("ai.openrouter.enabled=true but ai.openrouter.api-key is missing");
+                List<String> apiKeys = openRouterApiKeyPool();
+                if (apiKeys.isEmpty()) {
+                        throw new IllegalStateException("ai.openrouter.enabled=true but no OpenRouter API keys are configured");
                 }
 
-                log.info("[AI Config] Initializing OpenRouter model: {}", modelName);
+                log.info("[AI Config] Initializing OpenRouter model: {} with {} API key(s)", modelName, apiKeys.size());
+                List<OpenRouterMultiKeyStreamingChatModel.KeyedModel> keyedModels = apiKeys.stream()
+                                .map(apiKey -> new OpenRouterMultiKeyStreamingChatModel.KeyedModel(
+                                                maskOpenRouterKey(apiKey),
+                                                singleOpenRouterModel(apiKey, modelName, parallelToolCalls)))
+                                .toList();
+                return new OpenRouterMultiKeyStreamingChatModel(modelName, keyedModels);
+        }
+
+        private StreamingChatModel singleOpenRouterModel(String apiKey, String modelName, boolean parallelToolCalls) {
                 if (parallelToolCalls) {
                         return OpenAiOfficialStreamingChatModel.builder()
-                                        .apiKey(openRouterApiKey)
+                                        .apiKey(apiKey)
                                         .baseUrl(openRouterBaseUrl)
                                         .modelName(modelName)
                                         .temperature(0.4)
@@ -374,11 +389,29 @@ public class AiModelConfig {
                                         .build();
                 }
                 return OpenAiOfficialStreamingChatModel.builder()
-                                .apiKey(openRouterApiKey)
+                                .apiKey(apiKey)
                                 .baseUrl(openRouterBaseUrl)
                                 .modelName(modelName)
                                 .temperature(0.4)
                                 .timeout(Duration.ofSeconds(timeoutSeconds * 2))
                                 .build();
+        }
+
+        private List<String> openRouterApiKeyPool() {
+                String raw = String.join(",",
+                                openRouterApiKey == null ? "" : openRouterApiKey,
+                                openRouterApiKeys == null ? "" : openRouterApiKeys);
+                return Arrays.stream(raw.split(","))
+                                .map(String::trim)
+                                .filter(s -> !s.isBlank())
+                                .distinct()
+                                .toList();
+        }
+
+        private String maskOpenRouterKey(String apiKey) {
+                if (apiKey == null || apiKey.length() < 12) {
+                        return "<redacted>";
+                }
+                return apiKey.substring(0, 8) + "..." + apiKey.substring(apiKey.length() - 4);
         }
 }
