@@ -130,6 +130,7 @@ public class AiModelConfig {
                                 .toolConfig(GeminiMode.AUTO)
                                 .temperature(0.3)
                                 .timeout(Duration.ofSeconds(geminiTimeoutSeconds))
+                                .logRequestsAndResponses(true)
                                 .build();
         }
 
@@ -142,7 +143,6 @@ public class AiModelConfig {
                                 .modelName(fallbackModelName)
                                 .isGitHubModels(true)
                                 .temperature(0.3)
-                                .parallelToolCalls(true)
                                 .timeout(Duration.ofSeconds(timeoutSeconds))
                                 .build();
         }
@@ -169,7 +169,6 @@ public class AiModelConfig {
                                 .modelName(reasoningModelName)
                                 .isGitHubModels(true)
                                 .temperature(0.5)
-                                .parallelToolCalls(true)
                                 .timeout(Duration.ofSeconds(timeoutSeconds * 2))
                                 .build();
         }
@@ -201,7 +200,6 @@ public class AiModelConfig {
                                 .baseUrl(groqBaseUrl)
                                 .modelName(groqReasoningModelName)
                                 .temperature(0.4)
-                                .parallelToolCalls(true)
                                 .timeout(Duration.ofSeconds(timeoutSeconds * 2))
                                 .build();
         }

@@ -10,6 +10,8 @@ import com.taskpilot.ai.heuristic.HeuristicConfigProvider;
 import com.taskpilot.ai.repository.ChatMessageRepository;
 import com.taskpilot.ai.repository.ChatSessionRepository;
 import com.taskpilot.ai.tools.ToolExecutionContext;
+import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
+import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
@@ -18,8 +20,10 @@ import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.input.PromptTemplate;
 import dev.langchain4j.model.TokenCountEstimator;
+import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.googleai.GoogleAiGeminiChatModel;
 import dev.langchain4j.model.chat.request.ToolChoice;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
@@ -34,6 +38,7 @@ import jakarta.annotation.PreDestroy;
 import java.io.IOException;
 import java.time.LocalDate;
 import java.time.Instant;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -59,6 +64,33 @@ public class AiStreamingService {
     private static final int MAX_TOOL_ROUNDS = 4;
     private static final int MAX_CONSECUTIVE_SAME_TOOL_EXECUTIONS = 3;
 
+    /**
+     * Essential tools injected when ToolScope.ESSENTIAL is used.
+     * These cover the core query + assignment workflow and cost ~1200 tokens
+     * instead of ~3356 for the full set.
+     */
+    private static final List<String> ESSENTIAL_TOOL_NAMES = List.of(
+            "getMyProjects",
+            "getMyTasks",
+            "getProjectStatus",
+            "getTaskDetails",
+            "getTasksByProject",
+            "getUnassignedTasksByProject",
+            "getMemberWorkload",
+            "getProjectMembers",
+            "recommendAssignmentCandidates",
+            "recommendAndAssignTask",
+            "assignTaskToMember",
+            "assignTaskToMemberByName",
+            "confirmPendingAction",
+            "cancelPendingAction",
+            "searchSystemSkills"
+    );
+
+    /** GitHub Models hard limit; Gemini/Groq have much larger budgets. */
+    private static final int GITHUB_MODELS_MAX_TOKENS = 8000;
+    private static final int LARGE_CONTEXT_MAX_TOKENS = 128_000;
+
     private final ChatSessionRepository sessionRepository;
     private final ChatMessageRepository messageRepository;
     private final SmartRoutingService routingService;
@@ -70,6 +102,13 @@ public class AiStreamingService {
     private final ThinkingNarratorService thinkingNarratorService;
     private final TokenCountEstimator tokenCountEstimator;
     private final ObjectMapper objectMapper;
+    private final UserProfilePort userProfilePort;
+
+    @Value("${ai.gemini.api-key:}")
+    private String geminiApiKey;
+
+    @Value("${ai.gemini.timeout-seconds:20}")
+    private int geminiTimeoutSeconds;
 
     @Value("${ai.chat.max-output-tokens:3500}")
     private int maxOutputTokens;
@@ -102,6 +141,7 @@ public class AiStreamingService {
             [CURRENT SYSTEM CONTEXT]
             - Today's Date: {{current_date}}
             - Current Assignment Mode: {{current_mode}}
+            - Current User: {{current_user_name}} (ID: {{current_user_id}}, Email: {{current_user_email}})
 
             [TASKPILOT TOOL WORKFLOW RULES]
             - Vietnamese shorthand matters: "ch", "chua", "chưa", "ch dc", "ch đc", "chua duoc", and
@@ -206,7 +246,7 @@ public class AiStreamingService {
                 .content(userInput)
                 .build());
 
-        String systemPrompt = buildSystemPrompt();
+        String systemPrompt = buildSystemPrompt(userId);
         List<ChatMessage> history = sessionChatMemoryService.appendUserMessage(sessionId, systemPrompt, userInput);
         List<ChatMessage> requestHistory = compactHistoryForRequest(
                 withSystemPrompt(history, systemPrompt),
@@ -233,6 +273,8 @@ public class AiStreamingService {
         StreamingChatModel selectedModel = decision.model();
         String modelName = decision.modelName();
         boolean requiresAHP = decision.requiresAHP();
+        boolean requiresTools = decision.requiresTools();
+        SmartRoutingService.ToolScope toolScope = decision.toolScope();
 
         chatStreamStatusService.updatePhase(sessionId, effectiveClientMessageId, Phase.THINKING, modelName, null, null);
 
@@ -241,7 +283,7 @@ public class AiStreamingService {
             safeSend(emitter, "model", modelName, null);
             safeSend(emitter, "phase", Phase.THINKING.name(), null);
             doStream(emitter, emitterCompleted, session, sessionId, userId, userInput, requestHistory, systemPrompt,
-                    selectedModel, modelName, startTime, false, finalClientMessageId, requiresAHP);
+                    selectedModel, modelName, startTime, false, finalClientMessageId, requiresAHP, requiresTools, toolScope);
         });
 
         emitter.onTimeout(() -> {
@@ -275,7 +317,9 @@ public class AiStreamingService {
             long startTime,
             boolean isFallbackAttempt,
             String clientMessageId,
-            boolean requiresAHP) {
+            boolean requiresAHP,
+            boolean requiresTools,
+            SmartRoutingService.ToolScope toolScope) {
 
         List<ChatMessage> workingHistory = new ArrayList<>(history);
         StringBuilder fullResponse = new StringBuilder();
@@ -304,10 +348,12 @@ public class AiStreamingService {
                 generatingMarked,
                 0,
                 requiresAHP,
+                requiresTools,
                 null,
                 0,
                 toolCallSummaries,
-                toolNames);
+                toolNames,
+                toolScope);
     }
 
     private void streamRound(SseEmitter emitter,
@@ -328,36 +374,37 @@ public class AiStreamingService {
             AtomicBoolean generatingMarked,
             int toolRound,
             boolean requiresAHP,
+            boolean requiresTools,
             String lastToolName,
             int consecutiveToolExecutions,
             List<Map<String, Object>> toolCallSummaries,
-            LinkedHashSet<String> toolNames) {
-        List<ChatMessage> sanitizedHistory = compactHistoryForRequest(
-                sanitizeHistoryForTools(history),
-                "tool-round-" + toolRound);
-        // Default: No tools, no toolChoice. Only override when explicitly needed.
-        List<dev.langchain4j.agent.tool.ToolSpecification> toolSpecs = toolCallingRegistryService
-                .toolSpecifications();
+            LinkedHashSet<String> toolNames,
+            SmartRoutingService.ToolScope toolScope) {
+        List<ChatMessage> sanitizedHistory = cleanAndAlternateRoles(
+                compactHistoryForRequest(
+                        sanitizeHistoryForTools(history),
+                        "tool-round-" + toolRound),
+                routingService.isGeminiModel(model));
+        // Smart tool injection: only send tools that the routing decision actually needs.
+        // FULL  = all tools (~3356 tokens) — only for Gemini with large context
+        // ESSENTIAL = core query/assignment tools (~1200 tokens) — for GitHub Models / Groq
+        // NONE  = no tools at all — for text-only / light responses
+        List<dev.langchain4j.agent.tool.ToolSpecification> toolSpecs = null;
         ToolChoice toolChoice = null;
 
         if (requiresAHP) {
             if (toolRound == 0) {
-                // Round 0: Force AHP tool call
+                // Round 0: Force AHP tool call — only inject the one AHP tool spec
                 List<dev.langchain4j.agent.tool.ToolSpecification> ahpOnly = toolCallingRegistryService
                         .toolSpecificationsByName("recommendAssignmentCandidates");
                 if (!ahpOnly.isEmpty()) {
                     toolSpecs = ahpOnly;
-                    // Bug fix: Groq 120b crashes when ToolChoice.REQUIRED is used if the model fails to call it.
-                    // Using AUTO prevents the 400 error while still allowing the model to call the tool.
                     toolChoice = ToolChoice.AUTO;
                     log.info("[Gatekeeper] requiresAHP=true -> forcing recommendAssignmentCandidates");
                 } else {
                     log.warn("[Gatekeeper] requiresAHP=true but recommendAssignmentCandidates tool not found");
                 }
             } else {
-                // Round 1+: All tool results are already injected into history by sanitizeHistoryForTools().
-                // Do NOT call streamRound() again — that still sends parallel_tool_calls and causes 400.
-                // Instead, delegate immediately to forceTextOnlyResponse().
                 log.info("[Gatekeeper] requiresAHP=true -> disabling further tool rounds, routing to text-only");
                 forceTextOnlyResponse(
                         emitter, emitterCompleted, session, sessionId, userId, userInput,
@@ -368,13 +415,54 @@ public class AiStreamingService {
                         "Based on the tool data already provided in the context above, provide your final recommendation now. Do not call any tools.");
                 return;
             }
+        } else if (requiresTools && toolScope != SmartRoutingService.ToolScope.NONE) {
+            // Smart scoping: FULL = all specs, ESSENTIAL = only core tools
+            if (toolScope == SmartRoutingService.ToolScope.FULL) {
+                toolSpecs = toolCallingRegistryService.toolSpecifications();
+                log.info("[streamRound] FULL scope round={} -> injecting {} tool specs", toolRound, toolSpecs.size());
+            } else {
+                toolSpecs = toolCallingRegistryService.toolSpecificationsByNames(ESSENTIAL_TOOL_NAMES);
+                log.info("[streamRound] ESSENTIAL scope round={} -> injecting {} tool specs (of {} total)",
+                        toolRound, toolSpecs.size(), toolCallingRegistryService.toolSpecifications().size());
+            }
+        } else {
+            log.debug("[streamRound] toolScope=NONE -> skipping tool specs entirely");
+        }
+
+        // Dynamic max output tokens based on model capacity and current payload
+        int modelBudget = routingService.supportsLargeContextAndTools(model)
+                ? LARGE_CONTEXT_MAX_TOKENS : GITHUB_MODELS_MAX_TOKENS;
+        int historyTokens = estimateTokens(sanitizedHistory);
+        int toolSpecTokens = 0;
+        if (toolSpecs != null) {
+            for (var spec : toolSpecs) {
+                toolSpecTokens += tokenCountEstimator.estimateTokenCountInText(
+                        spec.name() + " " + (spec.description() != null ? spec.description() : ""));
+            }
+        }
+        int safetyMargin = 200;
+        int availableForOutput = modelBudget - historyTokens - toolSpecTokens - safetyMargin;
+        int resolvedMaxOutput;
+        if (toolSpecs != null && !toolSpecs.isEmpty()) {
+            resolvedMaxOutput = Math.min(1000, Math.max(300, availableForOutput));
+        } else {
+            resolvedMaxOutput = Math.min(maxOutputTokens, Math.max(500, availableForOutput));
+        }
+
+        // Last-resort guard: if total would still exceed budget, drop tools
+        if (toolSpecs != null && !toolSpecs.isEmpty()
+                && (historyTokens + toolSpecTokens + resolvedMaxOutput) > modelBudget) {
+            log.warn("[TokenGuard] Dropping tools to stay under {} budget: history~{} tools~{} output={}",
+                    modelBudget, historyTokens, toolSpecTokens, resolvedMaxOutput);
+            toolSpecs = null;
+            toolChoice = null;
+            resolvedMaxOutput = Math.min(maxOutputTokens, Math.max(500, modelBudget - historyTokens - safetyMargin));
         }
 
         var requestBuilder = ChatRequest.builder()
                 .messages(sanitizedHistory)
-                .maxOutputTokens(maxOutputTokens);
+                .maxOutputTokens(resolvedMaxOutput);
 
-        // Only add tools/toolChoice if actually needed.
         if (toolSpecs != null && !toolSpecs.isEmpty()) {
             requestBuilder.toolSpecifications(toolSpecs);
             if (toolChoice != null) {
@@ -383,6 +471,25 @@ public class AiStreamingService {
         }
 
         ChatRequest request = requestBuilder.build();
+
+                // === DEBUG: log token breakdown before sending ===
+                {
+                    int totalEstimate = historyTokens + toolSpecTokens + resolvedMaxOutput;
+                    log.info("[TokenDebug] session={} round={} model={} scope={} | msgs={} history~{} tools~{} maxOut={} budget={} TOTAL~{}",
+                            sessionId, toolRound, modelName, toolScope,
+                            sanitizedHistory.size(), historyTokens, toolSpecTokens, resolvedMaxOutput, modelBudget, totalEstimate);
+                    if (log.isDebugEnabled()) {
+                        for (int i = 0; i < sanitizedHistory.size(); i++) {
+                            ChatMessage m = sanitizedHistory.get(i);
+                            int toks = tokenCountEstimator.estimateTokenCountInMessage(m);
+                            String preview = messageText(m);
+                            preview = preview != null && preview.length() > 80 ? preview.substring(0, 80) + "..." : preview;
+                            log.debug("[TokenDebug]   msg[{}] type={} tokens~{} preview='{}'",
+                                    i, m.getClass().getSimpleName(), toks, preview);
+                        }
+                    }
+                }
+                // === END DEBUG ===
 
                 final AtomicBoolean roundClosed = new AtomicBoolean(false);
                 final AtomicBoolean firstModelSignalReceived = new AtomicBoolean(false);
@@ -405,14 +512,16 @@ public class AiStreamingService {
                                 startTime,
                                 isFallbackAttempt,
                                 clientMessageId,
-                                requiresAHP);
+                                requiresAHP,
+                                requiresTools,
+                                toolScope);
                     }
                 }, Math.max(1, streamFirstResponseTimeoutSeconds), TimeUnit.SECONDS);
 
                 final StringBuilder thinkingBuffer = new StringBuilder();
                 final AtomicBoolean insideThink = new AtomicBoolean(false);
 
-                model.chat(request, new StreamingChatResponseHandler() {
+                StreamingChatResponseHandler handler = new StreamingChatResponseHandler() {
                     @Override
                     public void onPartialResponse(String partialResponse) {
                         if (roundClosed.get()) {
@@ -561,10 +670,12 @@ public class AiStreamingService {
                                 generatingMarked,
                                 toolRound + 1,
                                 requiresAHP,
+                                requiresTools,
                                 nextToolState.toolName(),
                                 nextToolState.consecutiveCount(),
                                 toolCallSummaries,
-                                toolNames);
+                                toolNames,
+                                toolScope);
                     }
                     return;
                 }
@@ -662,8 +773,14 @@ public class AiStreamingService {
                     safeSend(emitter, "phase", Phase.THINKING.name(), null);
 
                     // Pass fresh stream; fallback doesn't inherit partial tokens from the failed model
+                    // Downgrade tool scope for small-context fallback models to prevent 413
+                    boolean fallbackRequiresTools = routingService.supportsLargeContextAndTools(fallback) ? requiresTools : false;
+                    SmartRoutingService.ToolScope fallbackToolScope = !fallbackRequiresTools
+                            ? SmartRoutingService.ToolScope.NONE
+                            : (routingService.supportsLargeContextAndTools(fallback)
+                                    ? toolScope : SmartRoutingService.ToolScope.ESSENTIAL);
                     doStream(emitter, emitterCompleted, session, sessionId, userId, userInput, history, systemPrompt, fallback,
-                            fallbackName, startTime, !isStillGemini, clientMessageId, requiresAHP);
+                            fallbackName, startTime, !isStillGemini, clientMessageId, requiresAHP, fallbackRequiresTools, fallbackToolScope);
                 } else {
                     chatStreamStatusService.updatePhase(sessionId, clientMessageId,
                             Phase.FAILED, modelName, null, error.getMessage());
@@ -674,7 +791,32 @@ public class AiStreamingService {
                     safeComplete(emitter, emitterCompleted);
                 }
             }
-        });
+        };
+
+        if (routingService.isGeminiModel(model) && toolSpecs != null && !toolSpecs.isEmpty()) {
+            log.info("[GeminiToolFix] Using non-streaming Gemini model to prevent SSE hang: {}", modelName);
+            executor.submit(() -> {
+                try {
+                    ChatModel nonStreamingModel = GoogleAiGeminiChatModel.builder()
+                            .apiKey(geminiApiKey)
+                            .modelName(modelName)
+                            .temperature(0.3)
+                            .timeout(Duration.ofSeconds(geminiTimeoutSeconds))
+                            .logRequestsAndResponses(true)
+                            .build();
+
+                    ChatResponse response = nonStreamingModel.chat(request);
+                    if (response.aiMessage() != null && response.aiMessage().text() != null) {
+                        handler.onPartialResponse(response.aiMessage().text());
+                    }
+                    handler.onCompleteResponse(response);
+                } catch (Throwable t) {
+                    handler.onError(t);
+                }
+            });
+        } else {
+            model.chat(request, handler);
+        }
     }
 
     private void handleFirstResponseTimeout(
@@ -691,7 +833,9 @@ public class AiStreamingService {
             long startTime,
             boolean isFallbackAttempt,
             String clientMessageId,
-            boolean requiresAHP) {
+            boolean requiresAHP,
+            boolean requiresTools,
+            SmartRoutingService.ToolScope toolScope) {
         String message = "Model did not produce a first streaming response within "
                 + streamFirstResponseTimeoutSeconds + "s";
         log.warn("[SSE] {} for session {} using model {}", message, sessionId, modelName);
@@ -710,9 +854,15 @@ public class AiStreamingService {
                         fallbackName + (isStillGemini ? " (gemini fallback after timeout)" : " (fallback after timeout)"),
                         null);
                 safeSend(emitter, "phase", Phase.THINKING.name(), null);
+                // Downgrade tool scope for small-context fallback models
+                boolean fallbackRequiresTools = routingService.supportsLargeContextAndTools(fallback) ? requiresTools : false;
+                SmartRoutingService.ToolScope fallbackToolScope = !fallbackRequiresTools
+                        ? SmartRoutingService.ToolScope.NONE
+                        : (routingService.supportsLargeContextAndTools(fallback)
+                                ? toolScope : SmartRoutingService.ToolScope.ESSENTIAL);
                 doStream(emitter, emitterCompleted, session, sessionId, userId, userInput,
                         history, systemPrompt, fallback, fallbackName, startTime,
-                        !isStillGemini, clientMessageId, requiresAHP);
+                        !isStillGemini, clientMessageId, requiresAHP, fallbackRequiresTools, fallbackToolScope);
                 return;
             }
         }
@@ -745,20 +895,20 @@ public class AiStreamingService {
             LinkedHashSet<String> toolNames,
             String guardrailInstruction) {
 
-        List<ChatMessage> textOnlyHistory = new ArrayList<>(sanitizeHistoryForTools(history));
-        textOnlyHistory.add(SystemMessage.from(guardrailInstruction));
-        textOnlyHistory = new ArrayList<>(compactHistoryForRequest(textOnlyHistory, "text-only"));
-
-        // Bug fix #2: use a fresh, isolated StringBuilder so we don't contaminate
-        // the shared fullResponse with stray partial tokens from earlier rounds.
-        StringBuilder roundResponse = new StringBuilder();
-
         // Tool data is already in the prompt at this point. Use the fast text-only
         // finalizer instead of a reasoning/tool model so the UI gets a real answer quickly.
         StreamingChatModel textModel = routingService.getFallbackTextModel();
         String textModelName = routingService.getModelName(textModel);
         log.info("[ForceTextOnly] Using fast text-only finalizer {} after {} for session {}",
                 textModelName, modelName, sessionId);
+
+        List<ChatMessage> textOnlyHistory = new ArrayList<>(sanitizeHistoryForTools(history));
+        textOnlyHistory.add(SystemMessage.from(guardrailInstruction));
+        textOnlyHistory = new ArrayList<>(cleanAndAlternateRoles(
+                compactHistoryForRequest(textOnlyHistory, "text-only"),
+                routingService.isGeminiModel(textModel)));
+
+        StringBuilder roundResponse = new StringBuilder();
 
         ChatRequest request = ChatRequest.builder()
                 .messages(textOnlyHistory)
@@ -1439,11 +1589,18 @@ public class AiStreamingService {
         return fallbackInput;
     }
 
-    private String buildSystemPrompt() {
+    private String buildSystemPrompt(Long userId) {
+        UserProfileLiteDto profile = userProfilePort.findLiteById(userId).orElse(null);
+        String userName = profile != null ? profile.fullName() : "Unknown User";
+        String userEmail = profile != null ? profile.email() : "Unknown Email";
+
         PromptTemplate template = PromptTemplate.from(MASTER_PROMPT_TEMPLATE);
         return template.apply(Map.of(
                 "current_date", LocalDate.now().toString(),
-                "current_mode", heuristicConfigProvider.getCurrentMode()))
+                "current_mode", heuristicConfigProvider.getCurrentMode(),
+                "current_user_name", userName,
+                "current_user_id", String.valueOf(userId),
+                "current_user_email", userEmail))
                 .text();
     }
 
@@ -1465,6 +1622,90 @@ public class AiStreamingService {
         }
         String trimmed = clientMessageId.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private List<ChatMessage> cleanAndAlternateRoles(List<ChatMessage> messages, boolean isGemini) {
+        if (messages == null || messages.isEmpty()) {
+            return List.of();
+        }
+
+        List<ChatMessage> cleaned = new ArrayList<>();
+        // Always preserve the first SystemMessage if present
+        int startIndex = 0;
+        if (messages.get(0) instanceof SystemMessage sysMsg) {
+            cleaned.add(sysMsg);
+            startIndex = 1;
+        }
+
+        List<ChatMessage> body = new ArrayList<>();
+        for (int i = startIndex; i < messages.size(); i++) {
+            ChatMessage msg = messages.get(i);
+            if (msg instanceof SystemMessage sys) {
+                if (isGemini) {
+                    // Gemini does not allow SystemMessage in the middle of history
+                    body.add(UserMessage.from(sys.text()));
+                } else {
+                    body.add(msg);
+                }
+            } else {
+                body.add(msg);
+            }
+        }
+
+        if (body.isEmpty()) {
+            return cleaned;
+        }
+
+        // Now, merge consecutive messages of the same type
+        List<ChatMessage> alternated = new ArrayList<>();
+        ChatMessage current = body.get(0);
+        for (int i = 1; i < body.size(); i++) {
+            ChatMessage next = body.get(i);
+            if (sameRole(current, next)) {
+                current = mergeMessages(current, next);
+            } else {
+                alternated.add(current);
+                current = next;
+            }
+        }
+        alternated.add(current);
+
+        // For Gemini, we must ensure it alternates starting with User, then AI, then User...
+        // Gemini: User -> Model -> User -> Model...
+        // If there's an initial SystemMessage, it's passed as system instruction, so the remaining list must alternate.
+        if (isGemini && !alternated.isEmpty() && alternated.get(0) instanceof AiMessage) {
+            List<ChatMessage> temp = new ArrayList<>();
+            temp.add(UserMessage.from("[System: Continued conversation]"));
+            temp.addAll(alternated);
+            alternated = temp;
+        }
+
+        cleaned.addAll(alternated);
+        return cleaned;
+    }
+
+    private boolean sameRole(ChatMessage m1, ChatMessage m2) {
+        if (m1 instanceof UserMessage && m2 instanceof UserMessage) {
+            return true;
+        }
+        if (m1 instanceof AiMessage && m2 instanceof AiMessage) {
+            return true;
+        }
+        if (m1 instanceof SystemMessage && m2 instanceof SystemMessage) {
+            return true;
+        }
+        return false;
+    }
+
+    private ChatMessage mergeMessages(ChatMessage m1, ChatMessage m2) {
+        String combinedText = messageText(m1) + "\n\n" + messageText(m2);
+        if (m1 instanceof UserMessage) {
+            return UserMessage.from(combinedText);
+        }
+        if (m1 instanceof AiMessage) {
+            return AiMessage.from(combinedText);
+        }
+        return SystemMessage.from(combinedText);
     }
 
     private record ToolLoopState(String toolName, int consecutiveCount) {

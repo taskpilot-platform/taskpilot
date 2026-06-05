@@ -95,7 +95,7 @@ class TaskPilotAiToolsHumanInLoopTest {
         when(taskCommandPort.assignTaskToMember(75L, 16L, "test", USER_ID, false))
                 .thenReturn(TaskAssignmentResultDto.success(75L, 16L, "test"));
 
-        ConfirmationRequiredDto pending = assertPending(tools.assignTaskToMember(75L, 16L, "test"),
+        ConfirmationRequiredDto pending = assertPending(tools.assignTaskToMember("75", "16", "test"),
                 "assignTaskToMember");
 
         verify(taskCommandPort, never()).assignTaskToMember(any(), any(), any(), any(), eq(false));
@@ -120,7 +120,7 @@ class TaskPilotAiToolsHumanInLoopTest {
                 .thenReturn(TaskAssignmentResultDto.success(68L, 10L, "selected"));
 
         ConfirmationRequiredDto pending = assertPending(
-                tools.assignTaskToMemberByName(68L, "Julia Design", "User requested Julia"),
+                tools.assignTaskToMemberByName("68", "Julia Design", "User requested Julia"),
                 "assignTaskToMember");
 
         assertTrue(pending.summary().contains("Julia Design"));
@@ -154,7 +154,7 @@ class TaskPilotAiToolsHumanInLoopTest {
                 .thenReturn(TaskAssignmentResultDto.success(76L, 16L, "selected"));
 
         ConfirmationRequiredDto pending = assertPending(
-                tools.recommendAndAssignTask(76L, null, null, null, null),
+                tools.recommendAndAssignTask("76", null, null, null, null),
                 "recommendAndAssignTask");
 
         verify(taskCommandPort, never()).assignTaskToMember(eq(76L), eq(16L), any(), eq(USER_ID), eq(false));
@@ -212,7 +212,7 @@ class TaskPilotAiToolsHumanInLoopTest {
                 .thenReturn(TaskAssignmentResultDto.success(76L, 16L, "selected"));
 
         ConfirmationRequiredDto pending = assertPending(
-                tools.recommendAndAssignTask(76L, null, "Java", 5, null),
+                tools.recommendAndAssignTask("76", null, "Java", "5", null),
                 "recommendAndAssignTask");
 
         verify(taskCommandPort, never()).updateTaskRequiredSkills(any(), any(), any());
@@ -233,7 +233,7 @@ class TaskPilotAiToolsHumanInLoopTest {
                 .thenReturn(created);
 
         ConfirmationRequiredDto pending = assertPending(
-                tools.createTask(8L, "AI test", "MEDIUM", "desc", null, null, null, 3, null, null, null, null, null),
+                tools.createTask(8L, "AI test", "MEDIUM", "desc", null, null, null, "3", null, null, null, null, null),
                 "createTask");
 
         verify(taskCommandPort, never()).createTask(any(), any(), any(), any(), any(), any(), any(), any(), any(),
@@ -280,9 +280,9 @@ class TaskPilotAiToolsHumanInLoopTest {
     @Test
     void additionalProjectWriteToolsWaitForHumanConfirmationBeforeWriting() {
         assertPending(tools.updateTask(75L, "New title", "desc", "REVIEW", "HIGH", 2f,
-                List.of(4L), 5, List.of(7L), 18L, "2026-06-01", "2026-06-08"), "updateTask");
+                List.of(4L), "5", List.of(7L), 18L, "2026-06-01", "2026-06-08"), "updateTask");
         assertPending(tools.deleteTask(75L), "deleteTask");
-        assertPending(tools.moveTaskKanban(75L, "DONE", 3f), "moveTaskKanban");
+        assertPending(tools.moveTaskKanban("75", "DONE", 3f), "moveTaskKanban");
         assertPending(tools.createTaskComment(75L, "Looks good", null, List.of(18L)), "createTaskComment");
         assertPending(tools.updateTaskComment(75L, 30L, "Updated", List.of()), "updateTaskComment");
         assertPending(tools.deleteTaskComment(75L, 30L), "deleteTaskComment");

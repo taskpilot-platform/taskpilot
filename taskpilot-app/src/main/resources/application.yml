@@ -84,9 +84,9 @@ ai:
     fallback5-model: ${AI_GEMINI_FALLBACK5_MODEL:gemini-2.0-flash}
     fallback6-model: ${AI_GEMINI_FALLBACK6_MODEL:gemini-2.0-flash-lite}
     fallback7-model: ${AI_GEMINI_FALLBACK7_MODEL:gemini-3.1-pro-preview}
-    waterfall-max-attempts: ${AI_GEMINI_WATERFALL_MAX_ATTEMPTS:4}
-    use-for-tools: ${AI_GEMINI_USE_FOR_TOOLS:false}
-    timeout-seconds: ${AI_GEMINI_TIMEOUT_SECONDS:20}
+    waterfall-max-attempts: ${AI_GEMINI_WATERFALL_MAX_ATTEMPTS:2}
+    use-for-tools: ${AI_GEMINI_USE_FOR_TOOLS:true}
+    timeout-seconds: ${AI_GEMINI_TIMEOUT_SECONDS:45}
 
   github:
     token: ${GITHUB_TOKEN}
@@ -114,16 +114,16 @@ ai:
 
   chat:
     history-size: ${AI_HISTORY_SIZE:10}
-    memory-max-tokens: ${AI_MEMORY_MAX_TOKENS:7000}
+    memory-max-tokens: ${AI_MEMORY_MAX_TOKENS:4000}
     context-tail-messages: ${AI_CONTEXT_TAIL_MESSAGES:6}
     compact-summary-max-chars: ${AI_COMPACT_SUMMARY_MAX_CHARS:3000}
     compact-message-max-chars: ${AI_COMPACT_MESSAGE_MAX_CHARS:600}
-    max-tool-result-memory-chars: ${AI_MAX_TOOL_RESULT_MEMORY_CHARS:12000}
-    stream-first-response-timeout-seconds: ${AI_STREAM_FIRST_RESPONSE_TIMEOUT_SECONDS:10}
+    max-tool-result-memory-chars: ${AI_MAX_TOOL_RESULT_MEMORY_CHARS:2000}
+    stream-first-response-timeout-seconds: ${AI_STREAM_FIRST_RESPONSE_TIMEOUT_SECONDS:30}
     text-only-first-response-timeout-seconds: ${AI_TEXT_ONLY_FIRST_RESPONSE_TIMEOUT_SECONDS:10}
     max-user-input-chars: ${AI_MAX_USER_INPUT_CHARS:1500}
     max-user-input-tokens: ${AI_MAX_USER_INPUT_TOKENS:2500}
-    max-output-tokens: ${AI_MAX_OUTPUT_TOKENS:3500}
+    max-output-tokens: ${AI_MAX_OUTPUT_TOKENS:2000}
     max-assistant-memory-chars: ${AI_MAX_ASSISTANT_MEMORY_CHARS:1500}
 
 onesignal:

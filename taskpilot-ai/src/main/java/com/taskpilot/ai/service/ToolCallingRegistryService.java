@@ -48,6 +48,15 @@ public class ToolCallingRegistryService {
                 .collect(Collectors.toList());
     }
 
+    public List<ToolSpecification> toolSpecificationsByNames(List<String> toolNames) {
+        if (toolNames == null || toolNames.isEmpty()) {
+            return List.of();
+        }
+        return toolSpecifications.stream()
+                .filter(spec -> toolNames.contains(spec.name()))
+                .collect(Collectors.toList());
+    }
+
     public String execute(ToolExecutionRequest request) {
         ToolExecutor executor = toolExecutors.get(request.name());
         if (executor == null) {
