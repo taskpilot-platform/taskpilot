@@ -134,7 +134,7 @@ public class SmartRoutingService {
     @Value("${ai.routing.token-threshold:8000}")
     private int tokenThreshold;
 
-    @Value("${ai.routing.tool-keywords:project,task,sprint,comment,member,role,status,project status,workload,assign,candidates,task list,project progress,my projects,project list,unassigned,not assigned,confirm,confirm_action,apply,xac nhan,dong y,thuc hien,du an,liet ke project,liet ke du an,chua phan cong,chua duoc phan cong,task chua gan,giao viec,tinh trang,tien do,danh sach task,cong viec,ung vien,giao task,gan task,chia viec,tao task}")
+    @Value("${ai.routing.tool-keywords:project,task,sprint,comment,member,role,status,project status,workload,assign,candidates,task list,project progress,my projects,project list,unassigned,not assigned,notification,unread,confirm,confirm_action,apply,xac nhan,dong y,thuc hien,du an,liet ke project,liet ke du an,chua phan cong,chua duoc phan cong,task chua gan,giao viec,tinh trang,tien do,danh sach task,cong viec,ung vien,giao task,gan task,chia viec,tao task,tao cong viec,bình luận,binh luan,comment cua toi,thong bao,thông báo,chua doc,chưa đọc}")
     private String toolKeywordsRaw;
 
     @Value("${ai.routing.ahp-fallback-keywords:phan cong,giao viec,chia viec,chon ai,chon nguoi,tim nguoi,ai ranh,ung vien,assign,candidate,workload,chia task}")
@@ -259,7 +259,7 @@ public class SmartRoutingService {
         Set<ToolScope> scopes = EnumSet.noneOf(ToolScope.class);
         String normalized = normalize(message);
         
-        if (containsAny(normalized, List.of("task", "cong viec", "status", "nhiem vu"))) scopes.add(ToolScope.TASK);
+        if (containsAny(normalized, List.of("task", "cong viec", "cong việc", "tao task", "tao cong viec", "status", "nhiem vu"))) scopes.add(ToolScope.TASK);
         if (containsAny(normalized, List.of("sprint", "chu ky"))) scopes.add(ToolScope.SPRINT);
         if (containsAny(normalized, List.of("project", "du an"))) scopes.add(ToolScope.PROJECT);
         if (containsAny(normalized, List.of("giao", "assign", "phan cong", "phu hop", "ai lam", "member", "thanh vien", "recommend", "goi y"))) {
@@ -267,7 +267,8 @@ public class SmartRoutingService {
             scopes.add(ToolScope.AHP);
             scopes.add(ToolScope.MEMBER);
         }
-        if (containsAny(normalized, List.of("comment", "binh luan"))) scopes.add(ToolScope.COMMENT);
+        if (containsAny(normalized, List.of("comment", "binh luan", "binh luận", "comment cua toi", "comment cua minh"))) scopes.add(ToolScope.COMMENT);
+        if (containsAny(normalized, List.of("notification", "unread", "thong bao", "thông báo", "chua doc", "chưa đọc"))) scopes.add(ToolScope.NOTIFICATION);
         
         return scopes.isEmpty() ? EnumSet.of(ToolScope.GENERAL) : scopes;
     }

@@ -16,6 +16,7 @@ import com.taskpilot.contracts.aiquery.port.out.TaskCommentQueryPort;
 import com.taskpilot.contracts.aiquery.port.out.TaskCommandPort;
 import com.taskpilot.contracts.skill.dto.SkillDto;
 import com.taskpilot.contracts.skill.port.out.SkillPort;
+import com.taskpilot.contracts.user.port.out.UserNotificationQueryPort;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
@@ -45,6 +46,7 @@ public class TaskPilotAiTools {
     private final TaskCommentQueryPort taskCommentQueryPort;
     private final SprintQueryPort sprintQueryPort;
     private final SkillPort skillPort;
+    private final UserNotificationQueryPort userNotificationQueryPort;
     private final PendingAiActionService pendingAiActionService;
 
     @Tool("""
@@ -133,6 +135,34 @@ public class TaskPilotAiTools {
         String safeKeyword = keyword == null ? "" : keyword.trim();
         log.info("[AiTool] searchSystemSkills called keyword='{}'", safeKeyword);
         return skillPort.search(safeKeyword);
+    }
+
+    @Tool("""
+            Use this tool when the user asks to list their notifications, unread notifications,
+            recent notifications, alerts, "thong bao cua toi", or "thong bao chua doc".
+            Set unreadOnly=true when the user asks for unread/chua doc/chưa đọc notifications.
+            Limit should be a small number such as 10 or 20.
+            """)
+    public Object getMyNotifications(
+            @P("Return only unread notifications when true") Boolean unreadOnly,
+            @P("Maximum number of notifications to return, between 1 and 50") Integer limit) {
+        Long userId = ToolExecutionContext.requireUserId();
+        int safeLimit = limit == null ? 20 : Math.max(1, Math.min(limit, 50));
+        boolean onlyUnread = Boolean.TRUE.equals(unreadOnly);
+        log.info("[AiTool] getMyNotifications called for user {} unreadOnly={} limit={}",
+                userId, onlyUnread, safeLimit);
+        return userNotificationQueryPort.getMyNotifications(userId, onlyUnread, safeLimit);
+    }
+
+    @Tool("""
+            Use this tool when the user asks how many unread notifications they have.
+            Typical intents include "bao nhieu thong bao chua doc", "unread notification count",
+            or "so thong bao chua doc".
+            """)
+    public Object getUnreadNotificationCount() {
+        Long userId = ToolExecutionContext.requireUserId();
+        log.info("[AiTool] getUnreadNotificationCount called for user {}", userId);
+        return Map.of("unreadCount", userNotificationQueryPort.getUnreadNotificationCount(userId));
     }
 
     @Tool("""
@@ -517,6 +547,24 @@ public class TaskPilotAiTools {
         log.info("[AiTool] getTaskComments called for task {}", taskId);
         Long userId = ToolExecutionContext.requireUserId();
         return taskCommentQueryPort.getTaskComments(taskId, userId);
+    }
+
+    @Tool("""
+            Use this tool when the user asks to list comments made by them, comments mentioning them,
+            or "comment cua toi" without specifying one exact task. Optional projectId/taskId narrow the search.
+            Set mentionedMe=true only when the user asks for comments that mention/tag them.
+            """)
+    public Object getMyTaskComments(
+            @P("Optional project ID filter") Long projectId,
+            @P("Optional task ID filter") Long taskId,
+            @P("True when the user asks for comments mentioning them") Boolean mentionedMe,
+            @P("Maximum number of comments to return, between 1 and 50") Integer limit) {
+        Long userId = ToolExecutionContext.requireUserId();
+        int safeLimit = limit == null ? 20 : Math.max(1, Math.min(limit, 50));
+        boolean onlyMentioned = Boolean.TRUE.equals(mentionedMe);
+        log.info("[AiTool] getMyTaskComments called for user {} project={} task={} mentionedMe={} limit={}",
+                userId, projectId, taskId, onlyMentioned, safeLimit);
+        return taskCommentQueryPort.getMyTaskComments(projectId, taskId, onlyMentioned, safeLimit, userId);
     }
 
     @Tool("""

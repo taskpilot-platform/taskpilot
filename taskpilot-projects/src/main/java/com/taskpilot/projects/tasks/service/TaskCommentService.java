@@ -23,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.taskpilot.contracts.aiquery.dto.TaskCommentSummaryDto;
+import com.taskpilot.contracts.aiquery.dto.TaskCommentSearchSummaryDto;
 import com.taskpilot.contracts.aiquery.port.out.TaskCommentQueryPort;
 import com.taskpilot.contracts.assignment.dto.UserProfileDto;
 import com.taskpilot.contracts.assignment.port.out.UserPort;
@@ -229,6 +230,41 @@ public class TaskCommentService implements TaskCommentQueryPort {
 
         return mapToDtos(commentRepository.findByTaskIdOrderByCreatedAtAsc(taskId)).stream()
                 .map(this::toSummaryDto)
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<TaskCommentSearchSummaryDto> getMyTaskComments(Long projectId, Long taskId, boolean mentionedMe,
+            int limit, Long requesterUserId) {
+        int safeLimit = Math.max(1, Math.min(limit, 50));
+        Page<CommentEntity> commentPage = commentRepository.searchAccessibleComments(
+                requesterUserId,
+                false,
+                "%",
+                projectId,
+                taskId,
+                mentionedMe ? null : requesterUserId,
+                mentionedMe,
+                Set.of(-1L),
+                false,
+                PageRequest.of(0, safeLimit, Sort.by(Sort.Direction.DESC, "createdAt")));
+
+        return mapToSearchResultDtos(commentPage.getContent()).stream()
+                .map(comment -> new TaskCommentSearchSummaryDto(
+                        comment.id(),
+                        comment.projectId(),
+                        comment.projectName(),
+                        comment.taskId(),
+                        comment.taskTitle(),
+                        comment.parentCommentId(),
+                        comment.author() != null ? comment.author().id() : null,
+                        comment.author() != null ? comment.author().fullName() : null,
+                        comment.content(),
+                        comment.mentions().stream().map(UserProfileLiteDto::id).toList(),
+                        comment.deleted(),
+                        comment.createdAt(),
+                        comment.updatedAt()))
                 .toList();
     }
 

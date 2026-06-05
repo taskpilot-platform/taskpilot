@@ -37,6 +37,7 @@ import com.taskpilot.contracts.aiquery.port.out.SprintQueryPort;
 import com.taskpilot.contracts.aiquery.port.out.TaskCommandPort;
 import com.taskpilot.contracts.aiquery.port.out.TaskCommentQueryPort;
 import com.taskpilot.contracts.skill.port.out.SkillPort;
+import com.taskpilot.contracts.user.port.out.UserNotificationQueryPort;
 
 @ExtendWith(MockitoExtension.class)
 class TaskPilotAiToolsHumanInLoopTest {
@@ -68,6 +69,9 @@ class TaskPilotAiToolsHumanInLoopTest {
     @Mock
     private SkillPort skillPort;
 
+    @Mock
+    private UserNotificationQueryPort userNotificationQueryPort;
+
     private TaskPilotAiTools tools;
 
     @BeforeEach
@@ -81,6 +85,7 @@ class TaskPilotAiToolsHumanInLoopTest {
                 taskCommentQueryPort,
                 sprintQueryPort,
                 skillPort,
+                userNotificationQueryPort,
                 new PendingAiActionService());
         ToolExecutionContext.set(new ToolExecutionContext.Context(USER_ID, SESSION_ID, "initial request"));
     }

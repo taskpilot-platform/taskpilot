@@ -14,16 +14,19 @@ import com.taskpilot.contracts.assignment.dto.UserSkillDto;
 import com.taskpilot.contracts.assignment.port.out.SystemSettingPort;
 import com.taskpilot.contracts.assignment.port.out.UserPort;
 import com.taskpilot.contracts.assignment.port.out.UserSkillPort;
+import com.taskpilot.contracts.user.dto.NotificationSummaryDto;
 import com.taskpilot.contracts.user.dto.SystemNotificationCommandDto;
 import com.taskpilot.contracts.user.dto.UserIdentityDto;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
 import com.taskpilot.contracts.user.port.out.NotificationPort;
 import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserNotificationPort;
+import com.taskpilot.contracts.user.port.out.UserNotificationQueryPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.contracts.skill.dto.SkillDto;
 import com.taskpilot.contracts.skill.port.out.SkillPort;
 import com.taskpilot.users.notifications.service.NotificationService;
+import com.taskpilot.users.repository.NotificationRepository;
 import com.taskpilot.users.repository.SkillRepository;
 import com.taskpilot.users.repository.SystemSettingRepository;
 import com.taskpilot.users.repository.UserRepository;
@@ -35,9 +38,10 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class UserModuleAdapter
         implements UserPort, UserSkillPort, SystemSettingPort, UserIdentityPort, NotificationPort, SkillPort,
-        UserProfilePort, UserNotificationPort {
+        UserProfilePort, UserNotificationPort, UserNotificationQueryPort {
 
     private final UserRepository userRepository;
+    private final NotificationRepository notificationRepository;
     private final NotificationService notificationService;
     private final UserSkillRepository userSkillRepository;
     private final SystemSettingRepository systemSettingRepository;
@@ -115,6 +119,29 @@ public class UserModuleAdapter
     @Override
     public void sendSystemNotification(Long targetUserId, String title, String message, String linkAction) {
         notificationService.createSystemNotification(targetUserId, title, message, linkAction);
+    }
+
+    @Override
+    public List<NotificationSummaryDto> getMyNotifications(Long userId, boolean unreadOnly, int limit) {
+        int safeLimit = Math.max(1, Math.min(limit, 50));
+        return notificationRepository.findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(0, safeLimit))
+                .getContent()
+                .stream()
+                .filter(notification -> !unreadOnly || !Boolean.TRUE.equals(notification.getIsRead()))
+                .map(notification -> new NotificationSummaryDto(
+                        notification.getId(),
+                        notification.getTitle(),
+                        notification.getMessage(),
+                        notification.getType() != null ? notification.getType().name() : null,
+                        notification.getIsRead(),
+                        notification.getLinkAction(),
+                        notification.getCreatedAt()))
+                .toList();
+    }
+
+    @Override
+    public long getUnreadNotificationCount(Long userId) {
+        return notificationRepository.countByUserIdAndIsReadFalse(userId);
     }
 
     @Override
