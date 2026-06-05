@@ -141,9 +141,11 @@ public class AiStreamingService {
             [CURRENT SYSTEM CONTEXT]
             - Today's Date: {{current_date}}
             - Current Assignment Mode: {{current_mode}}
-            - Current User: {{current_user_name}} (ID: {{current_user_id}}, Email: {{current_user_email}})
+            - Current User: {{current_user_name}} (ID: {{current_user_id}})
 
             [TASKPILOT TOOL WORKFLOW RULES]
+            - If the user asks you to perform an action but the required tool is not available, respond exactly with:
+              MISSING_TOOL: <short reason>
             - Vietnamese shorthand matters: "ch", "chua", "chưa", "ch dc", "ch đc", "chua duoc", and
               "chưa được" mean "not yet". For task assignment questions, interpret them as unassigned/not assigned.
             - If the user names a specific assignee (for example "cho Julia Design", "gán cho Ian",
@@ -274,7 +276,6 @@ public class AiStreamingService {
         String modelName = decision.modelName();
         boolean requiresAHP = decision.requiresAHP();
         boolean requiresTools = decision.requiresTools();
-        SmartRoutingService.ToolScope toolScope = decision.toolScope();
 
         chatStreamStatusService.updatePhase(sessionId, effectiveClientMessageId, Phase.THINKING, modelName, null, null);
 
@@ -283,7 +284,7 @@ public class AiStreamingService {
             safeSend(emitter, "model", modelName, null);
             safeSend(emitter, "phase", Phase.THINKING.name(), null);
             doStream(emitter, emitterCompleted, session, sessionId, userId, userInput, requestHistory, systemPrompt,
-                    selectedModel, modelName, startTime, false, finalClientMessageId, requiresAHP, requiresTools, toolScope);
+                    selectedModel, modelName, startTime, false, finalClientMessageId, requiresAHP, requiresTools, 0);
         });
 
         emitter.onTimeout(() -> {
@@ -319,7 +320,7 @@ public class AiStreamingService {
             String clientMessageId,
             boolean requiresAHP,
             boolean requiresTools,
-            SmartRoutingService.ToolScope toolScope) {
+            int retryCount) {
 
         List<ChatMessage> workingHistory = new ArrayList<>(history);
         StringBuilder fullResponse = new StringBuilder();
@@ -353,7 +354,7 @@ public class AiStreamingService {
                 0,
                 toolCallSummaries,
                 toolNames,
-                toolScope);
+                retryCount);
     }
 
     private void streamRound(SseEmitter emitter,
@@ -379,7 +380,7 @@ public class AiStreamingService {
             int consecutiveToolExecutions,
             List<Map<String, Object>> toolCallSummaries,
             LinkedHashSet<String> toolNames,
-            SmartRoutingService.ToolScope toolScope) {
+            int retryCount) {
         List<ChatMessage> sanitizedHistory = cleanAndAlternateRoles(
                 compactHistoryForRequest(
                         sanitizeHistoryForTools(history),
@@ -415,18 +416,14 @@ public class AiStreamingService {
                         "Based on the tool data already provided in the context above, provide your final recommendation now. Do not call any tools.");
                 return;
             }
-        } else if (requiresTools && toolScope != SmartRoutingService.ToolScope.NONE) {
-            // Smart scoping: FULL = all specs, ESSENTIAL = only core tools
-            if (toolScope == SmartRoutingService.ToolScope.FULL) {
-                toolSpecs = toolCallingRegistryService.toolSpecifications();
-                log.info("[streamRound] FULL scope round={} -> injecting {} tool specs", toolRound, toolSpecs.size());
-            } else {
-                toolSpecs = toolCallingRegistryService.toolSpecificationsByNames(ESSENTIAL_TOOL_NAMES);
-                log.info("[streamRound] ESSENTIAL scope round={} -> injecting {} tool specs (of {} total)",
-                        toolRound, toolSpecs.size(), toolCallingRegistryService.toolSpecifications().size());
-            }
+        } else if (requiresTools) {
+            boolean expanded = (retryCount > 0);
+            int maxTools = expanded ? 20 : 15;
+            List<String> dynamicToolNames = toolCallingRegistryService.selectToolNames(userInput, maxTools, expanded);
+            toolSpecs = toolCallingRegistryService.toolSpecificationsByNames(dynamicToolNames);
+            log.info("[streamRound] Dynamic tools round={} expanded={} -> injecting {} tool specs", toolRound, expanded, toolSpecs.size());
         } else {
-            log.debug("[streamRound] toolScope=NONE -> skipping tool specs entirely");
+            log.debug("[streamRound] requiresTools=false -> skipping tool specs entirely");
         }
 
         // Dynamic max output tokens based on model capacity and current payload
@@ -475,8 +472,8 @@ public class AiStreamingService {
                 // === DEBUG: log token breakdown before sending ===
                 {
                     int totalEstimate = historyTokens + toolSpecTokens + resolvedMaxOutput;
-                    log.info("[TokenDebug] session={} round={} model={} scope={} | msgs={} history~{} tools~{} maxOut={} budget={} TOTAL~{}",
-                            sessionId, toolRound, modelName, toolScope,
+                    log.info("[TokenDebug] session={} round={} model={} retryCount={} | msgs={} history~{} tools~{} maxOut={} budget={} TOTAL~{}",
+                            sessionId, toolRound, modelName, retryCount,
                             sanitizedHistory.size(), historyTokens, toolSpecTokens, resolvedMaxOutput, modelBudget, totalEstimate);
                     if (log.isDebugEnabled()) {
                         for (int i = 0; i < sanitizedHistory.size(); i++) {
@@ -514,7 +511,7 @@ public class AiStreamingService {
                                 clientMessageId,
                                 requiresAHP,
                                 requiresTools,
-                                toolScope);
+                                retryCount);
                     }
                 }, Math.max(1, streamFirstResponseTimeoutSeconds), TimeUnit.SECONDS);
 
@@ -576,6 +573,24 @@ public class AiStreamingService {
                         }
 
                         AiMessage aiMessage = completeResponse.aiMessage();
+
+                        if (aiMessage != null && aiMessage.text() != null && !aiMessage.hasToolExecutionRequests()) {
+                            String text = aiMessage.text().trim();
+                            boolean explicitMissingTool = text.startsWith("MISSING_TOOL:");
+                            
+                            if (explicitMissingTool && retryCount > 0) {
+                                aiMessage = dev.langchain4j.data.message.AiMessage.from("Hệ thống hiện chưa có công cụ phù hợp để thực hiện thao tác này.");
+                            } else {
+                                boolean regexMissingTool = text.matches("(?is).*(không có công cụ|không tìm thấy công cụ|không thể thực hiện|không có quyền truy cập|not provided with a tool|missing tool|cannot perform|cannot access).*");
+                                boolean executionExpectedButNoToolCalled = requiresTools && !text.matches("(?is).*(vui lòng|bạn có muốn|cung cấp thêm|task là gì).*");
+                                
+                                if ((explicitMissingTool || regexMissingTool || executionExpectedButNoToolCalled) && retryCount == 0) {
+                                    log.warn("[Fallback] Missing tool detected. Retrying with expanded context...");
+                                    doStream(emitter, emitterCompleted, session, sessionId, userId, userInput, history, systemPrompt, model, modelName, startTime, isFallbackAttempt, clientMessageId, requiresAHP, requiresTools, 1);
+                                    return;
+                                }
+                            }
+                        }
 
                 if (aiMessage != null && aiMessage.hasToolExecutionRequests()) {
                     ToolLoopState nextToolState = advanceToolLoopState(
@@ -675,7 +690,7 @@ public class AiStreamingService {
                                 nextToolState.consecutiveCount(),
                                 toolCallSummaries,
                                 toolNames,
-                                toolScope);
+                                retryCount);
                     }
                     return;
                 }
@@ -775,12 +790,8 @@ public class AiStreamingService {
                     // Pass fresh stream; fallback doesn't inherit partial tokens from the failed model
                     // Downgrade tool scope for small-context fallback models to prevent 413
                     boolean fallbackRequiresTools = routingService.supportsLargeContextAndTools(fallback) ? requiresTools : false;
-                    SmartRoutingService.ToolScope fallbackToolScope = !fallbackRequiresTools
-                            ? SmartRoutingService.ToolScope.NONE
-                            : (routingService.supportsLargeContextAndTools(fallback)
-                                    ? toolScope : SmartRoutingService.ToolScope.ESSENTIAL);
                     doStream(emitter, emitterCompleted, session, sessionId, userId, userInput, history, systemPrompt, fallback,
-                            fallbackName, startTime, !isStillGemini, clientMessageId, requiresAHP, fallbackRequiresTools, fallbackToolScope);
+                            fallbackName, startTime, !isStillGemini, clientMessageId, requiresAHP, fallbackRequiresTools, retryCount);
                 } else {
                     chatStreamStatusService.updatePhase(sessionId, clientMessageId,
                             Phase.FAILED, modelName, null, error.getMessage());
@@ -835,7 +846,7 @@ public class AiStreamingService {
             String clientMessageId,
             boolean requiresAHP,
             boolean requiresTools,
-            SmartRoutingService.ToolScope toolScope) {
+            int retryCount) {
         String message = "Model did not produce a first streaming response within "
                 + streamFirstResponseTimeoutSeconds + "s";
         log.warn("[SSE] {} for session {} using model {}", message, sessionId, modelName);
@@ -856,13 +867,9 @@ public class AiStreamingService {
                 safeSend(emitter, "phase", Phase.THINKING.name(), null);
                 // Downgrade tool scope for small-context fallback models
                 boolean fallbackRequiresTools = routingService.supportsLargeContextAndTools(fallback) ? requiresTools : false;
-                SmartRoutingService.ToolScope fallbackToolScope = !fallbackRequiresTools
-                        ? SmartRoutingService.ToolScope.NONE
-                        : (routingService.supportsLargeContextAndTools(fallback)
-                                ? toolScope : SmartRoutingService.ToolScope.ESSENTIAL);
                 doStream(emitter, emitterCompleted, session, sessionId, userId, userInput,
                         history, systemPrompt, fallback, fallbackName, startTime,
-                        !isStillGemini, clientMessageId, requiresAHP, fallbackRequiresTools, fallbackToolScope);
+                        !isStillGemini, clientMessageId, requiresAHP, fallbackRequiresTools, retryCount);
                 return;
             }
         }
@@ -1592,15 +1599,13 @@ public class AiStreamingService {
     private String buildSystemPrompt(Long userId) {
         UserProfileLiteDto profile = userProfilePort.findLiteById(userId).orElse(null);
         String userName = profile != null ? profile.fullName() : "Unknown User";
-        String userEmail = profile != null ? profile.email() : "Unknown Email";
 
         PromptTemplate template = PromptTemplate.from(MASTER_PROMPT_TEMPLATE);
         return template.apply(Map.of(
                 "current_date", LocalDate.now().toString(),
                 "current_mode", heuristicConfigProvider.getCurrentMode(),
                 "current_user_name", userName,
-                "current_user_id", String.valueOf(userId),
-                "current_user_email", userEmail))
+                "current_user_id", String.valueOf(userId)))
                 .text();
     }
 

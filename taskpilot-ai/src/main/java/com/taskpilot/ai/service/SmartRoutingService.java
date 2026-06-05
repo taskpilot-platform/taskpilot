@@ -11,8 +11,10 @@ import org.springframework.stereotype.Service;
 
 import java.text.Normalizer;
 import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -125,9 +127,7 @@ public class SmartRoutingService {
         this.gatekeeperService = gatekeeperService;
     }
 
-    public enum ToolScope { NONE, ESSENTIAL, FULL }
-
-    public record RoutingDecision(StreamingChatModel model, String modelName, boolean requiresAHP, boolean requiresTools, ToolScope toolScope) {
+    public record RoutingDecision(StreamingChatModel model, String modelName, boolean requiresAHP, boolean requiresTools) {
     }
 
     public RoutingDecision route(String userMessage) {
@@ -144,7 +144,11 @@ public class SmartRoutingService {
         int estimatedTokens = tokenEstimationUtil.estimateTotal(userMessage, contextHistory);
         log.debug("[SmartRouting] Estimated tokens: {}, threshold: {}", estimatedTokens, tokenThreshold);
 
-        boolean likelyNeedsTools = pendingActionConfirmation || directAssignmentExecution
+        boolean hasExecutionVerb = containsAny(normalized, List.of(
+            "tao", "them", "sua", "xoa", "cap nhat", "doi", "gan", "giao", "assign", "move", "close", "complete", "start", "delete", "update", "create", "recommend", "goi y"
+        ));
+
+        boolean likelyNeedsTools = pendingActionConfirmation || directAssignmentExecution || hasExecutionVerb
                 || containsAny(normalized, splitKeywords(toolKeywordsRaw));
         boolean heavyContext = estimatedTokens > tokenThreshold;
 
@@ -152,7 +156,7 @@ public class SmartRoutingService {
             StreamingChatModel reasoningModel = getReasoningModel();
             String name = getModelName(reasoningModel);
             log.info("[SmartRouting] Gatekeeper requires AHP -> REASONING model ({})", name);
-            return new RoutingDecision(reasoningModel, name, true, true, ToolScope.ESSENTIAL);
+            return new RoutingDecision(reasoningModel, name, true, true);
         }
 
         if (heavyContext) {
@@ -160,24 +164,40 @@ public class SmartRoutingService {
             String name = getModelName(reasoningModel);
             log.info("[SmartRouting] Routing to REASONING model ({}) - tokens: {}", name, estimatedTokens);
             // Heavy context: pass tools through so model can still call them if needed
-            return new RoutingDecision(reasoningModel, name, false, likelyNeedsTools,
-                    likelyNeedsTools ? ToolScope.ESSENTIAL : ToolScope.NONE);
+            return new RoutingDecision(reasoningModel, name, false, likelyNeedsTools);
         }
 
         if (likelyNeedsTools) {
             if (!useGeminiForTools) {
                 log.info("[SmartRouting] Routing tool workflow directly to fallback model ({}) - Gemini tool streaming disabled",
                         fallbackModelName);
-                return new RoutingDecision(gpt4oFallbackModel, fallbackModelName, false, true, ToolScope.ESSENTIAL);
+                return new RoutingDecision(gpt4oFallbackModel, fallbackModelName, false, true);
             }
             log.info("[SmartRouting] Routing to TOOL-FRIENDLY model ({}) - tokens: {}",
                     geminiModelName, estimatedTokens);
-            return new RoutingDecision(geminiPrimaryModel, geminiModelName, false, true, ToolScope.FULL);
+            return new RoutingDecision(geminiPrimaryModel, geminiModelName, false, true);
         }
 
-        // LIGHT model: no tools needed — skip tool specs to save ~3356 tokens and avoid 413
+        // LIGHT model: no tools needed
         log.info("[SmartRouting] Routing to LIGHT model ({}) - tokens: {} requiresTools=false", fallbackModelName, estimatedTokens);
-        return new RoutingDecision(gpt4oFallbackModel, fallbackModelName, false, false, ToolScope.NONE);
+        return new RoutingDecision(gpt4oFallbackModel, fallbackModelName, false, false);
+    }
+
+    public Set<ToolScope> detectScopes(String message) {
+        Set<ToolScope> scopes = EnumSet.noneOf(ToolScope.class);
+        String normalized = normalize(message);
+        
+        if (containsAny(normalized, List.of("task", "cong viec", "status", "nhiem vu"))) scopes.add(ToolScope.TASK);
+        if (containsAny(normalized, List.of("sprint", "chu ky"))) scopes.add(ToolScope.SPRINT);
+        if (containsAny(normalized, List.of("project", "du an"))) scopes.add(ToolScope.PROJECT);
+        if (containsAny(normalized, List.of("giao", "assign", "phan cong", "phu hop", "ai lam", "member", "thanh vien", "recommend", "goi y"))) {
+            scopes.add(ToolScope.ASSIGNMENT);
+            scopes.add(ToolScope.AHP);
+            scopes.add(ToolScope.MEMBER);
+        }
+        if (containsAny(normalized, List.of("comment", "binh luan"))) scopes.add(ToolScope.COMMENT);
+        
+        return scopes.isEmpty() ? EnumSet.of(ToolScope.GENERAL) : scopes;
     }
 
     private boolean isDirectAssignmentExecution(String normalized, String normalizedContext) {
@@ -377,15 +397,18 @@ public class SmartRoutingService {
         }
     }
 
-    private String normalize(String text) {
+    public String normalize(String text) {
         if (text == null) {
             return "";
         }
         String lower = text.toLowerCase(Locale.ROOT)
                 .replace('\u0111', 'd')
                 .replace('\u0110', 'd');
-        return Normalizer.normalize(lower, Normalizer.Form.NFD)
-                .replaceAll("\\p{M}", "");
+        String temp = Normalizer.normalize(lower, Normalizer.Form.NFD);
+        return temp.replaceAll("\\p{M}", "")
+                   .replaceAll("[^a-z0-9\\s]", " ")
+                   .replaceAll("\\s+", " ")
+                   .trim();
     }
 
     private boolean containsAny(String text, List<String> keywords) {
