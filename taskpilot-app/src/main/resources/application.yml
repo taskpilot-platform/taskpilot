@@ -100,6 +100,22 @@ ai:
     reasoning-model: ${AI_GROQ_REASONING_MODEL:openai/gpt-oss-120b}
     gatekeeper-model: ${AI_GROQ_GATEKEEPER_MODEL:llama-3.1-8b-instant}
 
+  openrouter:
+    enabled: ${AI_OPENROUTER_ENABLED:false}
+    api-key: ${OPENROUTER_API_KEY:}
+    base-url: ${AI_OPENROUTER_BASE_URL:https://openrouter.ai/api/v1}
+    reasoning-model: ${AI_OPENROUTER_REASONING_MODEL:openai/gpt-oss-120b:free}
+    reasoning-fallback1-model: ${AI_OPENROUTER_REASONING_FALLBACK1_MODEL:moonshotai/kimi-k2.6:free}
+    reasoning-fallback2-model: ${AI_OPENROUTER_REASONING_FALLBACK2_MODEL:z-ai/glm-4.5-air:free}
+    reasoning-fallback3-model: ${AI_OPENROUTER_REASONING_FALLBACK3_MODEL:poolside/laguna-xs.2:free}
+    reasoning-fallback4-model: ${AI_OPENROUTER_REASONING_FALLBACK4_MODEL:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free}
+    reasoning-fallback5-model: ${AI_OPENROUTER_REASONING_FALLBACK5_MODEL:google/gemma-4-31b-it:free}
+    reasoning-fallback6-model: ${AI_OPENROUTER_REASONING_FALLBACK6_MODEL:google/gemma-4-26b-a4b-it:free}
+    reasoning-fallback7-model: ${AI_OPENROUTER_REASONING_FALLBACK7_MODEL:openai/gpt-oss-20b:free}
+    reasoning-fallback8-model: ${AI_OPENROUTER_REASONING_FALLBACK8_MODEL:}
+    reasoning-fallback9-model: ${AI_OPENROUTER_REASONING_FALLBACK9_MODEL:}
+    reasoning-fallback10-model: ${AI_OPENROUTER_REASONING_FALLBACK10_MODEL:}
+
   model:
     timeout-seconds: ${AI_MODEL_TIMEOUT:60}
 
@@ -119,7 +135,7 @@ ai:
     compact-summary-max-chars: ${AI_COMPACT_SUMMARY_MAX_CHARS:3000}
     compact-message-max-chars: ${AI_COMPACT_MESSAGE_MAX_CHARS:600}
     max-tool-result-memory-chars: ${AI_MAX_TOOL_RESULT_MEMORY_CHARS:12000}
-    stream-first-response-timeout-seconds: ${AI_STREAM_FIRST_RESPONSE_TIMEOUT_SECONDS:10}
+    stream-first-response-timeout-seconds: ${AI_STREAM_FIRST_RESPONSE_TIMEOUT_SECONDS:5}
     text-only-first-response-timeout-seconds: ${AI_TEXT_ONLY_FIRST_RESPONSE_TIMEOUT_SECONDS:10}
     max-user-input-chars: ${AI_MAX_USER_INPUT_CHARS:1500}
     max-user-input-tokens: ${AI_MAX_USER_INPUT_TOKENS:2500}

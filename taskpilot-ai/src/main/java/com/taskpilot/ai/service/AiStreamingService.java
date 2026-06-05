@@ -386,6 +386,7 @@ public class AiStreamingService {
 
                 final AtomicBoolean roundClosed = new AtomicBoolean(false);
                 final AtomicBoolean firstModelSignalReceived = new AtomicBoolean(false);
+                final boolean suppressTextUntilToolCall = requiresAHP && toolRound == 0;
                 final ScheduledFuture<?> timeoutFuture = timeoutScheduler.schedule(() -> {
                     if (firstModelSignalReceived.get() || clientDisconnected.get() || emitterCompleted.get()) {
                         return;
@@ -419,6 +420,9 @@ public class AiStreamingService {
                             return;
                         }
                         firstModelSignalReceived.set(true);
+                        if (suppressTextUntilToolCall) {
+                            return;
+                        }
                         fullResponse.append(partialResponse);
 
                         // Thinking expansion logic: buffer tokens between <think> and </think>
@@ -569,6 +573,55 @@ public class AiStreamingService {
                     return;
                 }
 
+                if (requiresAHP && toolRound == 0) {
+                    String nonToolText = aiMessage == null ? "" : aiMessage.text();
+                    log.warn("[Gatekeeper] requiresAHP=true but model {} completed without recommendAssignmentCandidates. Retrying fallback. Text was: {}",
+                            modelName, abbreviateForLog(nonToolText, 160));
+
+                    if (routingService.hasStreamingFallbackAfter(model)) {
+                        StreamingChatModel fallback = routingService.getNextStreamingFallback(model);
+                        String fallbackName = routingService.getModelName(fallback);
+                        chatStreamStatusService.updatePhase(sessionId, clientMessageId,
+                                Phase.THINKING, fallbackName, null, null);
+                        safeSend(emitter, "model", fallbackName + " (tool-call fallback)", null);
+                        safeSend(emitter, "phase", Phase.THINKING.name(), null);
+                        streamRound(
+                                emitter,
+                                emitterCompleted,
+                                session,
+                                sessionId,
+                                userId,
+                                userInput,
+                                history,
+                                systemPrompt,
+                                fallback,
+                                fallbackName,
+                                startTime,
+                                !routingService.hasStreamingFallbackAfter(fallback),
+                                clientMessageId,
+                                fullResponse,
+                                clientDisconnected,
+                                generatingMarked,
+                                toolRound,
+                                requiresAHP,
+                                lastToolName,
+                                consecutiveToolExecutions,
+                                toolCallSummaries,
+                                toolNames);
+                        return;
+                    }
+
+                    chatStreamStatusService.updatePhase(sessionId, clientMessageId,
+                            Phase.FAILED, modelName, null,
+                            "Model completed without required AHP tool call");
+                    safeSend(emitter, "phase", Phase.FAILED.name(), null);
+                    safeSend(emitter, "error",
+                            "AI service could not start the assignment workflow. Please try again.",
+                            null);
+                    safeComplete(emitter, emitterCompleted);
+                    return;
+                }
+
                 long durationMs = System.currentTimeMillis() - startTime;
                 String rawResponseText = fullResponse.toString();
                 if ((rawResponseText == null || rawResponseText.isBlank()) && aiMessage != null && aiMessage.text() != null) {
@@ -637,11 +690,8 @@ public class AiStreamingService {
                 log.error("[SSE] Model {} failed for session {}: {}", modelName, sessionId,
                         error.getMessage());
 
-                if (!isFallbackAttempt) {
-                    // Use Gemini waterfall chain first; only go to GPT-4o after exhausting all Gemini fallbacks
-                    StreamingChatModel fallback = routingService.isGeminiModel(model)
-                            ? routingService.getNextGeminiFallback(model)
-                            : routingService.getFallbackModel();
+                if (!isFallbackAttempt || routingService.hasStreamingFallbackAfter(model)) {
+                    StreamingChatModel fallback = routingService.getNextStreamingFallback(model);
                     if (fallback == model) {
                         chatStreamStatusService.updatePhase(sessionId, clientMessageId,
                                 Phase.FAILED, modelName, null, error.getMessage());
@@ -663,7 +713,7 @@ public class AiStreamingService {
 
                     // Pass fresh stream; fallback doesn't inherit partial tokens from the failed model
                     doStream(emitter, emitterCompleted, session, sessionId, userId, userInput, history, systemPrompt, fallback,
-                            fallbackName, startTime, !isStillGemini, clientMessageId, requiresAHP);
+                            fallbackName, startTime, !routingService.hasStreamingFallbackAfter(fallback), clientMessageId, requiresAHP);
                 } else {
                     chatStreamStatusService.updatePhase(sessionId, clientMessageId,
                             Phase.FAILED, modelName, null, error.getMessage());
@@ -696,11 +746,8 @@ public class AiStreamingService {
                 + streamFirstResponseTimeoutSeconds + "s";
         log.warn("[SSE] {} for session {} using model {}", message, sessionId, modelName);
 
-        if (!isFallbackAttempt) {
-            // Try next Gemini in the waterfall chain first
-            StreamingChatModel fallback = routingService.isGeminiModel(model)
-                    ? routingService.getNextGeminiFallback(model)
-                    : routingService.getFallbackModel();
+        if (!isFallbackAttempt || routingService.hasStreamingFallbackAfter(model)) {
+            StreamingChatModel fallback = routingService.getNextStreamingFallback(model);
             if (fallback != model) {
                 boolean isStillGemini = routingService.isGeminiModel(fallback);
                 String fallbackName = routingService.getModelName(fallback);
@@ -712,7 +759,7 @@ public class AiStreamingService {
                 safeSend(emitter, "phase", Phase.THINKING.name(), null);
                 doStream(emitter, emitterCompleted, session, sessionId, userId, userInput,
                         history, systemPrompt, fallback, fallbackName, startTime,
-                        !isStillGemini, clientMessageId, requiresAHP);
+                        !routingService.hasStreamingFallbackAfter(fallback), clientMessageId, requiresAHP);
                 return;
             }
         }
@@ -1465,6 +1512,17 @@ public class AiStreamingService {
         }
         String trimmed = clientMessageId.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private String abbreviateForLog(String text, int maxLength) {
+        if (text == null || text.isBlank()) {
+            return "";
+        }
+        String normalized = text.replaceAll("\\s+", " ").trim();
+        if (normalized.length() <= maxLength) {
+            return normalized;
+        }
+        return normalized.substring(0, Math.max(0, maxLength - 3)) + "...";
     }
 
     private record ToolLoopState(String toolName, int consecutiveCount) {
