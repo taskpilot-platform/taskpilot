@@ -6,6 +6,7 @@ import com.taskpilot.ai.entity.AiChatRequestEntity.Phase;
 import com.taskpilot.ai.entity.ChatMessageEntity;
 import com.taskpilot.ai.entity.ChatMessageEntity.SenderType;
 import com.taskpilot.ai.entity.ChatSessionEntity;
+import com.taskpilot.ai.config.OpenRouterMultiKeyStreamingChatModel;
 import com.taskpilot.ai.heuristic.HeuristicConfigProvider;
 import com.taskpilot.ai.repository.ChatMessageRepository;
 import com.taskpilot.ai.repository.ChatSessionRepository;
@@ -321,6 +322,43 @@ public class AiStreamingService {
             boolean requiresAHP,
             boolean requiresTools,
             int retryCount) {
+        doStreamWithKeyAttempts(
+                emitter,
+                emitterCompleted,
+                session,
+                sessionId,
+                userId,
+                userInput,
+                history,
+                systemPrompt,
+                model,
+                modelName,
+                startTime,
+                isFallbackAttempt,
+                clientMessageId,
+                requiresAHP,
+                requiresTools,
+                retryCount,
+                1);
+    }
+
+    private void doStreamWithKeyAttempts(SseEmitter emitter,
+            AtomicBoolean emitterCompleted,
+            ChatSessionEntity session,
+            Long sessionId,
+            Long userId,
+            String userInput,
+            List<ChatMessage> history,
+            String systemPrompt,
+            StreamingChatModel model,
+            String modelName,
+            long startTime,
+            boolean isFallbackAttempt,
+            String clientMessageId,
+            boolean requiresAHP,
+            boolean requiresTools,
+            int retryCount,
+            int initialModelKeyAttempts) {
 
         List<ChatMessage> workingHistory = new ArrayList<>(history);
         StringBuilder fullResponse = new StringBuilder();
@@ -354,7 +392,8 @@ public class AiStreamingService {
                 0,
                 toolCallSummaries,
                 toolNames,
-                retryCount);
+                retryCount,
+                initialModelKeyAttempts);
     }
 
     private void streamRound(SseEmitter emitter,
@@ -380,7 +419,8 @@ public class AiStreamingService {
             int consecutiveToolExecutions,
             List<Map<String, Object>> toolCallSummaries,
             LinkedHashSet<String> toolNames,
-            int retryCount) {
+            int retryCount,
+            int modelKeyAttempts) {
         List<ChatMessage> sanitizedHistory = cleanAndAlternateRoles(
                 compactHistoryForRequest(
                         sanitizeHistoryForTools(history),
@@ -511,7 +551,8 @@ public class AiStreamingService {
                                 clientMessageId,
                                 requiresAHP,
                                 requiresTools,
-                                retryCount);
+                                retryCount,
+                                modelKeyAttempts);
                     }
                 }, Math.max(1, streamFirstResponseTimeoutSeconds), TimeUnit.SECONDS);
 
@@ -585,8 +626,8 @@ public class AiStreamingService {
                                 boolean executionExpectedButNoToolCalled = requiresTools && !text.matches("(?is).*(vui lòng|bạn có muốn|cung cấp thêm|task là gì).*");
                                 
                                 if ((explicitMissingTool || regexMissingTool || executionExpectedButNoToolCalled) && retryCount == 0) {
-                                    log.warn("[Fallback] Missing tool detected. Retrying with expanded context...");
-                                    doStream(emitter, emitterCompleted, session, sessionId, userId, userInput, history, systemPrompt, model, modelName, startTime, isFallbackAttempt, clientMessageId, requiresAHP, requiresTools, 1);
+                                    log.warn("[Fallback] Missing tool detected. Retrying with expanded context and tools enabled...");
+                                    doStream(emitter, emitterCompleted, session, sessionId, userId, userInput, history, systemPrompt, model, modelName, startTime, isFallbackAttempt, clientMessageId, requiresAHP, true, 1);
                                     return;
                                 }
                             }
@@ -690,7 +731,8 @@ public class AiStreamingService {
                                 nextToolState.consecutiveCount(),
                                 toolCallSummaries,
                                 toolNames,
-                                retryCount);
+                                retryCount,
+                                modelKeyAttempts);
                     }
                     return;
                 }
@@ -763,11 +805,22 @@ public class AiStreamingService {
                 log.error("[SSE] Model {} failed for session {}: {}", modelName, sessionId,
                         error.getMessage());
 
-                if (!isFallbackAttempt) {
-                    // Use Gemini waterfall chain first; only go to GPT-4o after exhausting all Gemini fallbacks
-                    StreamingChatModel fallback = routingService.isGeminiModel(model)
-                            ? routingService.getNextGeminiFallback(model)
-                            : routingService.getFallbackModel();
+                if (hasRemainingOpenRouterKeys(model, modelKeyAttempts)) {
+                    int nextAttempt = modelKeyAttempts + 1;
+                    chatStreamStatusService.updatePhase(sessionId, clientMessageId,
+                            Phase.THINKING, modelName, null, null);
+                    safeSend(emitter, "model",
+                            modelName + " (next OpenRouter key " + nextAttempt + "/" + openRouterKeyCount(model) + ")",
+                            null);
+                    safeSend(emitter, "phase", Phase.THINKING.name(), null);
+                    doStreamWithKeyAttempts(emitter, emitterCompleted, session, sessionId, userId, userInput,
+                            history, systemPrompt, model, modelName, startTime,
+                            isFallbackAttempt, clientMessageId, requiresAHP, requiresTools, retryCount, nextAttempt);
+                    return;
+                }
+
+                if (!isFallbackAttempt || routingService.hasStreamingFallbackAfter(model)) {
+                    StreamingChatModel fallback = routingService.getNextStreamingFallback(model);
                     if (fallback == model) {
                         chatStreamStatusService.updatePhase(sessionId, clientMessageId,
                                 Phase.FAILED, modelName, null, error.getMessage());
@@ -788,10 +841,8 @@ public class AiStreamingService {
                     safeSend(emitter, "phase", Phase.THINKING.name(), null);
 
                     // Pass fresh stream; fallback doesn't inherit partial tokens from the failed model
-                    // Downgrade tool scope for small-context fallback models to prevent 413
-                    boolean fallbackRequiresTools = routingService.supportsLargeContextAndTools(fallback) ? requiresTools : false;
-                    doStream(emitter, emitterCompleted, session, sessionId, userId, userInput, history, systemPrompt, fallback,
-                            fallbackName, startTime, !isStillGemini, clientMessageId, requiresAHP, fallbackRequiresTools, retryCount);
+                    doStreamWithKeyAttempts(emitter, emitterCompleted, session, sessionId, userId, userInput, history, systemPrompt, fallback,
+                            fallbackName, startTime, !routingService.hasStreamingFallbackAfter(fallback), clientMessageId, requiresAHP, requiresTools, retryCount, 1);
                 } else {
                     chatStreamStatusService.updatePhase(sessionId, clientMessageId,
                             Phase.FAILED, modelName, null, error.getMessage());
@@ -846,16 +897,28 @@ public class AiStreamingService {
             String clientMessageId,
             boolean requiresAHP,
             boolean requiresTools,
-            int retryCount) {
+            int retryCount,
+            int initialModelKeyAttempts) {
         String message = "Model did not produce a first streaming response within "
                 + streamFirstResponseTimeoutSeconds + "s";
         log.warn("[SSE] {} for session {} using model {}", message, sessionId, modelName);
 
-        if (!isFallbackAttempt) {
-            // Try next Gemini in the waterfall chain first
-            StreamingChatModel fallback = routingService.isGeminiModel(model)
-                    ? routingService.getNextGeminiFallback(model)
-                    : routingService.getFallbackModel();
+        if (hasRemainingOpenRouterKeys(model, initialModelKeyAttempts)) {
+            int nextAttempt = initialModelKeyAttempts + 1;
+            chatStreamStatusService.updatePhase(sessionId, clientMessageId,
+                    Phase.THINKING, modelName, null, null);
+            safeSend(emitter, "model",
+                    modelName + " (next OpenRouter key " + nextAttempt + "/" + openRouterKeyCount(model) + ")",
+                    null);
+            safeSend(emitter, "phase", Phase.THINKING.name(), null);
+            doStreamWithKeyAttempts(emitter, emitterCompleted, session, sessionId, userId, userInput,
+                    history, systemPrompt, model, modelName, startTime,
+                    isFallbackAttempt, clientMessageId, requiresAHP, requiresTools, retryCount, nextAttempt);
+            return;
+        }
+
+        if (!isFallbackAttempt || routingService.hasStreamingFallbackAfter(model)) {
+            StreamingChatModel fallback = routingService.getNextStreamingFallback(model);
             if (fallback != model) {
                 boolean isStillGemini = routingService.isGeminiModel(fallback);
                 String fallbackName = routingService.getModelName(fallback);
@@ -865,11 +928,9 @@ public class AiStreamingService {
                         fallbackName + (isStillGemini ? " (gemini fallback after timeout)" : " (fallback after timeout)"),
                         null);
                 safeSend(emitter, "phase", Phase.THINKING.name(), null);
-                // Downgrade tool scope for small-context fallback models
-                boolean fallbackRequiresTools = routingService.supportsLargeContextAndTools(fallback) ? requiresTools : false;
-                doStream(emitter, emitterCompleted, session, sessionId, userId, userInput,
+                doStreamWithKeyAttempts(emitter, emitterCompleted, session, sessionId, userId, userInput,
                         history, systemPrompt, fallback, fallbackName, startTime,
-                        !isStillGemini, clientMessageId, requiresAHP, fallbackRequiresTools, retryCount);
+                        !routingService.hasStreamingFallbackAfter(fallback), clientMessageId, requiresAHP, requiresTools, retryCount, 1);
                 return;
             }
         }
@@ -1711,6 +1772,18 @@ public class AiStreamingService {
             return AiMessage.from(combinedText);
         }
         return SystemMessage.from(combinedText);
+    }
+
+    private boolean hasRemainingOpenRouterKeys(StreamingChatModel model, int modelKeyAttempts) {
+        return model instanceof OpenRouterMultiKeyStreamingChatModel openRouterModel
+                && modelKeyAttempts < openRouterModel.keyCount();
+    }
+
+    private int openRouterKeyCount(StreamingChatModel model) {
+        if (model instanceof OpenRouterMultiKeyStreamingChatModel openRouterModel) {
+            return openRouterModel.keyCount();
+        }
+        return 1;
     }
 
     private record ToolLoopState(String toolName, int consecutiveCount) {

@@ -8,12 +8,15 @@ import dev.langchain4j.model.openaiofficial.OpenAiOfficialChatModel;
 import dev.langchain4j.model.openaiofficial.OpenAiOfficialStreamingChatModel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
 
 @Slf4j
 @Configuration
@@ -67,6 +70,48 @@ public class AiModelConfig {
 
         @Value("${ai.groq.gatekeeper-model:llama-3.1-8b-instant}")
         private String groqGatekeeperModelName;
+
+        @Value("${ai.openrouter.api-key:}")
+        private String openRouterApiKey;
+
+        @Value("${ai.openrouter.api-keys:}")
+        private String openRouterApiKeys;
+
+        @Value("${ai.openrouter.base-url:https://openrouter.ai/api/v1}")
+        private String openRouterBaseUrl;
+
+        @Value("${ai.openrouter.reasoning-model:nvidia/nemotron-3-ultra-550b-a55b:free}")
+        private String openRouterReasoningModelName;
+
+        @Value("${ai.openrouter.reasoning-fallback1-model:nvidia/nemotron-3-super-120b-a12b:free}")
+        private String openRouterReasoningFallback1ModelName;
+
+        @Value("${ai.openrouter.reasoning-fallback2-model:poolside/laguna-m.1:free}")
+        private String openRouterReasoningFallback2ModelName;
+
+        @Value("${ai.openrouter.reasoning-fallback3-model:openai/gpt-oss-120b:free}")
+        private String openRouterReasoningFallback3ModelName;
+
+        @Value("${ai.openrouter.reasoning-fallback4-model:moonshotai/kimi-k2.6:free}")
+        private String openRouterReasoningFallback4ModelName;
+
+        @Value("${ai.openrouter.reasoning-fallback5-model:z-ai/glm-4.5-air:free}")
+        private String openRouterReasoningFallback5ModelName;
+
+        @Value("${ai.openrouter.reasoning-fallback6-model:poolside/laguna-xs.2:free}")
+        private String openRouterReasoningFallback6ModelName;
+
+        @Value("${ai.openrouter.reasoning-fallback7-model:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free}")
+        private String openRouterReasoningFallback7ModelName;
+
+        @Value("${ai.openrouter.reasoning-fallback8-model:google/gemma-4-31b-it:free}")
+        private String openRouterReasoningFallback8ModelName;
+
+        @Value("${ai.openrouter.reasoning-fallback9-model:google/gemma-4-26b-a4b-it:free}")
+        private String openRouterReasoningFallback9ModelName;
+
+        @Value("${ai.openrouter.reasoning-fallback10-model:openai/gpt-oss-20b:free}")
+        private String openRouterReasoningFallback10ModelName;
 
         @Value("${ai.model.timeout-seconds:60}")
         private int timeoutSeconds;
@@ -238,5 +283,133 @@ public class AiModelConfig {
                                 .temperature(0.0)
                                 .timeout(Duration.ofSeconds(timeoutSeconds))
                                 .build();
+        }
+
+        @Bean("openRouterReasoningModel")
+        @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        public StreamingChatModel openRouterReasoningModel() {
+                return openRouterReasoningModel(openRouterReasoningModelName, true);
+        }
+
+        @Bean("openRouterReasoningFallback1Model")
+        @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        public StreamingChatModel openRouterReasoningFallback1Model() {
+                return openRouterReasoningModel(openRouterReasoningFallback1ModelName, true);
+        }
+
+        @Bean("openRouterReasoningFallback2Model")
+        @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        public StreamingChatModel openRouterReasoningFallback2Model() {
+                return openRouterReasoningModel(openRouterReasoningFallback2ModelName, true);
+        }
+
+        @Bean("openRouterReasoningFallback3Model")
+        @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        public StreamingChatModel openRouterReasoningFallback3Model() {
+                return openRouterReasoningModel(openRouterReasoningFallback3ModelName, true);
+        }
+
+        @Bean("openRouterReasoningFallback4Model")
+        @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        public StreamingChatModel openRouterReasoningFallback4Model() {
+                return openRouterReasoningModel(openRouterReasoningFallback4ModelName, true);
+        }
+
+        @Bean("openRouterReasoningFallback5Model")
+        @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        public StreamingChatModel openRouterReasoningFallback5Model() {
+                return openRouterReasoningModel(openRouterReasoningFallback5ModelName, true);
+        }
+
+        @Bean("openRouterReasoningFallback6Model")
+        @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        public StreamingChatModel openRouterReasoningFallback6Model() {
+                return openRouterReasoningModel(openRouterReasoningFallback6ModelName, true);
+        }
+
+        @Bean("openRouterReasoningFallback7Model")
+        @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        public StreamingChatModel openRouterReasoningFallback7Model() {
+                return openRouterReasoningModel(openRouterReasoningFallback7ModelName, true);
+        }
+
+        @Bean("openRouterReasoningFallback8Model")
+        @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        @ConditionalOnExpression("'${ai.openrouter.reasoning-fallback8-model:}'.trim().length() > 0")
+        public StreamingChatModel openRouterReasoningFallback8Model() {
+                return openRouterReasoningModel(openRouterReasoningFallback8ModelName, true);
+        }
+
+        @Bean("openRouterReasoningFallback9Model")
+        @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        @ConditionalOnExpression("'${ai.openrouter.reasoning-fallback9-model:}'.trim().length() > 0")
+        public StreamingChatModel openRouterReasoningFallback9Model() {
+                return openRouterReasoningModel(openRouterReasoningFallback9ModelName, true);
+        }
+
+        @Bean("openRouterReasoningFallback10Model")
+        @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        @ConditionalOnExpression("'${ai.openrouter.reasoning-fallback10-model:}'.trim().length() > 0")
+        public StreamingChatModel openRouterReasoningFallback10Model() {
+                return openRouterReasoningModel(openRouterReasoningFallback10ModelName, true);
+        }
+
+        @Bean("openRouterReasoningTextModel")
+        @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        public StreamingChatModel openRouterReasoningTextModel() {
+                return openRouterReasoningModel(openRouterReasoningModelName, false);
+        }
+
+        private StreamingChatModel openRouterReasoningModel(String modelName, boolean parallelToolCalls) {
+                List<String> apiKeys = openRouterApiKeyPool();
+                if (apiKeys.isEmpty()) {
+                        throw new IllegalStateException("ai.openrouter.enabled=true but no OpenRouter API keys are configured");
+                }
+
+                log.info("[AI Config] Initializing OpenRouter model: {} with {} API key(s)", modelName, apiKeys.size());
+                List<OpenRouterMultiKeyStreamingChatModel.KeyedModel> keyedModels = apiKeys.stream()
+                                .map(apiKey -> new OpenRouterMultiKeyStreamingChatModel.KeyedModel(
+                                                maskOpenRouterKey(apiKey),
+                                                singleOpenRouterModel(apiKey, modelName, parallelToolCalls)))
+                                .toList();
+                return new OpenRouterMultiKeyStreamingChatModel(modelName, keyedModels);
+        }
+
+        private StreamingChatModel singleOpenRouterModel(String apiKey, String modelName, boolean parallelToolCalls) {
+                if (parallelToolCalls) {
+                        return OpenAiOfficialStreamingChatModel.builder()
+                                        .apiKey(apiKey)
+                                        .baseUrl(openRouterBaseUrl)
+                                        .modelName(modelName)
+                                        .temperature(0.4)
+                                        .parallelToolCalls(true)
+                                        .timeout(Duration.ofSeconds(timeoutSeconds * 2))
+                                        .build();
+                }
+                return OpenAiOfficialStreamingChatModel.builder()
+                                .apiKey(apiKey)
+                                .baseUrl(openRouterBaseUrl)
+                                .modelName(modelName)
+                                .temperature(0.4)
+                                .timeout(Duration.ofSeconds(timeoutSeconds * 2))
+                                .build();
+        }
+
+        private List<String> openRouterApiKeyPool() {
+                String raw = String.join(",",
+                                openRouterApiKey == null ? "" : openRouterApiKey,
+                                openRouterApiKeys == null ? "" : openRouterApiKeys);
+                return Arrays.stream(raw.split(","))
+                                .map(String::trim)
+                                .filter(s -> !s.isBlank())
+                                .distinct()
+                                .toList();
+        }
+
+        private String maskOpenRouterKey(String apiKey) {
+                if (apiKey == null || apiKey.length() < 12) {
+                        return "<redacted>";
+                }
+                return apiKey.substring(0, 8) + "..." + apiKey.substring(apiKey.length() - 4);
         }
 }
