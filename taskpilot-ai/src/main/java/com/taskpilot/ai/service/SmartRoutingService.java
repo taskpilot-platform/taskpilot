@@ -436,7 +436,9 @@ public class SmartRoutingService {
     }
 
     public boolean supportsLargeContextAndTools(StreamingChatModel model) {
-        return isGeminiModel(model) || (groqEnabled && (model == groqOssReasoningModel || model == groqOssReasoningTextModel)) || isOpenRouterReasoningModel(model);
+        return isGeminiModel(model)
+                || isOpenRouterReasoningModel(model)
+                || (groqEnabled && (model == groqOssReasoningModel || model == groqOssReasoningTextModel));
     }
 
     public boolean isOpenRouterReasoningModel(StreamingChatModel model) {

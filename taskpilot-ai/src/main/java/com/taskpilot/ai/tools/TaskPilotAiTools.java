@@ -975,26 +975,26 @@ public class TaskPilotAiTools {
     }
 
     @Tool("""
-            Use this tool to create a new task in a project.
-            Provide project ID and title. Optional fields include description, priority, parent task ID,
-            sprint ID, position, label IDs, required skill IDs, difficulty, assignee ID, startDate, and dueDate.
-            Dates should be ISO-8601 instants or YYYY-MM-DD.
-            This tool creates real task data and should only be used when the user explicitly asks to create a task.
+            Use this tool to create a new root-level task in a project.
+            Required: projectId, title. Optional: description, priority (LOW/MEDIUM/HIGH/URGENT),
+            sprintId, difficultyLevel (1-10 as string), labelIds, requiredSkillIds, assigneeId,
+            startDate, dueDate (ISO-8601 or YYYY-MM-DD format).
+            Do NOT set parentTaskId - only root-level tasks are supported via this tool.
+            This tool creates real task data and must only be used when the user explicitly requests task creation.
+            Before calling, collect all necessary info from the user or their context.
             """)
     public Object createTask(
             @P("The project ID") Long projectId,
             @P("Title of the task") String title,
-            @P("Priority (LOW, MEDIUM, HIGH, URGENT)") String priority,
+            @P("Priority: LOW, MEDIUM, HIGH, or URGENT. Default to MEDIUM if not specified.") String priority,
             @P("Optional description") String description,
-            @P("Optional kanban position") Float position,
-            @P("Optional parent task ID") Long parentTaskId,
-            @P("Optional sprint ID") Long sprintId,
-            @P("Optional task difficulty 1-10. Note: send as string like '5'") String difficultyLevel,
+            @P("Optional sprint ID to place the task in") Long sprintId,
+            @P("Optional task difficulty 1-10. Send as string e.g. '5'") String difficultyLevel,
             @P("Optional label ID list") List<Long> labelIds,
             @P("Optional required skill ID list") List<Long> requiredSkillIds,
             @P("Optional assignee user ID") Long assigneeId,
-            @P("Optional start date as ISO-8601 instant or YYYY-MM-DD") String startDate,
-            @P("Optional due date as ISO-8601 instant or YYYY-MM-DD") String dueDate) {
+            @P("Optional start date as ISO-8601 or YYYY-MM-DD") String startDate,
+            @P("Optional due date as ISO-8601 or YYYY-MM-DD") String dueDate) {
         log.info("[AiTool] createTask called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
@@ -1011,15 +1011,15 @@ public class TaskPilotAiTools {
                 "createTask",
                 "Create task \"" + title + "\" in project " + projectId,
                 args("projectId", projectId, "title", title, "priority", priority, "description", description,
-                        "position", position, "parentTaskId", parentTaskId, "sprintId", sprintId,
-                        "difficultyLevel", finalDifficultyLevel, "labelIds", labelIds,
+                        "sprintId", sprintId, "difficultyLevel", finalDifficultyLevel, "labelIds", labelIds,
                         "requiredSkillIds", requiredSkillIds, "assigneeId", assigneeId,
                         "startDate", startDate, "dueDate", dueDate),
                 null,
-                () -> taskCommandPort.createTask(projectId, title, description, priority, position, parentTaskId,
+                () -> taskCommandPort.createTask(projectId, title, description, priority, null, null,
                         sprintId, finalDifficultyLevel, labelIds, requiredSkillIds, assigneeId, startDate, dueDate,
                         userId));
     }
+
 
     @Tool("""
             Use this tool to fetch the backlog of a specific project, which contains unscheduled tasks

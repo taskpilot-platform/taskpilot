@@ -233,7 +233,7 @@ class TaskPilotAiToolsHumanInLoopTest {
                 .thenReturn(created);
 
         ConfirmationRequiredDto pending = assertPending(
-                tools.createTask(8L, "AI test", "MEDIUM", "desc", null, null, null, "3", null, null, null, null, null),
+                tools.createTask(8L, "AI test", "MEDIUM", "desc", null, "3", null, null, null, null, null),
                 "createTask");
 
         verify(taskCommandPort, never()).createTask(any(), any(), any(), any(), any(), any(), any(), any(), any(),
