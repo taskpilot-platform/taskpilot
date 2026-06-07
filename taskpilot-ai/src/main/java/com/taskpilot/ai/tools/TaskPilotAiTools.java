@@ -1,5 +1,7 @@
 package com.taskpilot.ai.tools;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.taskpilot.ai.dto.AutoAssignmentResponse;
 import com.taskpilot.ai.dto.CandidateScore;
 import com.taskpilot.ai.dto.ConfirmationRequiredDto;
@@ -31,12 +33,15 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class TaskPilotAiTools {
+
+    private static final ObjectMapper PATCH_OBJECT_MAPPER = new ObjectMapper();
 
     private final AutoAssignmentService autoAssignmentService;
     private final ProjectMemberPort projectMemberPort;
@@ -138,6 +143,155 @@ public class TaskPilotAiTools {
     }
 
     @Tool("""
+            Use this tool to create a system skill in the shared skill directory. Admin permission is required.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object createSystemSkill(
+            @P("Skill name") String name,
+            @P("Optional skill description") String description) {
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        log.info("[AiTool] createSystemSkill called name={}", name);
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "createSystemSkill",
+                "Create system skill \"" + name + "\"",
+                args("name", name, "description", description),
+                args("name", name, "description", description),
+                () -> skillPort.createSystemSkill(name, description, userId));
+    }
+
+    @Tool("""
+            Use this tool for partial updates to a system skill in the shared skill directory.
+            Admin permission is required. Send patchJson containing only changed fields.
+            Allowed patch fields: name, description. Example patchJson: {"description":"Frontend framework"}
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object patchSystemSkill(
+            @P("System skill ID") Long skillId,
+            @P("JSON object containing only changed fields") String patchJson,
+            @P("Optional reason for the change") String reason) {
+        Map<String, Object> patch = parsePatch(patchJson, Set.of("name", "description"));
+        String name = stringPatchValue(patch, "name");
+        String description = stringPatchValue(patch, "description");
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        log.info("[AiTool] patchSystemSkill called for skill {} patch {}", skillId, patchJson);
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "patchSystemSkill",
+                "Patch system skill " + skillId,
+                args("skillId", skillId, "patch", patch, "reason", reason),
+                args("skillId", skillId, "patch", patch, "reason", reason),
+                () -> skillPort.patchSystemSkill(skillId, name, description, userId));
+    }
+
+    @Tool("""
+            Use this tool to delete/deactivate a system skill in the shared skill directory.
+            Admin permission is required.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object deleteSystemSkill(@P("System skill ID to deactivate") Long skillId) {
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        log.info("[AiTool] deleteSystemSkill called for skill {}", skillId);
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "deleteSystemSkill",
+                "Delete system skill " + skillId,
+                args("skillId", skillId),
+                null,
+                () -> {
+                    skillPort.deleteSystemSkill(skillId, userId);
+                    return "System skill deleted successfully";
+                });
+    }
+
+    @Tool("""
+            Use this tool to list the current user's personal skills ("my skills").
+            """)
+    public Object getMySkills() {
+        Long userId = ToolExecutionContext.requireUserId();
+        log.info("[AiTool] getMySkills called for user {}", userId);
+        return skillPort.getMySkills(userId);
+    }
+
+    @Tool("""
+            Use this tool to add a skill to the current user's personal skills.
+            Provide skillId from the system skill directory and level from 1 to 5.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object addMySkill(
+            @P("System skill ID") Long skillId,
+            @P("Skill level from 1 to 5") Integer level) {
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        log.info("[AiTool] addMySkill called for skill {} level {}", skillId, level);
+        int safeLevel = clampSkillLevel(level);
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "addMySkill",
+                "Add skill " + skillId + " at level " + safeLevel,
+                args("skillId", skillId, "level", safeLevel),
+                args("skillId", skillId, "level", safeLevel),
+                () -> skillPort.addMySkill(skillId, safeLevel, userId));
+    }
+
+    @Tool("""
+            Use this tool for partial updates to the current user's personal skill.
+            Send patchJson containing only changed fields. Allowed patch fields: level.
+            Example patchJson: {"level":4}
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object patchMySkill(
+            @P("System skill ID in the user's personal skill list") Long skillId,
+            @P("JSON object containing only changed fields") String patchJson,
+            @P("Optional reason for the change") String reason) {
+        Map<String, Object> patch = parsePatch(patchJson, Set.of("level"));
+        Integer level = integerPatchValue(patch, "level");
+        if (level == null) {
+            throw new IllegalArgumentException("patchMySkill requires level in patchJson.");
+        }
+        int safeLevel = clampSkillLevel(level);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        log.info("[AiTool] patchMySkill called for skill {} patch {}", skillId, patchJson);
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "patchMySkill",
+                "Patch my skill " + skillId,
+                args("skillId", skillId, "patch", args("level", safeLevel), "reason", reason),
+                args("skillId", skillId, "patch", args("level", safeLevel), "reason", reason),
+                () -> skillPort.updateMySkill(skillId, safeLevel, userId));
+    }
+
+    @Tool("""
+            Use this tool to remove a skill from the current user's personal skills.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object deleteMySkill(@P("System skill ID to remove from my skills") Long skillId) {
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        log.info("[AiTool] deleteMySkill called for skill {}", skillId);
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "deleteMySkill",
+                "Delete my skill " + skillId,
+                args("skillId", skillId),
+                null,
+                () -> {
+                    skillPort.deleteMySkill(skillId, userId);
+                    return "Skill removed successfully";
+                });
+    }
+
+    @Tool("""
             Use this tool when the user asks to list their notifications, unread notifications,
             recent notifications, alerts, "thong bao cua toi", or "thong bao chua doc".
             Set unreadOnly=true when the user asks for unread/chua doc/chưa đọc notifications.
@@ -163,6 +317,42 @@ public class TaskPilotAiTools {
         Long userId = ToolExecutionContext.requireUserId();
         log.info("[AiTool] getUnreadNotificationCount called for user {}", userId);
         return Map.of("unreadCount", userNotificationQueryPort.getUnreadNotificationCount(userId));
+    }
+
+    @Tool("""
+            Use this tool to mark one of the current user's notifications as read.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object markNotificationRead(@P("The ID of the notification to mark as read") Long notificationId) {
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        log.info("[AiTool] markNotificationRead called for notification {}", notificationId);
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "markNotificationRead",
+                "Mark notification " + notificationId + " as read",
+                args("notificationId", notificationId),
+                args("notificationId", notificationId),
+                () -> userNotificationQueryPort.markNotificationRead(notificationId, userId));
+    }
+
+    @Tool("""
+            Use this tool to mark all of the current user's notifications as read.
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object markAllNotificationsRead() {
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        log.info("[AiTool] markAllNotificationsRead called for user {}", userId);
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "markAllNotificationsRead",
+                "Mark all notifications as read",
+                args(),
+                null,
+                () -> Map.of("updatedCount", userNotificationQueryPort.markAllNotificationsRead(userId)));
     }
 
     @Tool("""
@@ -618,6 +808,49 @@ public class TaskPilotAiTools {
     }
 
     @Tool("""
+            Use this tool for partial task comment updates. Send patchJson containing only changed fields.
+            Allowed patch fields: content, mentionedUserIds. If content is omitted, the tool keeps the existing
+            comment content.
+            Example patchJson: {"content":"Updated status note","mentionedUserIds":[2,5]}
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object patchTaskComment(
+            @P("The ID of the task") Long taskId,
+            @P("The ID of the comment") Long commentId,
+            @P("JSON object containing only changed fields") String patchJson,
+            @P("Optional reason for the change") String reason) {
+        log.info("[AiTool] patchTaskComment called for task {} comment {} with patch {}",
+                taskId, commentId, patchJson);
+        Map<String, Object> patch = parsePatch(patchJson, Set.of("content", "mentionedUserIds"));
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+
+        TaskCommentSummaryDto existing = taskCommentQueryPort.getTaskComments(taskId, userId).stream()
+                .filter(comment -> commentId.equals(comment.id()))
+                .findFirst()
+                .orElse(null);
+        String content = patch.containsKey("content")
+                ? stringPatchValue(patch, "content")
+                : existing != null ? existing.content() : null;
+        List<Long> mentionedUserIds = patch.containsKey("mentionedUserIds")
+                ? longListPatchValue(patch, "mentionedUserIds")
+                : existing != null ? existing.mentionedUserIds() : null;
+        if (!hasText(content)) {
+            throw new IllegalArgumentException("patchTaskComment requires content, or the existing comment must be readable.");
+        }
+
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "patchTaskComment",
+                "Patch comment " + commentId + " on task " + taskId,
+                args("taskId", taskId, "commentId", commentId, "patch", patch, "reason", reason),
+                args("taskId", taskId, "commentId", commentId, "patch", patch, "reason", reason),
+                () -> taskCommentQueryPort.updateTaskComment(taskId, commentId, content, mentionedUserIds,
+                        userId));
+    }
+
+    @Tool("""
             Use this tool to delete a task comment. Authors and project managers may delete comments according
             to project permissions.
             This tool performs a real database modification and requires final user confirmation.
@@ -700,6 +933,45 @@ public class TaskPilotAiTools {
                 null,
                 () -> taskCommandPort.updateTask(taskId, title, description, status, priority, position, labelIds,
                         finalDifficultyLevel, requiredSkillIds, assigneeId, startDate, dueDate, userId));
+    }
+
+    @Tool("""
+            Use this tool for partial task updates. Send a JSON object containing only the fields that should
+            change. Do not include unchanged fields and do not ask the user to re-enter unchanged task data.
+            Allowed patch fields: title, description, status, priority, position, labelIds, difficultyLevel,
+            requiredSkillIds, assigneeId, startDate, dueDate. Dates should be ISO-8601 instants or YYYY-MM-DD.
+            Example patchJson: {"dueDate":"2026-06-30","assigneeId":2}
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object patchTask(
+            @P("The ID of the task") Long taskId,
+            @P("JSON object containing only changed fields") String patchJson,
+            @P("Optional reason for the change") String reason) {
+        log.info("[AiTool] patchTask called for task {} with patch {}", taskId, patchJson);
+        Map<String, Object> patch = parseTaskPatch(patchJson);
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        String title = stringPatchValue(patch, "title");
+        String description = stringPatchValue(patch, "description");
+        String status = stringPatchValue(patch, "status");
+        String priority = stringPatchValue(patch, "priority");
+        Float position = floatPatchValue(patch, "position");
+        List<Long> labelIds = longListPatchValue(patch, "labelIds");
+        Integer difficultyLevel = integerPatchValue(patch, "difficultyLevel");
+        List<Long> requiredSkillIds = longListPatchValue(patch, "requiredSkillIds");
+        Long assigneeId = longPatchValue(patch, "assigneeId");
+        String startDate = stringPatchValue(patch, "startDate");
+        String dueDate = stringPatchValue(patch, "dueDate");
+
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "patchTask",
+                "Patch task " + taskId,
+                args("taskId", taskId, "patch", patch, "reason", reason),
+                args("taskId", taskId, "patch", patch, "reason", reason),
+                () -> taskCommandPort.updateTask(taskId, title, description, status, priority, position, labelIds,
+                        difficultyLevel, requiredSkillIds, assigneeId, startDate, dueDate, userId));
     }
 
     @Tool("""
@@ -857,6 +1129,41 @@ public class TaskPilotAiTools {
                         "heuristicMode", heuristicMode, "workflowMode", workflowMode, "startDate", startDate, "endDate", endDate),
                 null,
                 () -> projectInsightsPort.updateProject(projectId, name, description, status, heuristicMode, workflowMode, startDate, endDate, userId));
+    }
+
+    @Tool("""
+            Use this tool for partial project updates. Send patchJson containing only changed fields.
+            Allowed patch fields: name, description, status, heuristicMode, workflowMode, startDate, endDate.
+            Do not include unchanged fields and do not ask the user to re-enter unchanged project data.
+            Example patchJson: {"endDate":"2026-06-30","status":"ACTIVE"}
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object patchProject(
+            @P("The ID of the project to update") Long projectId,
+            @P("JSON object containing only changed fields") String patchJson,
+            @P("Optional reason for the change") String reason) {
+        log.info("[AiTool] patchProject called for project {} with patch {}", projectId, patchJson);
+        Map<String, Object> patch = parsePatch(patchJson,
+                Set.of("name", "description", "status", "heuristicMode", "workflowMode", "startDate", "endDate"));
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        String name = stringPatchValue(patch, "name");
+        String description = stringPatchValue(patch, "description");
+        String status = stringPatchValue(patch, "status");
+        String heuristicMode = stringPatchValue(patch, "heuristicMode");
+        String workflowMode = stringPatchValue(patch, "workflowMode");
+        String startDate = stringPatchValue(patch, "startDate");
+        String endDate = stringPatchValue(patch, "endDate");
+
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "patchProject",
+                "Patch project " + projectId,
+                args("projectId", projectId, "patch", patch, "reason", reason),
+                args("projectId", projectId, "patch", patch, "reason", reason),
+                () -> projectInsightsPort.updateProject(projectId, name, description, status, heuristicMode,
+                        workflowMode, startDate, endDate, userId));
     }
 
     @Tool("""
@@ -1146,6 +1453,37 @@ public class TaskPilotAiTools {
     }
 
     @Tool("""
+            Use this tool for partial sprint updates. Send patchJson containing only changed fields.
+            Allowed patch fields: name, startDate, endDate, goal.
+            Do not include unchanged fields and do not ask the user to re-enter unchanged sprint data.
+            Example patchJson: {"endDate":"2026-06-30","goal":"Finish checkout flow"}
+            This tool performs a real database modification and requires final user confirmation.
+            """)
+    public Object patchSprint(
+            @P("The project ID") Long projectId,
+            @P("The ID of the sprint") Long sprintId,
+            @P("JSON object containing only changed fields") String patchJson,
+            @P("Optional reason for the change") String reason) {
+        log.info("[AiTool] patchSprint called for sprint {} with patch {}", sprintId, patchJson);
+        Map<String, Object> patch = parsePatch(patchJson, Set.of("name", "startDate", "endDate", "goal"));
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        String name = stringPatchValue(patch, "name");
+        String startDate = stringPatchValue(patch, "startDate");
+        String endDate = stringPatchValue(patch, "endDate");
+        String goal = stringPatchValue(patch, "goal");
+
+        return pendingAiActionService.create(
+                userId,
+                sessionId,
+                "patchSprint",
+                "Patch sprint " + sprintId + " in project " + projectId,
+                args("projectId", projectId, "sprintId", sprintId, "patch", patch, "reason", reason),
+                args("projectId", projectId, "sprintId", sprintId, "patch", patch, "reason", reason),
+                () -> sprintQueryPort.updateSprint(projectId, sprintId, name, startDate, endDate, goal, userId));
+    }
+
+    @Tool("""
             Use this tool to delete a planning sprint. Only project managers can perform this.
             Provide project ID and sprint ID.
             This tool performs a real database modification and requires final user confirmation.
@@ -1245,6 +1583,97 @@ public class TaskPilotAiTools {
                 && (input.contains("confirm") || input.contains("confirmed")
                         || input.contains("xac nhan") || input.contains("dong y")
                         || input.contains("thuc hien") || input.contains("apply"));
+    }
+
+    private Map<String, Object> parseTaskPatch(String patchJson) {
+        return parsePatch(patchJson, Set.of("title", "description", "status", "priority", "position", "labelIds",
+                "difficultyLevel", "requiredSkillIds", "assigneeId", "startDate", "dueDate"));
+    }
+
+    private Map<String, Object> parsePatch(String patchJson, Set<String> allowedFields) {
+        if (!hasText(patchJson)) {
+            return Map.of();
+        }
+        try {
+            Map<String, Object> patch = PATCH_OBJECT_MAPPER.readValue(patchJson,
+                    new TypeReference<Map<String, Object>>() {});
+            patch.keySet().forEach(fieldName -> validatePatchField(fieldName, allowedFields));
+            return patch;
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid patch JSON. Provide an object with only changed fields.", e);
+        }
+    }
+
+    private void validatePatchField(String fieldName, Set<String> allowedFields) {
+        if (!allowedFields.contains(fieldName)) {
+            throw new IllegalArgumentException("Unsupported patch field: " + fieldName);
+        }
+    }
+
+    private int clampSkillLevel(Integer level) {
+        int rawLevel = level != null ? level : 1;
+        return Math.max(1, Math.min(5, rawLevel));
+    }
+
+    private String stringPatchValue(Map<String, Object> patch, String fieldName) {
+        Object value = patch.get(fieldName);
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString().trim();
+        return text.isEmpty() || "null".equalsIgnoreCase(text) ? null : text;
+    }
+
+    private Long longPatchValue(Map<String, Object> patch, String fieldName) {
+        return toLong(patch.get(fieldName));
+    }
+
+    private Integer integerPatchValue(Map<String, Object> patch, String fieldName) {
+        Object value = patch.get(fieldName);
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return Integer.valueOf(value.toString().trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid integer value for task patch field: " + fieldName, e);
+        }
+    }
+
+    private Float floatPatchValue(Map<String, Object> patch, String fieldName) {
+        Object value = patch.get(fieldName);
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.floatValue();
+        }
+        try {
+            return Float.valueOf(value.toString().trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid number value for task patch field: " + fieldName, e);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Long> longListPatchValue(Map<String, Object> patch, String fieldName) {
+        Object value = patch.get(fieldName);
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof List<?> list) {
+            return list.stream()
+                    .map(this::toLong)
+                    .filter(item -> item != null)
+                    .toList();
+        }
+        return Arrays.stream(value.toString().split(","))
+                .map(this::toLong)
+                .filter(item -> item != null)
+                .toList();
     }
 
     private String normalize(String value) {

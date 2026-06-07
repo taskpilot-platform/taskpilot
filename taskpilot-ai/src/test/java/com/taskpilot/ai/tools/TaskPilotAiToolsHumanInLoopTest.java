@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -307,6 +308,25 @@ class TaskPilotAiToolsHumanInLoopTest {
         verify(projectInsightsPort, never()).deleteProjectLabel(any(), any(), any());
         verify(sprintQueryPort, never()).updateSprint(any(), any(), any(), any(), any(), any(), any());
         verify(sprintQueryPort, never()).deleteSprint(any(), any(), any());
+    }
+
+    @Test
+    void patchTaskOnlyUpdatesProvidedFieldsAfterConfirmation() {
+        when(taskCommandPort.updateTask(75L, null, null, null, null, null, null,
+                null, null, 2L, null, "2026-06-30", USER_ID))
+                .thenReturn(task(75L, "TODO"));
+
+        ConfirmationRequiredDto pending = assertPending(
+                tools.patchTask(75L, "{\"dueDate\":\"2026-06-30\",\"assigneeId\":2}", "tre han"),
+                "patchTask");
+
+        verify(taskCommandPort, never()).updateTask(any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any());
+
+        assertEquals(task(75L, "TODO"), confirm(pending.actionId()));
+
+        verify(taskCommandPort).updateTask(eq(75L), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(),
+                isNull(), isNull(), eq(2L), isNull(), eq("2026-06-30"), eq(USER_ID));
     }
 
     private ConfirmationRequiredDto assertPending(Object result, String toolName) {

@@ -147,19 +147,25 @@ public class AiStreamingService {
             [TASKPILOT TOOL WORKFLOW RULES]
             - If the user asks you to perform an action but the required tool is not available, respond exactly with:
               MISSING_TOOL: <short reason>
-            - Vietnamese shorthand matters: "ch", "chua", "chưa", "ch dc", "ch đc", "chua duoc", and
-              "chưa được" mean "not yet". For task assignment questions, interpret them as unassigned/not assigned.
+            - The user frequently uses Vietnamese shorthand, abbreviations, and chat slang (e.g., "ch" = chưa, "tb" = thông báo, "da" = dự án, "nv" = nhiệm vụ/nhân viên, "đc" = được, "sl" = số lượng). You MUST actively infer the full meaning of any unrecognized acronyms or abbreviations based on the surrounding context. Never assume an unrecognized abbreviation is a typo; always try to interpret it as a Vietnamese abbreviation first. For task assignment questions, interpret "ch" as unassigned/not assigned.
             - If the user names a specific assignee (for example "cho Julia Design", "gán cho Ian",
               "assign task 68 to Julia"), the user's explicit assignee overrides the recommendation algorithm.
               In that case call assignTaskToMemberByName or assignTaskToMember after resolving the member; do NOT
               call recommendAndAssignTask, because recommendAndAssignTask always picks the top ranked candidate.
             - If the user asks which tasks are not assigned yet in a project, call getUnassignedTasksByProject.
               Do not answer from the full task list unless the unassigned-only tool is unavailable.
+            - If the user asks for overdue tasks, use getTasksByProject and filter the results yourself comparing dueDate to Today's Date. Do NOT invent or assume a getOverdueTasks tool exists.
             - If the user asks for unassigned tasks in the project that contains a task ID (for example
               "du an co chua task 67"), first call getTaskDetails(taskId) to resolve projectId, then call
               getUnassignedTasksByProject(projectId).
             - If the user asks to recommend a suitable assignee and also apply the assignment, call
               recommendAndAssignTask for each concrete task. This is a real data write action.
+            - For entity updates where only some fields change, prefer the matching patch tool: patchTask,
+              patchProject, patchSprint, patchTaskComment, patchSystemSkill, or patchMySkill. Pass a patchJson object containing
+              only the fields to change. Example: {"dueDate":"2026-06-30","assigneeId":2}.
+              Do not ask for title, description, status, priority, position, difficulty, labels, required skills,
+              assignee, start date, or due date unless that field is actually missing and needed for the requested
+              change.
             - If task skills or difficulty are missing, ask for only the missing fields. The frontend may provide
               those fields as a structured "Task assignment requirements form"; use that structured data directly.
               When the user provides missing task skills for assignment, call recommendAndAssignTask with those
@@ -174,10 +180,11 @@ public class AiStreamingService {
               JSON block so the frontend can render an interactive form. Do this for any workflow where a form can
               represent the missing fields; do not ask only in plain text for structured fields.
               Supported field types are text, number, textarea, select, date, and checkbox. Ask only for fields
-              that are missing.
+              that are missing. If a value is already known from the user's request or your previous recommendation,
+              include it in that field as "defaultValue" so the user can keep it or change it.
               Example:
               ```taskpilot-form
-              {"title":"Bo sung thong tin","description":"Nhap cac truong con thieu de tiep tuc.","submitLabel":"Gui thong tin","intent":"continue_previous_request","fields":[{"name":"taskId","label":"Task ID","type":"number","required":true}]}
+              {"title":"Bo sung thong tin","description":"Nhap cac truong con thieu de tiep tuc.","submitLabel":"Gui thong tin","intent":"continue_previous_request","fields":[{"name":"taskId","label":"Task ID","type":"number","required":true,"defaultValue":5}]}
               ```
 
             [REASONING OBJECTIVES & TRADE-OFFS]
@@ -1080,6 +1087,21 @@ public class AiStreamingService {
                 // Always log — this was previously swallowed silently, making bugs invisible
                 log.error("[SSE] forceTextOnlyResponse failed for session {} model {}: {}",
                         sessionId, textModelName, error.getMessage());
+
+                StreamingChatModel fallback = routingService.getOpenRouterTextFallbackModel(textModel);
+                if (fallback != textModel) {
+                    String fallbackName = routingService.getModelName(fallback);
+                    log.warn("[SSE] forceTextOnlyResponse falling back from {} to {} for session {}",
+                            textModelName, fallbackName, sessionId);
+                    chatStreamStatusService.updatePhase(sessionId, clientMessageId,
+                            Phase.THINKING, fallbackName, null, null);
+                    safeSend(emitter, "model", fallbackName + " (OpenRouter fallback)", null);
+                    safeSend(emitter, "phase", Phase.THINKING.name(), null);
+                    doStreamWithKeyAttempts(emitter, emitterCompleted, session, sessionId, userId, userInput,
+                            history, systemPrompt, fallback, fallbackName, startTime,
+                            true, clientMessageId, requiresAHP, false, 1, 1);
+                    return;
+                }
 
                 chatStreamStatusService.updatePhase(sessionId, clientMessageId,
                         Phase.FAILED, textModelName, null, error.getMessage());

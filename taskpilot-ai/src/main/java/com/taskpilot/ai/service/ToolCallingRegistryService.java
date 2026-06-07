@@ -46,11 +46,12 @@ public class ToolCallingRegistryService {
         toolMetadataRegistry = new HashMap<>();
         
         // GENERAL / PROJECT
-        register("getMyProjects", Set.of(ToolScope.PROJECT, ToolScope.GENERAL), List.of("project", "du an", "my"), 50, true);
+        register("getMyProjects", Set.of(ToolScope.PROJECT, ToolScope.GENERAL), List.of("project", "du an", "my", "da"), 50, true);
         register("getProjectStatus", Set.of(ToolScope.PROJECT), List.of("status", "tinh trang", "tien do"), 40, false);
         register("getProjectLabels", Set.of(ToolScope.PROJECT), List.of("label", "nhan"), 10, false);
         register("createProject", Set.of(ToolScope.PROJECT), List.of("create project", "tao du an"), 30, false);
         register("updateProject", Set.of(ToolScope.PROJECT), List.of("update project", "cap nhat du an"), 20, false);
+        register("patchProject", Set.of(ToolScope.PROJECT), List.of("update project", "cap nhat du an", "sua du an", "deadline project", "doi han du an"), 45, false);
         register("archiveProject", Set.of(ToolScope.PROJECT), List.of("archive", "luu tru"), 10, false);
         register("restoreProject", Set.of(ToolScope.PROJECT), List.of("restore", "khoi phuc"), 10, false);
         register("deleteProject", Set.of(ToolScope.PROJECT), List.of("delete project", "xoa du an"), 10, false);
@@ -62,12 +63,13 @@ public class ToolCallingRegistryService {
         register("findProjectsDue", Set.of(ToolScope.PROJECT), List.of("due", "den han"), 20, false);
 
         // TASK
-        register("getTaskDetails", Set.of(ToolScope.TASK), List.of("chi tiet", "detail"), 50, true);
-        register("getTasksByProject", Set.of(ToolScope.TASK, ToolScope.PROJECT), List.of("list task", "danh sach task", "cac cong viec"), 50, true);
-        register("getUnassignedTasksByProject", Set.of(ToolScope.TASK, ToolScope.PROJECT, ToolScope.ASSIGNMENT), List.of("unassigned", "not assigned", "chua gan", "chua phan cong", "chua duoc phan cong", "trong"), 40, false);
+        register("getTaskDetails", Set.of(ToolScope.TASK), List.of("chi tiet", "detail", "cv", "nv"), 50, true);
+        register("getTasksByProject", Set.of(ToolScope.TASK, ToolScope.PROJECT), List.of("list task", "danh sach task", "cac cong viec", "cv", "nv"), 50, true);
+        register("getUnassignedTasksByProject", Set.of(ToolScope.TASK, ToolScope.PROJECT, ToolScope.ASSIGNMENT), List.of("unassigned", "not assigned", "chua gan", "chua phan cong", "chua duoc phan cong", "trong", "ch"), 40, false);
         register("getSubtasks", Set.of(ToolScope.TASK), List.of("subtask", "task con"), 20, false);
         register("createTask", Set.of(ToolScope.TASK), List.of("create task", "new task", "tao task", "tao cong viec", "them task", "them cong viec"), 60, false);
         register("updateTask", Set.of(ToolScope.TASK), List.of("update task", "cap nhat cong viec", "sua task"), 30, false);
+        register("patchTask", Set.of(ToolScope.TASK, ToolScope.ASSIGNMENT), List.of("update task", "cap nhat cong viec", "sua task", "deadline", "due date", "han chot", "hạn chót", "doi han", "đổi hạn", "reassign", "phan cong lai", "phân công lại"), 65, false);
         register("updateTaskStatus", Set.of(ToolScope.TASK), List.of("status", "trang thai", "hoan thanh", "done", "todo"), 40, false);
         register("deleteTask", Set.of(ToolScope.TASK), List.of("delete task", "xoa task"), 20, false);
         register("moveTaskKanban", Set.of(ToolScope.TASK, ToolScope.PROJECT), List.of("move", "kanban", "board", "chuyen"), 20, false);
@@ -78,21 +80,25 @@ public class ToolCallingRegistryService {
         register("getSprintBoard", Set.of(ToolScope.SPRINT, ToolScope.PROJECT), List.of("board", "bang"), 30, false);
         register("createSprint", Set.of(ToolScope.SPRINT), List.of("create sprint", "tao sprint"), 30, false);
         register("updateSprint", Set.of(ToolScope.SPRINT), List.of("update sprint", "sua sprint"), 20, false);
+        register("patchSprint", Set.of(ToolScope.SPRINT), List.of("update sprint", "sua sprint", "doi han sprint", "deadline sprint", "goal sprint"), 45, false);
         register("deleteSprint", Set.of(ToolScope.SPRINT), List.of("delete sprint", "xoa sprint"), 20, false);
         register("startSprint", Set.of(ToolScope.SPRINT), List.of("start", "bat dau"), 30, false);
         register("completeSprint", Set.of(ToolScope.SPRINT), List.of("complete", "hoan thanh"), 30, false);
         register("assignTaskToSprint", Set.of(ToolScope.SPRINT, ToolScope.TASK), List.of("assign sprint", "dua vao sprint"), 30, false);
 
         // COMMENT
-        register("getMyTaskComments", Set.of(ToolScope.COMMENT, ToolScope.TASK, ToolScope.GENERAL), List.of("my comments", "comment cua toi", "comment cua minh", "binh luan cua toi", "binh luận của tôi", "toi da comment"), 60, false);
-        register("getTaskComments", Set.of(ToolScope.COMMENT, ToolScope.TASK), List.of("comment", "comments", "binh luan", "binh luận", "comment cua toi", "comment cua minh"), 50, false);
-        register("createTaskComment", Set.of(ToolScope.COMMENT, ToolScope.TASK), List.of("create comment", "add comment", "reply", "them comment", "them binh luan", "tra loi comment"), 50, false);
+        register("getMyTaskComments", Set.of(ToolScope.COMMENT, ToolScope.TASK, ToolScope.GENERAL), List.of("my comments", "comment cua toi", "comment cua minh", "binh luan cua toi", "binh luận của tôi", "toi da comment", "cmt"), 60, false);
+        register("getTaskComments", Set.of(ToolScope.COMMENT, ToolScope.TASK), List.of("comment", "comments", "binh luan", "binh luận", "comment cua toi", "comment cua minh", "cmt"), 50, false);
+        register("createTaskComment", Set.of(ToolScope.COMMENT, ToolScope.TASK), List.of("create comment", "add comment", "reply", "them comment", "them binh luan", "tra loi comment", "cmt"), 50, false);
         register("updateTaskComment", Set.of(ToolScope.COMMENT, ToolScope.TASK), List.of("update comment", "edit comment", "sua comment", "sua binh luan"), 30, false);
+        register("patchTaskComment", Set.of(ToolScope.COMMENT, ToolScope.TASK), List.of("update comment", "edit comment", "sua comment", "sua binh luan", "mention"), 45, false);
         register("deleteTaskComment", Set.of(ToolScope.COMMENT, ToolScope.TASK), List.of("delete comment", "remove comment", "xoa comment", "xoa binh luan"), 30, false);
 
         // NOTIFICATION
-        register("getMyNotifications", Set.of(ToolScope.NOTIFICATION, ToolScope.GENERAL), List.of("notification", "notifications", "unread", "thong bao", "thông báo", "chua doc", "chưa đọc"), 60, false);
-        register("getUnreadNotificationCount", Set.of(ToolScope.NOTIFICATION, ToolScope.GENERAL), List.of("unread count", "so thong bao", "số thông báo", "bao nhieu thong bao", "chua doc", "chưa đọc"), 50, false);
+        register("getMyNotifications", Set.of(ToolScope.NOTIFICATION, ToolScope.GENERAL), List.of("notification", "notifications", "unread", "thong bao", "thông báo", "chua doc", "chưa đọc", "tb", "ch"), 60, false);
+        register("getUnreadNotificationCount", Set.of(ToolScope.NOTIFICATION, ToolScope.GENERAL), List.of("unread count", "so thong bao", "số thông báo", "bao nhieu thong bao", "chua doc", "chưa đọc", "tb", "ch"), 50, false);
+        register("markNotificationRead", Set.of(ToolScope.NOTIFICATION), List.of("mark read", "da doc", "đã đọc", "doc thong bao", "đọc thông báo"), 50, false);
+        register("markAllNotificationsRead", Set.of(ToolScope.NOTIFICATION), List.of("mark all read", "doc tat ca thong bao", "đọc tất cả thông báo", "tat ca da doc"), 50, false);
 
         // MEMBER / ASSIGNMENT / AHP
         register("getProjectMembers", Set.of(ToolScope.MEMBER, ToolScope.PROJECT), List.of("member", "thanh vien"), 40, false);
@@ -101,6 +107,13 @@ public class ToolCallingRegistryService {
         register("updateMemberRole", Set.of(ToolScope.MEMBER, ToolScope.PROJECT), List.of("role", "vai tro", "quyen"), 20, false);
         register("removeMember", Set.of(ToolScope.MEMBER, ToolScope.PROJECT), List.of("remove member", "xoa thanh vien", "kick"), 20, false);
         register("searchSystemSkills", Set.of(ToolScope.MEMBER, ToolScope.AHP, ToolScope.ASSIGNMENT), List.of("skill", "ky nang"), 30, false);
+        register("createSystemSkill", Set.of(ToolScope.MEMBER), List.of("create system skill", "tao system skill", "tao ky nang he thong", "thêm skill hệ thống"), 35, false);
+        register("patchSystemSkill", Set.of(ToolScope.MEMBER), List.of("update system skill", "sua system skill", "cap nhat ky nang he thong", "sửa skill hệ thống"), 45, false);
+        register("deleteSystemSkill", Set.of(ToolScope.MEMBER), List.of("delete system skill", "xoa system skill", "xoa ky nang he thong", "xóa skill hệ thống"), 30, false);
+        register("getMySkills", Set.of(ToolScope.MEMBER, ToolScope.GENERAL), List.of("my skill", "skill cua toi", "ky nang cua toi", "kỹ năng của tôi"), 35, false);
+        register("addMySkill", Set.of(ToolScope.MEMBER), List.of("add skill", "them skill", "them ky nang", "thêm kỹ năng"), 35, false);
+        register("patchMySkill", Set.of(ToolScope.MEMBER), List.of("update skill", "cap nhat skill", "sua skill", "doi level skill", "đổi level skill"), 45, false);
+        register("deleteMySkill", Set.of(ToolScope.MEMBER), List.of("delete skill", "remove skill", "xoa skill", "xóa kỹ năng"), 30, false);
         register("updateTaskRequiredSkills", Set.of(ToolScope.TASK, ToolScope.AHP, ToolScope.ASSIGNMENT), List.of("required skill", "ky nang can thiet"), 20, false);
         register("assignTaskToMember", Set.of(ToolScope.ASSIGNMENT, ToolScope.TASK), List.of("assign", "giao", "phan cong"), 40, false);
         register("assignTaskToMemberByName", Set.of(ToolScope.ASSIGNMENT, ToolScope.TASK), List.of("assign by name", "giao cho"), 40, false);
