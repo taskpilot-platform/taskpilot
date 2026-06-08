@@ -177,14 +177,16 @@ public class AiStreamingService {
               In that case, tell the user exactly what will change and wait for a final confirmation. Do not claim
               the change has been applied until confirmPendingAction returns a success result.
             - When you need additional structured information from the user, include a fenced `taskpilot-form`
-              JSON block so the frontend can render an interactive form. Do this for any workflow where a form can
-              represent the missing fields; do not ask only in plain text for structured fields.
-              Supported field types are text, number, textarea, select, date, and checkbox. Ask only for fields
-              that are missing. If a value is already known from the user's request or your previous recommendation,
-              include it in that field as "defaultValue" so the user can keep it or change it.
-              Example:
+              JSON block so the frontend can render an interactive form.
+              CRITICAL FORM RULES:
+              1. DO NOT tell the user to run tools. If a user asks to "tạo task" (create task), you MUST immediately call `getMyProjects` to fetch their projects BEFORE responding with a form. Do NOT generate a `taskpilot-form` in the same turn if you haven't called the tool yet!
+              2. For ID fields (projectId, sprintId, assigneeId), you MUST use `type: "select"` and provide an `options` array (e.g., `[{"value": 1, "label": "Project Alpha (ID: 1)"}]`). If you don't have the options yet, CALL THE TOOL first.
+              3. Only ask for fields that are truly missing.
+              4. For `createTask`, ONLY `projectId` and `title` are required. `sprintId`, `difficultyLevel`, `startDate`, `dueDate`, etc. MUST have `required: false`.
+              
+              Example of a good form:
               ```taskpilot-form
-              {"title":"Bo sung thong tin","description":"Nhap cac truong con thieu de tiep tuc.","submitLabel":"Gui thong tin","intent":"continue_previous_request","fields":[{"name":"taskId","label":"Task ID","type":"number","required":true,"defaultValue":5}]}
+              {"title":"Tao task moi","description":"Vui long chon project va nhap tieu de","submitLabel":"Tao task","intent":"continue_previous_request","fields":[{"name":"projectId","label":"Project","type":"select","required":true,"options":[{"value":1,"label":"Web App (ID: 1)"}]},{"name":"title","label":"Tieu de","type":"text","required":true},{"name":"sprintId","label":"Sprint","type":"select","required":false,"options":[{"value":2,"label":"Sprint 1 (ID: 2)"}]}]}
               ```
 
             [REASONING OBJECTIVES & TRADE-OFFS]

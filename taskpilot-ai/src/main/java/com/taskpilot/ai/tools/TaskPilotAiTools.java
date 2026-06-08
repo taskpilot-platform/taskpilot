@@ -164,20 +164,20 @@ public class TaskPilotAiTools {
 
     @Tool("""
             Use this tool for partial updates to a system skill in the shared skill directory.
-            Admin permission is required. Send patchJson containing only changed fields.
-            Allowed patch fields: name, description. Example patchJson: {"description":"Frontend framework"}
+            Admin permission is required. Send patch map containing only changed fields.
+            Allowed patch fields: name, description. Example patch: {"description":"Frontend framework"}
             This tool performs a real database modification and requires final user confirmation.
             """)
     public Object patchSystemSkill(
-            @P("System skill ID") Long skillId,
-            @P("JSON object containing only changed fields") String patchJson,
+            @P("The ID of the skill") Long skillId,
+            @P("Map containing only changed fields") Map<String, Object> patch,
             @P("Optional reason for the change") String reason) {
-        Map<String, Object> patch = parsePatch(patchJson, Set.of("name", "description"));
+        log.info("[AiTool] patchSystemSkill called for skill {} patch {}", skillId, patch);
+        patch.keySet().forEach(fieldName -> validatePatchField(fieldName, Set.of("name", "description")));
         String name = stringPatchValue(patch, "name");
         String description = stringPatchValue(patch, "description");
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
-        log.info("[AiTool] patchSystemSkill called for skill {} patch {}", skillId, patchJson);
         return pendingAiActionService.create(
                 userId,
                 sessionId,
@@ -243,23 +243,24 @@ public class TaskPilotAiTools {
 
     @Tool("""
             Use this tool for partial updates to the current user's personal skill.
-            Send patchJson containing only changed fields. Allowed patch fields: level.
-            Example patchJson: {"level":4}
+            Send patch map containing only changed fields. Allowed patch fields: level.
+            Example patch: {"level":4}
             This tool performs a real database modification and requires final user confirmation.
             """)
     public Object patchMySkill(
-            @P("System skill ID in the user's personal skill list") Long skillId,
-            @P("JSON object containing only changed fields") String patchJson,
+            @P("The ID of the skill") Long skillId,
+            @P("Map containing only changed fields") Map<String, Object> patch,
             @P("Optional reason for the change") String reason) {
-        Map<String, Object> patch = parsePatch(patchJson, Set.of("level"));
+        log.info("[AiTool] patchMySkill called for skill {} patch {}", skillId, patch);
+        patch.keySet().forEach(fieldName -> validatePatchField(fieldName, Set.of("level")));
         Integer level = integerPatchValue(patch, "level");
         if (level == null) {
-            throw new IllegalArgumentException("patchMySkill requires level in patchJson.");
+            throw new IllegalArgumentException("patchMySkill requires level in patch.");
         }
         int safeLevel = clampSkillLevel(level);
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
-        log.info("[AiTool] patchMySkill called for skill {} patch {}", skillId, patchJson);
+        // note: AI doesn't know context skill ID usually, so this is mostly if AI knows the user's skill mapping.
         return pendingAiActionService.create(
                 userId,
                 sessionId,
@@ -825,20 +826,20 @@ public class TaskPilotAiTools {
     }
 
     @Tool("""
-            Use this tool for partial task comment updates. Send patchJson containing only changed fields.
+            Use this tool for partial task comment updates. Send map containing only changed fields.
             Allowed patch fields: content, mentionedUserIds. If content is omitted, the tool keeps the existing
             comment content.
-            Example patchJson: {"content":"Updated status note","mentionedUserIds":[2,5]}
+            Example patch: {"content":"Updated status note","mentionedUserIds":[2,5]}
             This tool performs a real database modification and requires final user confirmation.
             """)
     public Object patchTaskComment(
             @P("The ID of the task") Long taskId,
-            @P("The ID of the comment") Long commentId,
-            @P("JSON object containing only changed fields") String patchJson,
+            @P("The ID of the comment to patch") Long commentId,
+            @P("Map containing only changed fields") Map<String, Object> patch,
             @P("Optional reason for the change") String reason) {
         log.info("[AiTool] patchTaskComment called for task {} comment {} with patch {}",
-                taskId, commentId, patchJson);
-        Map<String, Object> patch = parsePatch(patchJson, Set.of("content", "mentionedUserIds"));
+                taskId, commentId, patch);
+        patch.keySet().forEach(fieldName -> validatePatchField(fieldName, Set.of("content", "mentionedUserIds")));
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
 
@@ -957,15 +958,19 @@ public class TaskPilotAiTools {
             change. Do not include unchanged fields and do not ask the user to re-enter unchanged task data.
             Allowed patch fields: title, description, status, priority, position, labelIds, difficultyLevel,
             requiredSkillIds, assigneeId, startDate, dueDate. Dates should be ISO-8601 instants or YYYY-MM-DD.
-            Example patchJson: {"dueDate":"2026-06-30","assigneeId":2}
+            Example patch: {"dueDate":"2026-06-30","assigneeId":2}
             This tool performs a real database modification and requires final user confirmation.
             """)
     public Object patchTask(
             @P("The ID of the task") Long taskId,
-            @P("JSON object containing only changed fields") String patchJson,
+            @P("Map containing only changed fields") Map<String, Object> patch,
             @P("Optional reason for the change") String reason) {
-        log.info("[AiTool] patchTask called for task {} with patch {}", taskId, patchJson);
-        Map<String, Object> patch = parseTaskPatch(patchJson);
+        log.info("[AiTool] patchTask called for task {} with patch {}", taskId, patch);
+        
+        Set<String> allowedFields = Set.of("title", "description", "status", "priority", "position", "labelIds",
+                "difficultyLevel", "requiredSkillIds", "assigneeId", "startDate", "dueDate");
+        patch.keySet().forEach(fieldName -> validatePatchField(fieldName, allowedFields));
+        
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
         String title = stringPatchValue(patch, "title");
@@ -1149,19 +1154,21 @@ public class TaskPilotAiTools {
     }
 
     @Tool("""
-            Use this tool for partial project updates. Send patchJson containing only changed fields.
+            Use this tool for partial project updates. Send patch map containing only changed fields.
             Allowed patch fields: name, description, status, heuristicMode, workflowMode, startDate, endDate.
             Do not include unchanged fields and do not ask the user to re-enter unchanged project data.
-            Example patchJson: {"endDate":"2026-06-30","status":"ACTIVE"}
+            Example patch: {"endDate":"2026-06-30","status":"ACTIVE"}
             This tool performs a real database modification and requires final user confirmation.
             """)
     public Object patchProject(
             @P("The ID of the project to update") Long projectId,
-            @P("JSON object containing only changed fields") String patchJson,
+            @P("Map containing only changed fields") Map<String, Object> patch,
             @P("Optional reason for the change") String reason) {
-        log.info("[AiTool] patchProject called for project {} with patch {}", projectId, patchJson);
-        Map<String, Object> patch = parsePatch(patchJson,
-                Set.of("name", "description", "status", "heuristicMode", "workflowMode", "startDate", "endDate"));
+        log.info("[AiTool] patchProject called for project {} with patch {}", projectId, patch);
+        
+        Set<String> allowedFields = Set.of("name", "description", "status", "heuristicMode", "workflowMode", "startDate", "endDate");
+        patch.keySet().forEach(fieldName -> validatePatchField(fieldName, allowedFields));
+        
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
         String name = stringPatchValue(patch, "name");
@@ -1353,7 +1360,8 @@ public class TaskPilotAiTools {
             startDate, dueDate (ISO-8601 or YYYY-MM-DD format).
             Do NOT set parentTaskId - only root-level tasks are supported via this tool.
             This tool creates real task data and must only be used when the user explicitly requests task creation.
-            Before calling, collect all necessary info from the user or their context.
+            CRITICAL INSTRUCTION: If you do not know the user's `projectId`, DO NOT output a form! You MUST call `getMyProjects` tool right now to get the project list!
+            CRITICAL: Only `projectId` and `title` are required. Do NOT make `sprintId`, `difficultyLevel`, `startDate`, or `dueDate` required.
             """)
     public Object createTask(
             @P("The project ID") Long projectId,
@@ -1470,19 +1478,19 @@ public class TaskPilotAiTools {
     }
 
     @Tool("""
-            Use this tool for partial sprint updates. Send patchJson containing only changed fields.
+            Use this tool for partial sprint updates. Send patch map containing only changed fields.
             Allowed patch fields: name, startDate, endDate, goal.
             Do not include unchanged fields and do not ask the user to re-enter unchanged sprint data.
-            Example patchJson: {"endDate":"2026-06-30","goal":"Finish checkout flow"}
+            Example patch: {"endDate":"2026-06-30","goal":"Finish checkout flow"}
             This tool performs a real database modification and requires final user confirmation.
             """)
     public Object patchSprint(
             @P("The project ID") Long projectId,
             @P("The ID of the sprint") Long sprintId,
-            @P("JSON object containing only changed fields") String patchJson,
+            @P("Map containing only changed fields") Map<String, Object> patch,
             @P("Optional reason for the change") String reason) {
-        log.info("[AiTool] patchSprint called for sprint {} with patch {}", sprintId, patchJson);
-        Map<String, Object> patch = parsePatch(patchJson, Set.of("name", "startDate", "endDate", "goal"));
+        log.info("[AiTool] patchSprint called for sprint {} with patch {}", sprintId, patch);
+        patch.keySet().forEach(fieldName -> validatePatchField(fieldName, Set.of("name", "startDate", "endDate", "goal")));
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
         String name = stringPatchValue(patch, "name");
@@ -1612,36 +1620,7 @@ public class TaskPilotAiTools {
                 || input.equals("duoc") || input.equals("oke");
     }
 
-    private Map<String, Object> parseTaskPatch(String patchJson) {
-        return parsePatch(patchJson, Set.of("title", "description", "status", "priority", "position", "labelIds",
-                "difficultyLevel", "requiredSkillIds", "assigneeId", "startDate", "dueDate"));
-    }
 
-    private Map<String, Object> parsePatch(String patchJson, Set<String> allowedFields) {
-        if (!hasText(patchJson)) {
-            return Map.of();
-        }
-        
-        String cleanedJson = patchJson.trim();
-        if (cleanedJson.startsWith("```json")) {
-            cleanedJson = cleanedJson.substring(7);
-        } else if (cleanedJson.startsWith("```")) {
-            cleanedJson = cleanedJson.substring(3);
-        }
-        if (cleanedJson.endsWith("```")) {
-            cleanedJson = cleanedJson.substring(0, cleanedJson.length() - 3);
-        }
-        cleanedJson = cleanedJson.trim();
-        
-        try {
-            Map<String, Object> patch = PATCH_OBJECT_MAPPER.readValue(cleanedJson,
-                    new TypeReference<Map<String, Object>>() {});
-            patch.keySet().forEach(fieldName -> validatePatchField(fieldName, allowedFields));
-            return patch;
-        } catch (Exception e) {
-            throw new IllegalArgumentException("Invalid patch JSON. Provide an object with only changed fields.", e);
-        }
-    }
 
     private void validatePatchField(String fieldName, Set<String> allowedFields) {
         if (!allowedFields.contains(fieldName)) {

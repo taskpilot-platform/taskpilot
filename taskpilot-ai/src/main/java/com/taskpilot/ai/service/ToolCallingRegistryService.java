@@ -46,7 +46,7 @@ public class ToolCallingRegistryService {
         toolMetadataRegistry = new HashMap<>();
         
         // GENERAL / PROJECT
-        register("getMyProjects", Set.of(ToolScope.PROJECT, ToolScope.GENERAL), List.of("project", "du an", "my", "da"), 50, true);
+        register("getMyProjects", Set.of(ToolScope.PROJECT, ToolScope.GENERAL, ToolScope.TASK), List.of("project", "du an", "my", "da"), 50, true);
         register("getProjectStatus", Set.of(ToolScope.PROJECT), List.of("status", "tinh trang", "tien do"), 40, false);
         register("getProjectLabels", Set.of(ToolScope.PROJECT), List.of("label", "nhan"), 10, false);
         register("createProject", Set.of(ToolScope.PROJECT), List.of("create project", "tao du an"), 30, false);
@@ -75,8 +75,8 @@ public class ToolCallingRegistryService {
         register("moveTaskKanban", Set.of(ToolScope.TASK, ToolScope.PROJECT), List.of("move", "kanban", "board", "chuyen"), 20, false);
 
         // SPRINT
-        register("getSprintsByProject", Set.of(ToolScope.SPRINT, ToolScope.PROJECT), List.of("sprint", "chu ky", "danh sach sprint"), 40, false);
-        register("getSprintBacklog", Set.of(ToolScope.SPRINT, ToolScope.PROJECT), List.of("backlog"), 30, false);
+        register("getSprintsByProject", Set.of(ToolScope.SPRINT, ToolScope.PROJECT, ToolScope.TASK), List.of("sprint", "chu ky", "danh sach sprint"), 40, false);
+        register("getSprintBacklog", Set.of(ToolScope.SPRINT, ToolScope.PROJECT, ToolScope.TASK), List.of("backlog"), 30, false);
         register("getSprintBoard", Set.of(ToolScope.SPRINT, ToolScope.PROJECT), List.of("board", "bang"), 30, false);
         register("createSprint", Set.of(ToolScope.SPRINT), List.of("create sprint", "tao sprint"), 30, false);
         register("updateSprint", Set.of(ToolScope.SPRINT), List.of("update sprint", "sua sprint"), 20, false);
