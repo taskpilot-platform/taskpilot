@@ -13,6 +13,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -317,7 +318,7 @@ class TaskPilotAiToolsHumanInLoopTest {
                 .thenReturn(task(75L, "TODO"));
 
         ConfirmationRequiredDto pending = assertPending(
-                tools.patchTask(75L, "{\"dueDate\":\"2026-06-30\",\"assigneeId\":2}", "tre han"),
+                tools.patchTask(75L, Map.of("dueDate", "2026-06-30", "assigneeId", 2L), "tre han"),
                 "patchTask");
 
         verify(taskCommandPort, never()).updateTask(any(), any(), any(), any(), any(), any(), any(), any(), any(),
