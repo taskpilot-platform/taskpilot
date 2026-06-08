@@ -30,9 +30,10 @@ public class PendingAiActionService {
             Supplier<Object> executor) {
         cleanupExpired();
         String actionId = UUID.randomUUID().toString();
+        Instant createdAt = Instant.now();
         Instant expiresAt = Instant.now().plus(ACTION_TTL);
         actions.put(actionId, new PendingAction(userId, sessionId, toolName, summary, arguments, preview,
-                expiresAt, executor));
+                createdAt, expiresAt, executor));
 
         log.info("[HumanInLoop] Pending AI action created: actionId={} tool={} user={} session={}",
                 actionId, toolName, userId, sessionId);
@@ -52,6 +53,17 @@ public class PendingAiActionService {
         log.info("[HumanInLoop] Confirming AI action: actionId={} tool={} user={} session={}",
                 actionId, action.toolName(), userId, sessionId);
         return action.executor().get();
+    }
+
+    public Object confirmLatest(Long userId, Long sessionId) {
+        cleanupExpired();
+        return actions.entrySet().stream()
+                .filter(entry -> entry.getValue().userId().equals(userId)
+                        && entry.getValue().sessionId().equals(sessionId))
+                .max(Map.Entry.comparingByValue((left, right) -> left.createdAt().compareTo(right.createdAt())))
+                .map(entry -> confirm(entry.getKey(), userId, sessionId))
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(),
+                        "Pending action not found or expired"));
     }
 
     public void cancel(String actionId, Long userId, Long sessionId) {
@@ -78,6 +90,7 @@ public class PendingAiActionService {
             String summary,
             Map<String, Object> arguments,
             Object preview,
+            Instant createdAt,
             Instant expiresAt,
             Supplier<Object> executor) {
     }

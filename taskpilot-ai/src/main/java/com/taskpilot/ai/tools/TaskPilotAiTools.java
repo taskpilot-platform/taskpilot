@@ -528,11 +528,28 @@ public class TaskPilotAiTools {
     public Object confirmPendingAction(@P("Pending action ID returned by a confirmationRequired tool result") String actionId) {
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
+        if (!hasText(actionId) && isCurrentUserConfirming()) {
+            return pendingAiActionService.confirmLatest(userId, sessionId);
+        }
         if (!isCurrentUserConfirming(actionId)) {
             return "Confirmation not accepted. Ask the user to confirm this exact action ID before executing: "
                     + actionId;
         }
         return pendingAiActionService.confirm(actionId, userId, sessionId);
+    }
+
+    @Tool("""
+            Use this tool when the user explicitly confirms the latest pending write action without providing
+            an action ID, for example "ok", "yes", "confirm", "xác nhận", "đồng ý", or "thực hiện".
+            It performs the most recent pending database write for the current user and chat session.
+            """)
+    public Object confirmLatestPendingAction() {
+        Long userId = ToolExecutionContext.requireUserId();
+        Long sessionId = ToolExecutionContext.requireSessionId();
+        if (!isCurrentUserConfirming()) {
+            return "Confirmation not accepted. Ask the user to clearly confirm before executing.";
+        }
+        return pendingAiActionService.confirmLatest(userId, sessionId);
     }
 
     @Tool("""
@@ -1580,9 +1597,19 @@ public class TaskPilotAiTools {
         }
         String input = normalize(ToolExecutionContext.userInput());
         return input.contains(normalize(actionId))
-                && (input.contains("confirm") || input.contains("confirmed")
-                        || input.contains("xac nhan") || input.contains("dong y")
-                        || input.contains("thuc hien") || input.contains("apply"));
+                && isConfirmationInput(input);
+    }
+
+    private boolean isCurrentUserConfirming() {
+        return isConfirmationInput(normalize(ToolExecutionContext.userInput()));
+    }
+
+    private boolean isConfirmationInput(String input) {
+        return input.contains("confirm") || input.contains("confirmed")
+                || input.contains("xac nhan") || input.contains("dong y")
+                || input.contains("thuc hien") || input.contains("apply")
+                || input.equals("ok") || input.equals("yes") || input.equals("y")
+                || input.equals("duoc") || input.equals("oke");
     }
 
     private Map<String, Object> parseTaskPatch(String patchJson) {

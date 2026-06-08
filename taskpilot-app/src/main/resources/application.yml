@@ -2,7 +2,7 @@ spring:
   application:
     name: taskpilot-app
   profiles:
-    active: ai-dev
+    active: ${SPRING_PROFILES_ACTIVE:dev}
   output:
     ansi:
       enabled: always
@@ -25,11 +25,11 @@ spring:
     hikari:
       maximum-pool-size: ${DB_POOL_MAX_SIZE:5}
       minimum-idle: ${DB_POOL_MIN_IDLE:1}
-      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:10000}
-      validation-timeout: ${DB_VALIDATION_TIMEOUT_MS:5000}
-      idle-timeout: ${DB_IDLE_TIMEOUT_MS:300000}
-      max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
-      keepalive-time: ${DB_KEEPALIVE_TIME_MS:300000}
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:20000}
+      validation-timeout: ${DB_VALIDATION_TIMEOUT_MS:3000}
+      idle-timeout: ${DB_IDLE_TIMEOUT_MS:60000}
+      max-lifetime: ${DB_MAX_LIFETIME_MS:120000}
+      keepalive-time: ${DB_KEEPALIVE_TIME_MS:30000}
       initialization-fail-timeout: ${DB_INITIALIZATION_FAIL_TIMEOUT_MS:0}
 
   jpa:

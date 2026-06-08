@@ -822,7 +822,9 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     }
 
     private String normalizeEnum(String value) {
-        return value == null ? "" : value.trim().replace('-', '_').replace(' ', '_').toUpperCase(Locale.ROOT);
+        return value == null ? "" : value.trim()
+                .replaceAll("[\\p{Pd}\\s]+", "_")
+                .toUpperCase(Locale.ROOT);
     }
 
     private Integer safeDifficulty(Integer difficultyLevel) {
