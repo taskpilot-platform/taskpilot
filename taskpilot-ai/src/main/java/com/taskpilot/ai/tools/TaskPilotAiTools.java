@@ -1621,8 +1621,20 @@ public class TaskPilotAiTools {
         if (!hasText(patchJson)) {
             return Map.of();
         }
+        
+        String cleanedJson = patchJson.trim();
+        if (cleanedJson.startsWith("```json")) {
+            cleanedJson = cleanedJson.substring(7);
+        } else if (cleanedJson.startsWith("```")) {
+            cleanedJson = cleanedJson.substring(3);
+        }
+        if (cleanedJson.endsWith("```")) {
+            cleanedJson = cleanedJson.substring(0, cleanedJson.length() - 3);
+        }
+        cleanedJson = cleanedJson.trim();
+        
         try {
-            Map<String, Object> patch = PATCH_OBJECT_MAPPER.readValue(patchJson,
+            Map<String, Object> patch = PATCH_OBJECT_MAPPER.readValue(cleanedJson,
                     new TypeReference<Map<String, Object>>() {});
             patch.keySet().forEach(fieldName -> validatePatchField(fieldName, allowedFields));
             return patch;
