@@ -170,8 +170,9 @@ public class TaskPilotAiTools {
             """)
     public Object patchSystemSkill(
             @P("The ID of the skill") Long skillId,
-            @P("Map containing only changed fields") Map<String, Object> patch,
+            @P("Map containing only changed fields") Object patchData,
             @P("Optional reason for the change") String reason) {
+        Map<String, Object> patch = normalizePatch(patchData);
         log.info("[AiTool] patchSystemSkill called for skill {} patch {}", skillId, patch);
         patch.keySet().forEach(fieldName -> validatePatchField(fieldName, Set.of("name", "description")));
         String name = stringPatchValue(patch, "name");
@@ -249,8 +250,9 @@ public class TaskPilotAiTools {
             """)
     public Object patchMySkill(
             @P("The ID of the skill") Long skillId,
-            @P("Map containing only changed fields") Map<String, Object> patch,
+            @P("Map containing only changed fields") Object patchData,
             @P("Optional reason for the change") String reason) {
+        Map<String, Object> patch = normalizePatch(patchData);
         log.info("[AiTool] patchMySkill called for skill {} patch {}", skillId, patch);
         patch.keySet().forEach(fieldName -> validatePatchField(fieldName, Set.of("level")));
         Integer level = integerPatchValue(patch, "level");
@@ -835,8 +837,9 @@ public class TaskPilotAiTools {
     public Object patchTaskComment(
             @P("The ID of the task") Long taskId,
             @P("The ID of the comment to patch") Long commentId,
-            @P("Map containing only changed fields") Map<String, Object> patch,
+            @P("Map containing only changed fields") Object patchData,
             @P("Optional reason for the change") String reason) {
+        Map<String, Object> patch = normalizePatch(patchData);
         log.info("[AiTool] patchTaskComment called for task {} comment {} with patch {}",
                 taskId, commentId, patch);
         patch.keySet().forEach(fieldName -> validatePatchField(fieldName, Set.of("content", "mentionedUserIds")));
@@ -963,8 +966,9 @@ public class TaskPilotAiTools {
             """)
     public Object patchTask(
             @P("The ID of the task") Long taskId,
-            @P("Map containing only changed fields") Map<String, Object> patch,
+            @P("Map containing only changed fields") Object patchData,
             @P("Optional reason for the change") String reason) {
+        Map<String, Object> patch = normalizePatch(patchData);
         log.info("[AiTool] patchTask called for task {} with patch {}", taskId, patch);
         
         Set<String> allowedFields = Set.of("title", "description", "status", "priority", "position", "labelIds",
@@ -1069,13 +1073,13 @@ public class TaskPilotAiTools {
                 "createProjectLabel",
                 "Create label \"" + name + "\" in project " + projectId,
                 args("projectId", projectId, "name", name, "color", color),
-                null,
+                args("projectId", projectId, "name", name, "color", color),
                 () -> projectInsightsPort.createProjectLabel(projectId, name, color, userId));
     }
 
     @Tool("""
-            Use this tool to delete a project label. Only project managers can perform this.
-            Provide project ID and label ID.
+            Use this tool to delete a label from a project.
+            Provide the project ID and label ID.
             This tool performs a real database modification and requires final user confirmation.
             """)
     public Object deleteProjectLabel(
@@ -1162,8 +1166,9 @@ public class TaskPilotAiTools {
             """)
     public Object patchProject(
             @P("The ID of the project to update") Long projectId,
-            @P("Map containing only changed fields") Map<String, Object> patch,
+            @P("Map containing only changed fields") Object patchData,
             @P("Optional reason for the change") String reason) {
+        Map<String, Object> patch = normalizePatch(patchData);
         log.info("[AiTool] patchProject called for project {} with patch {}", projectId, patch);
         
         Set<String> allowedFields = Set.of("name", "description", "status", "heuristicMode", "workflowMode", "startDate", "endDate");
@@ -1310,6 +1315,7 @@ public class TaskPilotAiTools {
     @Tool("""
             Use this tool to restore an archived project to active status. Only project managers can perform this.
             Provide the project ID.
+            CRITICAL INSTRUCTION: If the user explicitly asks to restore a project, you MUST use this tool and NOT `patchProject` with status ACTIVE!
             This tool performs a real database modification and requires final user confirmation.
             """)
     public Object restoreProject(@P("The ID of the project to restore") Long projectId) {
@@ -1487,8 +1493,9 @@ public class TaskPilotAiTools {
     public Object patchSprint(
             @P("The project ID") Long projectId,
             @P("The ID of the sprint") Long sprintId,
-            @P("Map containing only changed fields") Map<String, Object> patch,
+            @P("Map containing only changed fields") Object patchData,
             @P("Optional reason for the change") String reason) {
+        Map<String, Object> patch = normalizePatch(patchData);
         log.info("[AiTool] patchSprint called for sprint {} with patch {}", sprintId, patch);
         patch.keySet().forEach(fieldName -> validatePatchField(fieldName, Set.of("name", "startDate", "endDate", "goal")));
         Long userId = ToolExecutionContext.requireUserId();
@@ -1706,8 +1713,28 @@ public class TaskPilotAiTools {
     private Map<String, Object> args(Object... keyValues) {
         Map<String, Object> result = new LinkedHashMap<>();
         for (int i = 0; i + 1 < keyValues.length; i += 2) {
-            result.put(String.valueOf(keyValues[i]), keyValues[i + 1]);
+            if (keyValues[i + 1] != null) {
+                result.put(String.valueOf(keyValues[i]), keyValues[i + 1]);
+            }
         }
         return result;
     }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> normalizePatch(Object patchData) {
+        if (patchData == null) return java.util.Collections.emptyMap();
+        if (patchData instanceof Map) {
+            return (Map<String, Object>) patchData;
+        }
+        if (patchData instanceof String) {
+            try {
+                return PATCH_OBJECT_MAPPER.readValue((String) patchData, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+            } catch (Exception e) {
+                log.warn("Failed to parse patch string: {}", patchData, e);
+                throw new IllegalArgumentException("Invalid patch data format. Must be valid JSON object.", e);
+            }
+        }
+        throw new IllegalArgumentException("Invalid patch data type: " + patchData.getClass().getSimpleName());
+    }
+
 }

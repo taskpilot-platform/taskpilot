@@ -344,7 +344,7 @@ public class ProjectServiceImpl {
         validateUserIsProjectManager(projectId, userId);
 
         // Cascade delete will handle the rest
-        projectRepository.delete(project);
+        projectRepository.deleteProjectById(projectId);
     }
 
     /**

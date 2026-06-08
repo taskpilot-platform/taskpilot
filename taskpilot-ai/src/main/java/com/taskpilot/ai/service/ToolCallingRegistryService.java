@@ -46,7 +46,7 @@ public class ToolCallingRegistryService {
         toolMetadataRegistry = new HashMap<>();
         
         // GENERAL / PROJECT
-        register("getMyProjects", Set.of(ToolScope.PROJECT, ToolScope.GENERAL, ToolScope.TASK), List.of("project", "du an", "my", "da"), 50, true);
+        register("getMyProjects", Set.of(ToolScope.PROJECT, ToolScope.GENERAL, ToolScope.TASK), List.of("project", "du an", "my", "da", "task", "tao task", "tạo task"), 50, true);
         register("getProjectStatus", Set.of(ToolScope.PROJECT), List.of("status", "tinh trang", "tien do"), 40, false);
         register("getProjectLabels", Set.of(ToolScope.PROJECT), List.of("label", "nhan"), 10, false);
         register("createProject", Set.of(ToolScope.PROJECT), List.of("create project", "tao du an"), 30, false);
@@ -54,10 +54,10 @@ public class ToolCallingRegistryService {
         register("patchProject", Set.of(ToolScope.PROJECT), List.of("update project", "cap nhat du an", "sua du an", "deadline project", "doi han du an"), 45, false);
         register("archiveProject", Set.of(ToolScope.PROJECT), List.of("archive", "luu tru"), 10, false);
         register("restoreProject", Set.of(ToolScope.PROJECT), List.of("restore", "khoi phuc"), 10, false);
-        register("deleteProject", Set.of(ToolScope.PROJECT), List.of("delete project", "xoa du an"), 10, false);
+        register("deleteProject", Set.of(ToolScope.PROJECT), List.of("delete project", "xoa du an"), 45, false);
         register("joinProject", Set.of(ToolScope.PROJECT), List.of("join", "tham gia"), 10, false);
         register("leaveProject", Set.of(ToolScope.PROJECT), List.of("leave", "roi khoi"), 10, false);
-        register("createProjectLabel", Set.of(ToolScope.PROJECT), List.of("create label", "tao nhan"), 10, false);
+        register("createProjectLabel", Set.of(ToolScope.PROJECT), List.of("create label", "tao nhan"), 45, false);
         register("deleteProjectLabel", Set.of(ToolScope.PROJECT), List.of("delete label", "xoa nhan"), 10, false);
         register("getUpcomingProjects", Set.of(ToolScope.PROJECT), List.of("upcoming", "sap den", "deadline"), 20, false);
         register("findProjectsDue", Set.of(ToolScope.PROJECT), List.of("due", "den han"), 20, false);
@@ -71,7 +71,7 @@ public class ToolCallingRegistryService {
         register("updateTask", Set.of(ToolScope.TASK), List.of("update task", "cap nhat cong viec", "sua task"), 30, false);
         register("patchTask", Set.of(ToolScope.TASK, ToolScope.ASSIGNMENT), List.of("update task", "cap nhat cong viec", "sua task", "deadline", "due date", "han chot", "hạn chót", "doi han", "đổi hạn", "reassign", "phan cong lai", "phân công lại"), 65, false);
         register("updateTaskStatus", Set.of(ToolScope.TASK), List.of("status", "trang thai", "hoan thanh", "done", "todo"), 40, false);
-        register("deleteTask", Set.of(ToolScope.TASK), List.of("delete task", "xoa task"), 20, false);
+        register("deleteTask", Set.of(ToolScope.TASK), List.of("delete task", "xoa task"), 45, false);
         register("moveTaskKanban", Set.of(ToolScope.TASK, ToolScope.PROJECT), List.of("move", "kanban", "board", "chuyen"), 20, false);
 
         // SPRINT
@@ -81,7 +81,7 @@ public class ToolCallingRegistryService {
         register("createSprint", Set.of(ToolScope.SPRINT), List.of("create sprint", "tao sprint"), 30, false);
         register("updateSprint", Set.of(ToolScope.SPRINT), List.of("update sprint", "sua sprint"), 20, false);
         register("patchSprint", Set.of(ToolScope.SPRINT), List.of("update sprint", "sua sprint", "doi han sprint", "deadline sprint", "goal sprint"), 45, false);
-        register("deleteSprint", Set.of(ToolScope.SPRINT), List.of("delete sprint", "xoa sprint"), 20, false);
+        register("deleteSprint", Set.of(ToolScope.SPRINT), List.of("delete sprint", "xoa sprint"), 45, false);
         register("startSprint", Set.of(ToolScope.SPRINT), List.of("start", "bat dau"), 30, false);
         register("completeSprint", Set.of(ToolScope.SPRINT), List.of("complete", "hoan thanh"), 30, false);
         register("assignTaskToSprint", Set.of(ToolScope.SPRINT, ToolScope.TASK), List.of("assign sprint", "dua vao sprint"), 30, false);
@@ -107,7 +107,7 @@ public class ToolCallingRegistryService {
         register("updateMemberRole", Set.of(ToolScope.MEMBER, ToolScope.PROJECT), List.of("role", "vai tro", "quyen"), 20, false);
         register("removeMember", Set.of(ToolScope.MEMBER, ToolScope.PROJECT), List.of("remove member", "xoa thanh vien", "kick"), 20, false);
         register("searchSystemSkills", Set.of(ToolScope.MEMBER, ToolScope.AHP, ToolScope.ASSIGNMENT), List.of("skill", "ky nang"), 30, false);
-        register("createSystemSkill", Set.of(ToolScope.MEMBER), List.of("create system skill", "tao system skill", "tao ky nang he thong", "thêm skill hệ thống"), 35, false);
+        register("createSystemSkill", Set.of(ToolScope.MEMBER, ToolScope.GENERAL), List.of("create system skill", "tao system skill", "tao ky nang he thong", "thêm skill hệ thống"), 55, false);
         register("patchSystemSkill", Set.of(ToolScope.MEMBER), List.of("update system skill", "sua system skill", "cap nhat ky nang he thong", "sửa skill hệ thống"), 45, false);
         register("deleteSystemSkill", Set.of(ToolScope.MEMBER), List.of("delete system skill", "xoa system skill", "xoa ky nang he thong", "xóa skill hệ thống"), 30, false);
         register("getMySkills", Set.of(ToolScope.MEMBER, ToolScope.GENERAL), List.of("my skill", "skill cua toi", "ky nang cua toi", "kỹ năng của tôi"), 35, false);
@@ -127,7 +127,9 @@ public class ToolCallingRegistryService {
     }
 
     private void register(String name, Set<ToolScope> scopes, List<String> keywords, int priorityScore, boolean essential) {
-        toolMetadataRegistry.put(name, new ToolMeta(name, scopes, keywords, priorityScore, essential));
+        List<String> allKeywords = new java.util.ArrayList<>(keywords);
+        allKeywords.add(name.toLowerCase());
+        toolMetadataRegistry.put(name, new ToolMeta(name, scopes, allKeywords, priorityScore, essential));
     }
 
     public List<String> selectToolNames(String message, int maxTools, boolean expanded) {

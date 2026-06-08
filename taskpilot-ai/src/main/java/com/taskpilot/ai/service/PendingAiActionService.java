@@ -52,7 +52,12 @@ public class PendingAiActionService {
 
         log.info("[HumanInLoop] Confirming AI action: actionId={} tool={} user={} session={}",
                 actionId, action.toolName(), userId, sessionId);
-        return action.executor().get();
+        try {
+            return action.executor().get();
+        } catch (Exception e) {
+            log.error("[HumanInLoop] Action failed during confirmation: {}", e.getMessage());
+            return "ERROR: Action failed to execute due to business rule validation: " + e.getMessage() + ". Please explain this to the user.";
+        }
     }
 
     public Object confirmLatest(Long userId, Long sessionId) {
