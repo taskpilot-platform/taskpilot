@@ -78,6 +78,11 @@ public class AutoAssignmentService {
     @Transactional(readOnly = true)
     public AutoAssignmentResponse recommendCandidates(Long projectId, List<String> requiredSkills,
             int taskDifficulty, Long requestingUserId) {
+        return recommendCandidates(projectId, requiredSkills, taskDifficulty, requestingUserId, Set.of(), Set.of());
+    }
+
+    public AutoAssignmentResponse recommendCandidates(Long projectId, List<String> requiredSkills,
+            int taskDifficulty, Long requestingUserId, Set<Long> includeUserIds, Set<Long> excludeUserIds) {
         List<String> safeRequiredSkills = requiredSkills == null ? Collections.emptyList() : requiredSkills;
         log.info("[AutoAssign] Starting candidate scoring for project {} with skills: {}", projectId,
                 safeRequiredSkills);
@@ -85,12 +90,20 @@ public class AutoAssignmentService {
         String mode = resolveHeuristicMode(projectId);
         HeuristicStrategy strategy = heuristicStrategyFactory.resolve(mode);
         List<ProjectMemberDto> members = projectMemberPort.findProjectMembers(projectId);
+        Set<Long> safeIncludeUserIds = includeUserIds == null ? Set.of() : includeUserIds;
+        Set<Long> safeExcludeUserIds = excludeUserIds == null ? Set.of() : excludeUserIds;
+        if (!safeIncludeUserIds.isEmpty() || !safeExcludeUserIds.isEmpty()) {
+            members = members.stream()
+                    .filter(member -> safeIncludeUserIds.isEmpty() || safeIncludeUserIds.contains(member.userId()))
+                    .filter(member -> !safeExcludeUserIds.contains(member.userId()))
+                    .toList();
+        }
 
         if (members.isEmpty()) {
             return AutoAssignmentResponse.builder().projectId(projectId)
                     .requiredSkills(safeRequiredSkills)
                     .candidates(Collections.emptyList())
-                    .aiExplanation("No members found in this project.")
+                    .aiExplanation("No matching members found in this project.")
                     .build();
         }
 

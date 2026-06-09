@@ -534,7 +534,7 @@ public class TaskPilotAiTools {
         if (!hasText(actionId) && isCurrentUserConfirming()) {
             return pendingAiActionService.confirmLatest(userId, sessionId);
         }
-        if (!isCurrentUserConfirming(actionId)) {
+        if (!isCurrentUserConfirming(actionId) && !isCurrentUserConfirming()) {
             return "Confirmation not accepted. Ask the user to confirm this exact action ID before executing: "
                     + actionId;
         }
@@ -599,6 +599,73 @@ public class TaskPilotAiTools {
         List<String> requiredSkills = parseSkills(skills);
 
         return autoAssignmentService.recommendCandidates(toLong(projectId), requiredSkills, safeDifficulty, userId);
+    }
+
+    @Tool("""
+            Use this tool when the user asks for recommendations for a concrete task ID, especially reassignment,
+            "recommend someone else", or comparing a limited set of named members for that task.
+            The tool reads the task's project, required skills, current assignee, and difficulty automatically.
+            Set excludeCurrentAssignee=true for phrases like "người khác", "someone else", "đổi người làm",
+            or "reassign" when the user wants alternatives to the current assignee.
+            Use includeMemberNames/includeMemberIds when the user asks to compare specific people only.
+            Use excludeMemberNames/excludeMemberIds to remove specific people from the recommendation pool.
+            This tool only recommends/compares candidates; it does NOT write data.
+            """)
+    public AutoAssignmentResponse recommendTaskAssignmentCandidates(
+            @P("The ID of the task") String taskId,
+            @P("Optional comma-separated required skill names or IDs. Use this when the task is missing skills and the user provided them in a form.") String skills,
+            @P("Optional task difficulty 1-10. If omitted, task difficulty is used. Note: send as string like '5'") String difficulty,
+            @P("Optional comma-separated member names to compare/include, e.g. 'Julia Design, Evan Ops'") String includeMemberNames,
+            @P("Optional comma-separated member/user IDs to compare/include, e.g. '10,5'") String includeMemberIds,
+            @P("Optional comma-separated member names to exclude") String excludeMemberNames,
+            @P("Optional comma-separated member/user IDs to exclude") String excludeMemberIds,
+            @P("Set true to exclude the task's current assignee") String excludeCurrentAssignee) {
+        Long userId = ToolExecutionContext.requireUserId();
+        Long resolvedTaskId = toLong(taskId);
+        TaskDetailDto task = taskCommandPort.getTaskDetails(resolvedTaskId, userId);
+        Long projectId = task.projectId();
+        String resolvedSkills = hasText(skills) ? skills : task.requiredSkills();
+        if (!hasText(resolvedSkills)) {
+            return AutoAssignmentResponse.builder()
+                    .projectId(projectId)
+                    .requiredSkills(List.of())
+                    .candidates(List.of())
+                    .aiExplanation("Task " + taskId + " is missing required skills. Please provide skills before recommending candidates.")
+                    .build();
+        }
+
+        Set<Long> includeIds = parseIdSet(includeMemberIds);
+        includeIds.addAll(resolveProjectMemberIdsByNames(projectId, includeMemberNames, userId));
+
+        Set<Long> excludeIds = parseIdSet(excludeMemberIds);
+        excludeIds.addAll(resolveProjectMemberIdsByNames(projectId, excludeMemberNames, userId));
+        if (isTruthy(excludeCurrentAssignee) && task.assigneeId() != null) {
+            excludeIds.add(task.assigneeId());
+        }
+
+        int parsedDifficulty = task.difficultyLevel() == null ? 5 : task.difficultyLevel();
+        if (hasText(difficulty)) {
+            try { parsedDifficulty = Integer.parseInt(difficulty.trim()); } catch (Exception ignored) {}
+        }
+        int resolvedDifficulty = Math.max(1, Math.min(10, parsedDifficulty));
+        AutoAssignmentResponse response = autoAssignmentService.recommendCandidates(
+                projectId,
+                parseSkills(resolvedSkills),
+                resolvedDifficulty,
+                userId,
+                includeIds,
+                excludeIds);
+
+        String explanation = response.aiExplanation();
+        if ((explanation == null || explanation.isBlank()) && isTruthy(excludeCurrentAssignee) && task.assigneeName() != null) {
+            explanation = "Excluded current assignee " + task.assigneeName() + " for this recommendation.";
+        }
+        return AutoAssignmentResponse.builder()
+                .projectId(response.projectId())
+                .requiredSkills(response.requiredSkills())
+                .candidates(response.candidates())
+                .aiExplanation(explanation)
+                .build();
     }
 
     @Tool("""
@@ -674,6 +741,37 @@ public class TaskPilotAiTools {
                 .map(String::trim)
                 .filter(s -> !s.isBlank())
                 .collect(Collectors.toList());
+    }
+
+    private Set<Long> parseIdSet(String ids) {
+        if (!hasText(ids)) {
+            return new java.util.LinkedHashSet<>();
+        }
+        return Arrays.stream(ids.split(","))
+                .map(String::trim)
+                .filter(this::hasText)
+                .map(this::toLong)
+                .filter(id -> id != null)
+                .collect(Collectors.toCollection(java.util.LinkedHashSet::new));
+    }
+
+    private Set<Long> resolveProjectMemberIdsByNames(Long projectId, String memberNames, Long userId) {
+        if (!hasText(memberNames)) {
+            return new java.util.LinkedHashSet<>();
+        }
+        return Arrays.stream(memberNames.split(","))
+                .map(String::trim)
+                .filter(this::hasText)
+                .map(name -> resolveProjectMemberByName(projectId, name, userId).memberId())
+                .collect(Collectors.toCollection(java.util.LinkedHashSet::new));
+    }
+
+    private boolean isTruthy(String value) {
+        if (!hasText(value)) {
+            return false;
+        }
+        String normalized = normalizeName(value);
+        return Set.of("true", "yes", "y", "1", "co", "ok", "exclude", "loai").contains(normalized);
     }
 
     private ProjectMemberDto resolveProjectMemberByName(Long projectId, String memberName, Long userId) {
@@ -970,6 +1068,10 @@ public class TaskPilotAiTools {
             @P("Optional reason for the change") String reason) {
         Map<String, Object> patch = normalizePatch(patchData);
         log.info("[AiTool] patchTask called for task {} with patch {}", taskId, patch);
+        if (patch.isEmpty()) {
+            return "patchTask requires at least one changed field. Use argument patchData with fields such as "
+                    + "{\"dueDate\":\"2026-07-31\",\"assigneeId\":9}; do not create a confirmation for an empty patch.";
+        }
         
         Set<String> allowedFields = Set.of("title", "description", "status", "priority", "position", "labelIds",
                 "difficultyLevel", "requiredSkillIds", "assigneeId", "startDate", "dueDate");
@@ -1368,6 +1470,7 @@ public class TaskPilotAiTools {
             This tool creates real task data and must only be used when the user explicitly requests task creation.
             CRITICAL INSTRUCTION: If you do not know the user's `projectId`, DO NOT output a form! You MUST call `getMyProjects` tool right now to get the project list!
             CRITICAL: Only `projectId` and `title` are required. Do NOT make `sprintId`, `difficultyLevel`, `startDate`, or `dueDate` required.
+            DO NOT pass null for any optional parameters. Omit the parameter entirely if not provided.
             """)
     public Object createTask(
             @P("The project ID") Long projectId,
@@ -1620,11 +1723,13 @@ public class TaskPilotAiTools {
     }
 
     private boolean isConfirmationInput(String input) {
+        if (input.matches("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$") || input.startsWith("confirm_action")) {
+            return true;
+        }
         return input.contains("confirm") || input.contains("confirmed")
                 || input.contains("xac nhan") || input.contains("dong y")
                 || input.contains("thuc hien") || input.contains("apply")
-                || input.equals("ok") || input.equals("yes") || input.equals("y")
-                || input.equals("duoc") || input.equals("oke");
+                || input.contains("ok") || input.contains("yes") || input.contains("approve");
     }
 
 

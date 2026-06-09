@@ -65,8 +65,12 @@ public class AiChatController {
         Long userId = resolveUserId(authentication);
         Pageable pageable = PageRequest.of(page, size);
         Page<ChatSessionEntity> sessions = sessionService.getUserSessions(userId, pageable);
+        
+        java.util.List<Long> sessionIds = sessions.stream().map(ChatSessionEntity::getId).toList();
+        java.util.Map<Long, Long> counts = messageService.countMessagesBySessionIds(sessionIds);
+        
         Page<ChatSessionResponse> response = sessions
-                .map(s -> toSessionResponse(s, messageService.countMessages(s.getId())));
+                .map(s -> toSessionResponse(s, counts.getOrDefault(s.getId(), 0L)));
         return ApiResponse.success(response);
     }
 

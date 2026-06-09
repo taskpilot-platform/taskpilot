@@ -25,5 +25,18 @@ public class ChatMessageService {
     public long countMessages(Long sessionId) {
         return messageRepository.countBySessionId(sessionId);
     }
+
+    @Transactional(readOnly = true)
+    public java.util.Map<Long, Long> countMessagesBySessionIds(java.util.List<Long> sessionIds) {
+        if (sessionIds == null || sessionIds.isEmpty()) {
+            return java.util.Collections.emptyMap();
+        }
+        java.util.List<Object[]> results = messageRepository.countBySessionIdIn(sessionIds);
+        java.util.Map<Long, Long> counts = new java.util.HashMap<>();
+        for (Object[] result : results) {
+            counts.put((Long) result[0], (Long) result[1]);
+        }
+        return counts;
+    }
 }
 

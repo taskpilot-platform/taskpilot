@@ -67,9 +67,9 @@ public class ToolCallingRegistryService {
         register("getTasksByProject", Set.of(ToolScope.TASK, ToolScope.PROJECT), List.of("list task", "danh sach task", "cac cong viec", "cv", "nv"), 50, true);
         register("getUnassignedTasksByProject", Set.of(ToolScope.TASK, ToolScope.PROJECT, ToolScope.ASSIGNMENT), List.of("unassigned", "not assigned", "chua gan", "chua phan cong", "chua duoc phan cong", "trong", "ch"), 40, false);
         register("getSubtasks", Set.of(ToolScope.TASK), List.of("subtask", "task con"), 20, false);
-        register("createTask", Set.of(ToolScope.TASK), List.of("create task", "new task", "tao task", "tao cong viec", "them task", "them cong viec"), 60, false);
+        register("createTask", Set.of(ToolScope.TASK), List.of("create task", "new task", "tao task", "tạo task", "tao cong viec", "tạo công việc", "them task", "them cong viec"), 60, false);
         register("updateTask", Set.of(ToolScope.TASK), List.of("update task", "cap nhat cong viec", "sua task"), 30, false);
-        register("patchTask", Set.of(ToolScope.TASK, ToolScope.ASSIGNMENT), List.of("update task", "cap nhat cong viec", "sua task", "deadline", "due date", "han chot", "hạn chót", "doi han", "đổi hạn", "reassign", "phan cong lai", "phân công lại"), 65, false);
+        register("patchTask", Set.of(ToolScope.TASK, ToolScope.ASSIGNMENT), List.of("update task", "cap nhat cong viec", "sua task", "deadline", "due date", "han chot", "hạn chót", "doi han", "đổi hạn", "reassign", "phan cong lai", "phân công lại", "assign", "giao task", "gan cho", "giao cho", "gán task", "phân công"), 65, false);
         register("updateTaskStatus", Set.of(ToolScope.TASK), List.of("status", "trang thai", "hoan thanh", "done", "todo"), 40, false);
         register("deleteTask", Set.of(ToolScope.TASK), List.of("delete task", "xoa task"), 45, false);
         register("moveTaskKanban", Set.of(ToolScope.TASK, ToolScope.PROJECT), List.of("move", "kanban", "board", "chuyen"), 20, false);
@@ -115,10 +115,11 @@ public class ToolCallingRegistryService {
         register("patchMySkill", Set.of(ToolScope.MEMBER), List.of("update skill", "cap nhat skill", "sua skill", "doi level skill", "đổi level skill"), 45, false);
         register("deleteMySkill", Set.of(ToolScope.MEMBER), List.of("delete skill", "remove skill", "xoa skill", "xóa kỹ năng"), 30, false);
         register("updateTaskRequiredSkills", Set.of(ToolScope.TASK, ToolScope.AHP, ToolScope.ASSIGNMENT), List.of("required skill", "ky nang can thiet"), 20, false);
-        register("assignTaskToMember", Set.of(ToolScope.ASSIGNMENT, ToolScope.TASK), List.of("assign", "giao", "phan cong"), 40, false);
-        register("assignTaskToMemberByName", Set.of(ToolScope.ASSIGNMENT, ToolScope.TASK), List.of("assign by name", "giao cho"), 40, false);
+        register("assignTaskToMember", Set.of(ToolScope.ASSIGNMENT, ToolScope.TASK), List.of("assign", "giao", "phan cong"), 65, false);
+        register("assignTaskToMemberByName", Set.of(ToolScope.ASSIGNMENT, ToolScope.TASK), List.of("assign by name", "giao cho", "phân công cho", "phan cong cho"), 65, false);
         register("findBestCandidates", Set.of(ToolScope.AHP, ToolScope.ASSIGNMENT, ToolScope.MEMBER), List.of("best candidate", "ung vien", "phu hop nhat"), 30, false);
         register("recommendAssignmentCandidates", Set.of(ToolScope.AHP, ToolScope.ASSIGNMENT, ToolScope.MEMBER), List.of("recommend", "goi y"), 30, false);
+        register("recommendTaskAssignmentCandidates", Set.of(ToolScope.TASK, ToolScope.AHP, ToolScope.ASSIGNMENT, ToolScope.MEMBER), List.of("recommend task", "goi y task", "rcm", "nguoi khac", "người khác", "so sanh", "so sánh", "compare", "reassign"), 70, false);
         register("recommendAndAssignTask", Set.of(ToolScope.TASK, ToolScope.ASSIGNMENT, ToolScope.AHP, ToolScope.MEMBER), List.of("assign", "giao viec", "phan cong", "phu hop", "best member", "nguoi phu hop"), 50, false);
         
         // GENERAL / ACTIONS
@@ -207,10 +208,53 @@ public class ToolCallingRegistryService {
         }
 
         try {
+            String args = request.arguments();
+            if (args != null) {
+                String trimmed = args.trim();
+                boolean isJsonObj = trimmed.startsWith("{") && trimmed.endsWith("}");
+                if (!isJsonObj) {
+                    log.warn("[AI Tools] Tool {} arguments is not a valid JSON object: '{}'. Overriding with '{}'", request.name(), args, "{}");
+                    args = "{}";
+                } else if (trimmed.contains("null")) {
+                    try {
+                        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                        java.util.Map<String, Object> map = mapper.readValue(trimmed, new com.fasterxml.jackson.core.type.TypeReference<java.util.Map<String, Object>>() {});
+                        normalizeToolArguments(request.name(), map);
+                        map.values().removeIf(java.util.Objects::isNull);
+                        args = mapper.writeValueAsString(map);
+                    } catch (Exception e) {
+                        log.warn("[AI Tools] Failed to filter nulls from arguments for {}: {}", request.name(), e.getMessage());
+                    }
+                } else {
+                    try {
+                        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                        java.util.Map<String, Object> map = mapper.readValue(trimmed, new com.fasterxml.jackson.core.type.TypeReference<java.util.Map<String, Object>>() {});
+                        normalizeToolArguments(request.name(), map);
+                        args = mapper.writeValueAsString(map);
+                    } catch (Exception e) {
+                        log.warn("[AI Tools] Failed to normalize arguments for {}: {}", request.name(), e.getMessage());
+                    }
+                }
+
+                request = dev.langchain4j.agent.tool.ToolExecutionRequest.builder()
+                        .id(request.id())
+                        .name(request.name())
+                        .arguments(args)
+                        .build();
+            }
             return executor.execute(request, null);
         } catch (Exception ex) {
             log.error("[AI Tools] Tool execution failed for {}: {}", request.name(), ex.getMessage(), ex);
             return "Tool execution failed: " + ex.getMessage();
+        }
+    }
+
+    private void normalizeToolArguments(String toolName, Map<String, Object> args) {
+        if (args == null) {
+            return;
+        }
+        if ("patchTask".equals(toolName) && !args.containsKey("patchData") && args.get("patch") != null) {
+            args.put("patchData", args.get("patch"));
         }
     }
 }

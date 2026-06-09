@@ -22,4 +22,7 @@ public interface ChatMessageRepository extends JpaRepository<ChatMessageEntity, 
             String clientMessageId);
 
     long countBySessionId(Long sessionId);
+
+    @Query("SELECT m.sessionId, COUNT(m) FROM ChatMessageEntity m WHERE m.sessionId IN :sessionIds GROUP BY m.sessionId")
+    List<Object[]> countBySessionIdIn(@org.springframework.data.repository.query.Param("sessionIds") List<Long> sessionIds);
 }

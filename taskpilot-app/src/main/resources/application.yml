@@ -121,7 +121,7 @@ ai:
     timeout-seconds: ${AI_MODEL_TIMEOUT:60}
 
   routing:
-    token-threshold: ${AI_TOKEN_THRESHOLD:6000}
+    token-threshold: ${AI_TOKEN_THRESHOLD:15000}
     reasoning-keywords: ${AI_REASONING_KEYWORDS:analyze,reason,strategy,architecture,tradeoff,root cause,plan,optimize,design,deep dive,phan tich,chien luoc,so sanh,vi sao,giai thich,ly do,danh gia,lua chon,phan ra,boc tach,lo trinh,breakdown,roadmap,rui ro,tre han,be tac,nguyen nhan,giai phap,bottleneck,risk,qua tai,can bang,xung dot,kien truc,thiet ke he thong,database,toi uu,system design,refactor}
     tool-keywords: ${AI_TOOL_KEYWORDS:project,task,sprint,comment,member,role,status,project status,workload,assign,candidates,task list,project progress,my projects,project list,unassigned,not assigned,confirm,confirm_action,apply,xac nhan,dong y,thuc hien,du an,liet ke project,liet ke du an,chua phan cong,chua duoc phan cong,task chua gan,giao viec,tinh trang,tien do,danh sach task,cong viec,ung vien,giao task,gan task,chia viec,tao task}
     ahp-fallback-keywords: ${AI_AHP_FALLBACK_KEYWORDS:phan cong,giao viec,chia viec,chon ai,chon nguoi,tim nguoi,ai ranh,ung vien,assign,candidate,workload,chia task}
@@ -130,18 +130,18 @@ ai:
     cache-ttl-seconds: ${AI_HEURISTIC_CACHE_TTL:60}
 
   chat:
-    history-size: ${AI_HISTORY_SIZE:10}
-    memory-max-tokens: ${AI_MEMORY_MAX_TOKENS:4000}
-    context-tail-messages: ${AI_CONTEXT_TAIL_MESSAGES:6}
-    compact-summary-max-chars: ${AI_COMPACT_SUMMARY_MAX_CHARS:3000}
-    compact-message-max-chars: ${AI_COMPACT_MESSAGE_MAX_CHARS:600}
-    max-tool-result-memory-chars: ${AI_MAX_TOOL_RESULT_MEMORY_CHARS:12000}
+    history-size: ${AI_HISTORY_SIZE:30}
+    memory-max-tokens: ${AI_MEMORY_MAX_TOKENS:15000}
+    context-tail-messages: ${AI_CONTEXT_TAIL_MESSAGES:10}
+    compact-summary-max-chars: ${AI_COMPACT_SUMMARY_MAX_CHARS:5000}
+    compact-message-max-chars: ${AI_COMPACT_MESSAGE_MAX_CHARS:2000}
+    max-tool-result-memory-chars: ${AI_MAX_TOOL_RESULT_MEMORY_CHARS:30000}
     stream-first-response-timeout-seconds: ${AI_STREAM_FIRST_RESPONSE_TIMEOUT_SECONDS:30}
     text-only-first-response-timeout-seconds: ${AI_TEXT_ONLY_FIRST_RESPONSE_TIMEOUT_SECONDS:10}
-    max-user-input-chars: ${AI_MAX_USER_INPUT_CHARS:1500}
-    max-user-input-tokens: ${AI_MAX_USER_INPUT_TOKENS:2500}
-    max-output-tokens: ${AI_MAX_OUTPUT_TOKENS:2000}
-    max-assistant-memory-chars: ${AI_MAX_ASSISTANT_MEMORY_CHARS:1500}
+    max-user-input-chars: ${AI_MAX_USER_INPUT_CHARS:10000}
+    max-user-input-tokens: ${AI_MAX_USER_INPUT_TOKENS:10000}
+    max-output-tokens: ${AI_MAX_OUTPUT_TOKENS:8000}
+    max-assistant-memory-chars: ${AI_MAX_ASSISTANT_MEMORY_CHARS:6000}
 
 onesignal:
   app-id: ${ONESIGNAL_APP_ID:}

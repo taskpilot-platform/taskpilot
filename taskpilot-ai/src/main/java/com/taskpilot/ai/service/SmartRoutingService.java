@@ -292,8 +292,9 @@ public class SmartRoutingService {
         boolean hasConcreteTask = normalized.matches("(?s).*\\btask\\s*\\d+\\b.*")
                 || normalized.matches("(?s).*\\btaskid\\s*[:#]?\\s*\\d+\\b.*")
                 || normalized.matches("(?s).*intent:\\s*assign_task_\\d+.*");
+        boolean hasSpecificTarget = normalized.matches("(?s).*\\b(cho|to)\\s+[a-z0-9_]+\\b.*");
 
-        return hasAssignmentIntent && (hasExecutionIntent || hasConcreteTask);
+        return hasAssignmentIntent && (hasExecutionIntent || hasConcreteTask || hasSpecificTarget);
     }
 
     private boolean isPendingActionConfirmation(String normalized) {

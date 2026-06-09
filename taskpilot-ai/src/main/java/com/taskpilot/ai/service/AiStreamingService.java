@@ -114,10 +114,10 @@ public class AiStreamingService {
     @Value("${ai.chat.max-output-tokens:3500}")
     private int maxOutputTokens;
 
-    @Value("${ai.chat.stream-first-response-timeout-seconds:25}")
+    @Value("${ai.chat.stream-first-response-timeout-seconds:60}")
     private int streamFirstResponseTimeoutSeconds;
 
-    @Value("${ai.chat.text-only-first-response-timeout-seconds:10}")
+    @Value("${ai.chat.text-only-first-response-timeout-seconds:25}")
     private int textOnlyFirstResponseTimeoutSeconds;
 
     @Value("${ai.chat.memory-max-tokens:7000}")
@@ -150,16 +150,35 @@ public class AiStreamingService {
             - The user frequently uses Vietnamese shorthand, abbreviations, and chat slang (e.g., "ch" = chưa, "tb" = thông báo, "da" = dự án, "nv" = nhiệm vụ/nhân viên, "đc" = được, "sl" = số lượng). You MUST actively infer the full meaning of any unrecognized acronyms or abbreviations based on the surrounding context. Never assume an unrecognized abbreviation is a typo; always try to interpret it as a Vietnamese abbreviation first. For task assignment questions, interpret "ch" as unassigned/not assigned.
             - If the user names a specific assignee (for example "cho Julia Design", "gán cho Ian",
               "assign task 68 to Julia"), the user's explicit assignee overrides the recommendation algorithm.
-              In that case call assignTaskToMemberByName or assignTaskToMember after resolving the member; do NOT
-              call recommendAndAssignTask, because recommendAndAssignTask always picks the top ranked candidate.
+              If only the assignee changes, call assignTaskToMemberByName or assignTaskToMember after resolving
+              the member. If the same user request or active context also includes other task field changes such
+              as dueDate, call patchTask with patchData containing every changed field, e.g.
+              {"dueDate":"2026-07-31","assigneeId":9}. Do NOT call recommendAndAssignTask, because
+              recommendAndAssignTask always picks the top ranked candidate.
             - If the user asks which tasks are not assigned yet in a project, call getUnassignedTasksByProject.
               Do not answer from the full task list unless the unassigned-only tool is unavailable.
             - If the user asks for overdue tasks, use getTasksByProject and filter the results yourself comparing dueDate to Today's Date. Do NOT invent or assume a getOverdueTasks tool exists.
             - If the user asks for unassigned tasks in the project that contains a task ID (for example
               "du an co chua task 67"), first call getTaskDetails(taskId) to resolve projectId, then call
               getUnassignedTasksByProject(projectId).
-            - If the user asks to recommend a suitable assignee and also apply the assignment, call
-              recommendAndAssignTask for each concrete task. This is a real data write action.
+            - If the user asks to recommend suitable assignees, "rcm", "gợi ý", or asks to reassign to
+              "người khác" without naming the final assignee, call recommendTaskAssignmentCandidates for each
+              concrete task. This is recommendation-only and MUST NOT create a pending write confirmation.
+              After showing recommendations, wait for the user to pick a candidate.
+            - If the user asks to recommend a suitable assignee and also apply the assignment in the same request
+              (for example "gợi ý rồi gán luôn"), call recommendAndAssignTask for each concrete task. This is a
+              real data write action.
+            - If the user asks for recommendations for a concrete task ID, prefer recommendTaskAssignmentCandidates
+              over recommendAssignmentCandidates because it reads the task's project, skills, difficulty, and
+              current assignee automatically. If the user says "người khác", "recommend someone else", "đổi người
+              làm", or "reassign", call recommendTaskAssignmentCandidates with excludeCurrentAssignee=true.
+              If the user asks to compare specific people for a task, pass those names or IDs in includeMemberNames
+              or includeMemberIds so the recommendation compares only those people.
+            - If the user asks to change/reassign the assignee but does not name a new member, do not ask for a
+              member ID first. Treat this as a request for alternatives: recommend candidates with
+              recommendTaskAssignmentCandidates and exclude the current assignee. Phrases like "đổi người làm",
+              "đổi người phụ trách", or "reassign" are NOT the same as "assign to me" unless the user explicitly
+              says "cho tôi", "gán cho tôi", "to me", or uses the current user's name.
             - For entity updates where only some fields change, prefer the matching patch tool: patchTask,
               patchProject, patchSprint, patchTaskComment, patchSystemSkill, or patchMySkill. Pass a patchJson object containing
               only the fields to change. Example: {"dueDate":"2026-06-30","assigneeId":2}.
@@ -168,9 +187,11 @@ public class AiStreamingService {
               change.
             - If task skills or difficulty are missing, ask for only the missing fields. The frontend may provide
               those fields as a structured "Task assignment requirements form"; use that structured data directly.
-              When the user provides missing task skills for assignment, call recommendAndAssignTask with those
-              skills and difficulty so the pending confirmation saves the task skills and assigns the task together.
-              If the user only wants to update task skills, call updateTaskRequiredSkills.
+              When the user provides missing task skills for recommendation-only, call recommendTaskAssignmentCandidates
+              with the provided skills/difficulty and do not create a write confirmation. When the user explicitly
+              asked to assign immediately, call recommendAndAssignTask with those skills and difficulty so the
+              pending confirmation saves the task skills and assigns the task together. If the user only wants to
+              update task skills, call updateTaskRequiredSkills.
             - Multi-step user requests are allowed. You may call tools repeatedly across rounds when needed:
               first read data, then recommend candidates, then write assignments if the user clearly asked to apply.
             - Any create/update/delete/assignment tool may return confirmationRequired=true instead of writing data.
@@ -180,13 +201,14 @@ public class AiStreamingService {
               JSON block so the frontend can render an interactive form.
               CRITICAL FORM RULES:
               1. DO NOT tell the user to run tools. If a user asks to "tạo task" (create task), you MUST immediately call `getMyProjects` to fetch their projects BEFORE responding with a form. Do NOT generate a `taskpilot-form` in the same turn if you haven't called the tool yet!
-              2. For ID fields (projectId, sprintId, assigneeId), you MUST use `type: "select"` and provide an `options` array (e.g., `[{"value": 1, "label": "Project Alpha (ID: 1)"}]`). If you don't have the options yet, CALL THE TOOL first.
-              3. Only ask for fields that are truly missing.
-              4. For `createTask`, ONLY `projectId` and `title` are required. `sprintId`, `difficultyLevel`, `startDate`, `dueDate`, etc. MUST have `required: false`.
+              2. For ID fields (projectId, sprintId, assigneeId), use `type: "number"`. DO NOT provide an `options` array; the frontend will automatically fetch and convert them to dropdowns. However, you MUST still call `getMyProjects` first to know if the user even has projects.
+              3. For lists of IDs or multiple selections (e.g., requiredSkillIds, labelIds), you MUST use `type: "multiselect"` instead of "select" and provide an `options` array.
+              4. Only ask for fields that are truly missing.
+              5. For `createTask`, ONLY `projectId` and `title` are required. `sprintId`, `difficultyLevel`, `startDate`, `dueDate`, etc. MUST have `required: false`.
               
               Example of a good form:
               ```taskpilot-form
-              {"title":"Tao task moi","description":"Vui long chon project va nhap tieu de","submitLabel":"Tao task","intent":"continue_previous_request","fields":[{"name":"projectId","label":"Project","type":"select","required":true,"options":[{"value":1,"label":"Web App (ID: 1)"}]},{"name":"title","label":"Tieu de","type":"text","required":true},{"name":"sprintId","label":"Sprint","type":"select","required":false,"options":[{"value":2,"label":"Sprint 1 (ID: 2)"}]}]}
+              {"title":"Tao task moi","description":"Vui long chon project va nhap tieu de","submitLabel":"Tao task","intent":"continue_previous_request","fields":[{"name":"projectId","label":"Project","type":"number","required":true},{"name":"title","label":"Tieu de","type":"text","required":true},{"name":"sprintId","label":"Sprint","type":"number","required":false}]}
               ```
 
             [REASONING OBJECTIVES & TRADE-OFFS]
@@ -202,7 +224,7 @@ public class AiStreamingService {
 
             [STRICT OUTPUT RULES]
             1. Respond in Vietnamese by default. If the user writes in another language, mirror that language.
-            2. Do not output hidden reasoning tags such as <think>, </think>, <Dthink>, or </Dthink>.
+            2. ALWAYS write your step-by-step thinking process in Vietnamese enclosed in <think>...</think> tags at the very beginning of your response. Explain what tools you need to call and why, or how you formulate your final answer. Do NOT omit these tags.
             3. Provide the final recommendation clearly and professionally. Include key data, metrics, or a
                 markdown table when useful so the user sees the concrete evidence for your decision.
             4. When a write tool returns confirmationRequired=true, explain the pending change in Vietnamese and
@@ -446,7 +468,7 @@ public class AiStreamingService {
             if (toolRound == 0) {
                 // Round 0: Force AHP tool call — only inject the one AHP tool spec
                 List<dev.langchain4j.agent.tool.ToolSpecification> ahpOnly = toolCallingRegistryService
-                        .toolSpecificationsByName("recommendAssignmentCandidates");
+                        .toolSpecificationsByNames(List.of("recommendAssignmentCandidates", "recommendTaskAssignmentCandidates"));
                 if (!ahpOnly.isEmpty()) {
                     toolSpecs = ahpOnly;
                     toolChoice = ToolChoice.AUTO;
@@ -467,7 +489,7 @@ public class AiStreamingService {
             }
         } else if (requiresTools) {
             boolean expanded = (retryCount > 0);
-            int maxTools = expanded ? 20 : 15;
+            int maxTools = expanded ? 40 : 30;
             List<String> dynamicToolNames = toolCallingRegistryService.selectToolNames(userInput, maxTools, expanded);
             toolSpecs = toolCallingRegistryService.toolSpecificationsByNames(dynamicToolNames);
             log.info("[streamRound] Dynamic tools round={} expanded={} -> injecting {} tool specs", toolRound, expanded, toolSpecs.size());
@@ -490,7 +512,7 @@ public class AiStreamingService {
         int availableForOutput = modelBudget - historyTokens - toolSpecTokens - safetyMargin;
         int resolvedMaxOutput;
         if (toolSpecs != null && !toolSpecs.isEmpty()) {
-            resolvedMaxOutput = Math.min(1000, Math.max(300, availableForOutput));
+            resolvedMaxOutput = Math.min(2500, Math.max(500, availableForOutput));
         } else {
             resolvedMaxOutput = Math.min(maxOutputTokens, Math.max(500, availableForOutput));
         }
@@ -1639,16 +1661,11 @@ public class AiStreamingService {
         }
 
         List<String> blocks = new ArrayList<>();
+        Map<String, Map<?, ?>> latestConfirmations = new LinkedHashMap<>();
         for (Map<String, Object> summary : toolCallSummaries) {
             Object confirmation = summary.get("confirmation");
             if (confirmation instanceof Map<?, ?> confirmationMap) {
-                try {
-                    blocks.add("```taskpilot-confirm\n"
-                            + objectMapper.writeValueAsString(confirmationMap)
-                            + "\n```");
-                } catch (Exception ex) {
-                    log.warn("[HumanInLoop] Failed to serialize pending action metadata: {}", ex.getMessage());
-                }
+                latestConfirmations.put(confirmationBlockKey(confirmationMap), confirmationMap);
             }
 
             Object form = summary.get("form");
@@ -1663,12 +1680,51 @@ public class AiStreamingService {
             }
         }
 
+        for (Map<?, ?> confirmationMap : latestConfirmations.values()) {
+            try {
+                blocks.add("```taskpilot-confirm\n"
+                        + objectMapper.writeValueAsString(confirmationMap)
+                        + "\n```");
+            } catch (Exception ex) {
+                log.warn("[HumanInLoop] Failed to serialize pending action metadata: {}", ex.getMessage());
+            }
+        }
+
         if (blocks.isEmpty()) {
             return responseText;
         }
 
         String visibleText = responseText == null ? "" : responseText.trim();
         return (visibleText + "\n\n" + String.join("\n\n", blocks)).trim();
+    }
+
+    private String confirmationBlockKey(Map<?, ?> confirmation) {
+        Object toolName = confirmation.get("toolName");
+        Object actionId = confirmation.get("actionId");
+        Object taskId = nestedValue(confirmation, "arguments", "taskId");
+        if (taskId == null) {
+            taskId = nestedValue(confirmation, "preview", "taskId");
+        }
+        Object projectId = nestedValue(confirmation, "arguments", "projectId");
+        if (projectId == null) {
+            projectId = nestedValue(confirmation, "preview", "projectId");
+        }
+        StringBuilder key = new StringBuilder(String.valueOf(toolName == null ? "pendingAction" : toolName));
+        if (taskId != null) {
+            key.append("|task:").append(taskId);
+        }
+        if (projectId != null) {
+            key.append("|project:").append(projectId);
+        }
+        return key.length() > 0 ? key.toString() : String.valueOf(actionId);
+    }
+
+    private Object nestedValue(Map<?, ?> source, String parentKey, String childKey) {
+        Object parent = source.get(parentKey);
+        if (parent instanceof Map<?, ?> nested) {
+            return nested.get(childKey);
+        }
+        return null;
     }
 
     private String latestUserMessageText(List<ChatMessage> history, String fallbackInput) {

@@ -63,15 +63,17 @@ public class ChatStreamStatusService {
     public Optional<ChatStreamStatusResponse> getStatus(Long sessionId,
             Long userId,
             String clientMessageId) {
-        ChatSessionEntity session = chatSessionRepository.findByIdAndUserId(sessionId, userId)
-                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(),
-                        "Chat session not found"));
 
         Optional<AiChatRequestEntity> status = (clientMessageId == null || clientMessageId.isBlank())
                 ? aiChatRequestRepository
-                        .findTopBySessionIdAndUserIdOrderByUpdatedAtDesc(session.getId(), userId)
-                : aiChatRequestRepository.findBySessionIdAndClientMessageId(session.getId(),
+                        .findTopBySessionIdAndUserIdOrderByUpdatedAtDesc(sessionId, userId)
+                : aiChatRequestRepository.findBySessionIdAndClientMessageId(sessionId,
                         clientMessageId);
+
+        // Verify the status belongs to the user
+        if (status.isPresent() && !status.get().getUserId().equals(userId)) {
+            throw new BusinessException(HttpStatus.FORBIDDEN.value(), "Access denied");
+        }
 
         return status.map(this::toResponse);
     }
