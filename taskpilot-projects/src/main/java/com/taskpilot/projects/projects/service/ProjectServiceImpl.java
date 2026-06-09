@@ -247,8 +247,8 @@ public class ProjectServiceImpl {
 
         projectMemberRepository.delete(member);
 
-        String title = "Member left your project";
-        String message = leavingMemberName + " has left project \"" + project.getName() + "\".";
+        String title = "Thành viên rời dự án";
+        String message = leavingMemberName + " đã rời khỏi dự án \"" + project.getName() + "\".";
         String linkAction = "/projects";
 
         for (ProjectMemberEntity manager : managers) {

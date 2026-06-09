@@ -18,6 +18,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -99,6 +100,16 @@ public class AdminUserService {
         UserEntity user = userRepository.findById(id).orElseThrow(
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
 
+        String currentEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        if (user.getEmail().equalsIgnoreCase(currentEmail)) {
+            if (request.status() == UserEntity.UserStatus.DEACTIVATED) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Cannot deactivate your own account");
+            }
+            if (request.role() == UserEntity.UserRole.USER) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Cannot demote your own admin account");
+            }
+        }
+
         if (request.role() != null) {
             user.setRole(request.role());
         }
@@ -117,6 +128,11 @@ public class AdminUserService {
     public void deactivateUser(Long id) {
         UserEntity user = userRepository.findById(id).orElseThrow(
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
+
+        String currentEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        if (user.getEmail().equalsIgnoreCase(currentEmail)) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Cannot deactivate your own account");
+        }
 
         user.setStatus(UserEntity.UserStatus.DEACTIVATED);
         userRepository.save(user);
