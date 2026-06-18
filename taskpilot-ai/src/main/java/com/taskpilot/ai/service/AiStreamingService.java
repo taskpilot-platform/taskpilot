@@ -43,6 +43,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.concurrent.CompletableFuture;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -1144,39 +1145,9 @@ public class AiStreamingService {
                         ? completeResponse.tokenUsage().totalTokenCount()
                         : responseText.length() / 4;
 
-                ChatMessageEntity assistantMsg = messageRepository.save(ChatMessageEntity.builder()
-                        .sessionId(sessionId)
-                        .sender(SenderType.ASSISTANT)
-                        .content(responseText)
-                        .build());
-
-                session.setUpdatedAt(Instant.now());
-                if (session.getTitle() == null || session.getTitle().isBlank()) {
-                    // Bug fix #8: strip <think> block before using as title
-                    String titleSource = stripThinkBlocks(responseText);
-                    String autoTitle = titleSource.length() > 60
-                            ? titleSource.substring(0, 60) + "..."
-                            : titleSource;
-                    session.setTitle(autoTitle);
-                }
-                sessionRepository.save(session);
-
-                Object toolOutput = toolCallSummaries.isEmpty() ? null : toolCallSummaries;
-                String actionTaken = toolNames.isEmpty() ? null : String.join(",", toolNames);
-
-                aiLogService.saveLog(userId, null, sessionId, assistantMsg.getId(), userInput,
-                        responseText, extractedReasoning, actionTaken, toolOutput, modelName,
-                        estimatedTokens, (int) durationMs);
-
-                String cleanResponse = sessionChatMemoryService.sanitizeAssistantMessage(responseText);
-                sessionChatMemoryService.appendAssistantMessage(sessionId, cleanResponse, systemPrompt);
-
                 if (generatingMarked.compareAndSet(false, true)) {
                     safeSend(emitter, "token", Map.of("token", "</think>\n\n"), MediaType.APPLICATION_JSON);
                 }
-
-                chatStreamStatusService.updatePhase(sessionId, clientMessageId,
-                        Phase.FINALIZED, modelName, assistantMsg.getId(), null);
 
                 if (!clientDisconnected.get()) {
                     safeSend(emitter, "phase", Phase.FINALIZED.name(), null);
@@ -1184,7 +1155,47 @@ public class AiStreamingService {
                     safeComplete(emitter, emitterCompleted);
                 }
 
-                log.info("[SSE] Streaming complete for session {} using model {} in {}ms",
+                final String finalResponseText = responseText;
+                final int finalEstimatedTokens = estimatedTokens;
+                final String finalExtractedReasoning = extractedReasoning;
+                executor.submit(() -> {
+                    try {
+                        ChatMessageEntity assistantMsg = messageRepository.save(ChatMessageEntity.builder()
+                                .sessionId(sessionId)
+                                .sender(SenderType.ASSISTANT)
+                                .content(finalResponseText)
+                                .build());
+
+                        session.setUpdatedAt(Instant.now());
+                        if (session.getTitle() == null || session.getTitle().isBlank()) {
+                            String titleSource = stripThinkBlocks(finalResponseText);
+                            String autoTitle = titleSource.length() > 60
+                                    ? titleSource.substring(0, 60) + "..."
+                                    : titleSource;
+                            session.setTitle(autoTitle);
+                        }
+                        sessionRepository.save(session);
+
+                        Object toolOutput = toolCallSummaries.isEmpty() ? null : toolCallSummaries;
+                        String actionTaken = toolNames.isEmpty() ? null : String.join(",", toolNames);
+
+                        aiLogService.saveLog(userId, null, sessionId, assistantMsg.getId(), userInput,
+                                finalResponseText, finalExtractedReasoning, actionTaken, toolOutput, modelName,
+                                finalEstimatedTokens, (int) durationMs);
+
+                        String cleanResponse = sessionChatMemoryService.sanitizeAssistantMessage(finalResponseText);
+                        sessionChatMemoryService.appendAssistantMessage(sessionId, cleanResponse, systemPrompt);
+
+                        chatStreamStatusService.updatePhase(sessionId, clientMessageId,
+                                Phase.FINALIZED, modelName, assistantMsg.getId(), null);
+
+                        log.info("[SSE] Async DB save and finalization complete for session {} (direct stream) in {}ms", sessionId, durationMs);
+                    } catch (Exception e) {
+                        log.error("[SSE] Exception in async finalize (direct stream) for session {}: {}", sessionId, e.getMessage(), e);
+                    }
+                });
+
+                log.info("[SSE] Streaming immediate release for session {} using model {} in {}ms",
                         sessionId, modelName, durationMs);
             }
 
@@ -1571,46 +1582,57 @@ public class AiStreamingService {
                 ? completeResponse.tokenUsage().totalTokenCount()
                 : responseText.length() / 4;
 
-        ChatMessageEntity assistantMsg = messageRepository.save(ChatMessageEntity.builder()
-                .sessionId(sessionId)
-                .sender(SenderType.ASSISTANT)
-                .content(responseText)
-                .build());
-
-        session.setUpdatedAt(Instant.now());
-        if (session.getTitle() == null || session.getTitle().isBlank()) {
-            String titleSource = stripThinkBlocks(responseText);
-            String autoTitle = titleSource.length() > 60
-                    ? titleSource.substring(0, 60) + "..."
-                    : titleSource;
-            session.setTitle(autoTitle);
-        }
-        sessionRepository.save(session);
-
-        Object toolOutput = toolCallSummaries.isEmpty() ? null : toolCallSummaries;
-        String actionTaken = toolNames.isEmpty() ? null : String.join(",", toolNames);
-
-        aiLogService.saveLog(userId, null, sessionId, assistantMsg.getId(), userInput,
-                responseText, extractedReasoning, actionTaken, toolOutput, modelName,
-                estimatedTokens, (int) durationMs);
-
-        String cleanResponse = sessionChatMemoryService.sanitizeAssistantMessage(responseText);
-        sessionChatMemoryService.appendAssistantMessage(sessionId, cleanResponse, systemPrompt);
-
         if (generatingMarked.compareAndSet(false, true)) {
             safeSend(emitter, "token", Map.of("token", "</think>\n\n"), MediaType.APPLICATION_JSON);
         }
-
-        chatStreamStatusService.updatePhase(sessionId, clientMessageId,
-                Phase.FINALIZED, modelName, assistantMsg.getId(), null);
 
         if (!clientDisconnected.get()) {
             safeSend(emitter, "phase", Phase.FINALIZED.name(), null);
             safeSend(emitter, "done", responseText, null);
         }
 
-        log.info("[SSE] forceTextOnly finalized session {} via {} in {}ms",
-                sessionId, modelName, durationMs);
+        final String finalResponseText = responseText;
+        final int finalEstimatedTokens = estimatedTokens;
+        final String finalExtractedReasoning = extractedReasoning;
+        executor.submit(() -> {
+            try {
+                ChatMessageEntity assistantMsg = messageRepository.save(ChatMessageEntity.builder()
+                        .sessionId(sessionId)
+                        .sender(SenderType.ASSISTANT)
+                        .content(finalResponseText)
+                        .build());
+
+                session.setUpdatedAt(Instant.now());
+                if (session.getTitle() == null || session.getTitle().isBlank()) {
+                    String titleSource = stripThinkBlocks(finalResponseText);
+                    String autoTitle = titleSource.length() > 60
+                            ? titleSource.substring(0, 60) + "..."
+                            : titleSource;
+                    session.setTitle(autoTitle);
+                }
+                sessionRepository.save(session);
+
+                Object toolOutput = toolCallSummaries.isEmpty() ? null : toolCallSummaries;
+                String actionTaken = toolNames.isEmpty() ? null : String.join(",", toolNames);
+
+                aiLogService.saveLog(userId, null, sessionId, assistantMsg.getId(), userInput,
+                        finalResponseText, finalExtractedReasoning, actionTaken, toolOutput, modelName,
+                        finalEstimatedTokens, (int) durationMs);
+
+                String cleanResponse = sessionChatMemoryService.sanitizeAssistantMessage(finalResponseText);
+                sessionChatMemoryService.appendAssistantMessage(sessionId, cleanResponse, systemPrompt);
+
+                chatStreamStatusService.updatePhase(sessionId, clientMessageId,
+                        Phase.FINALIZED, modelName, assistantMsg.getId(), null);
+
+                log.info("[SSE] Async DB save and finalization complete for session {} in {}ms", sessionId, durationMs);
+            } catch (Exception e) {
+                log.error("[SSE] Exception in async finalize for session {}: {}", sessionId, e.getMessage(), e);
+            }
+        });
+
+        log.info("[SSE] forceTextOnly immediately released client stream for session {} via {}",
+                sessionId, modelName);
     }
 
     private String buildTextOnlyTimeoutResponse(List<Map<String, Object>> toolCallSummaries) {
@@ -1651,18 +1673,42 @@ public class AiStreamingService {
             Long userId,
             Long sessionId,
             String userInput) {
-        List<ToolExecutionResultMessage> results = new ArrayList<>();
 
+        // 1. Send all start messages sequentially
         for (ToolExecutionRequest request : requests) {
             String startMsg = "Truy cập hệ thống: " + getFriendlyToolName(request.name()) + "...\n\n";
             safeSend(emitter, "token", Map.of("token", startMsg), MediaType.APPLICATION_JSON);
+        }
 
-            String output;
-            ToolExecutionContext.set(new ToolExecutionContext.Context(userId, sessionId, userInput));
-            try {
-                output = toolCallingRegistryService.execute(request);
-            } finally {
-                ToolExecutionContext.clear();
+        // 2. Launch execution tasks in parallel using CompletableFuture and our virtual thread executor
+        record ToolExecutionResult(ToolExecutionRequest request, String output, Throwable error) {}
+
+        List<CompletableFuture<ToolExecutionResult>> futures = requests.stream()
+                .map(request -> CompletableFuture.supplyAsync(() -> {
+                    ToolExecutionContext.set(new ToolExecutionContext.Context(userId, sessionId, userInput));
+                    try {
+                        String output = toolCallingRegistryService.execute(request);
+                        return new ToolExecutionResult(request, output, null);
+                    } catch (Throwable t) {
+                        log.error("[executeTools] Error executing tool {}", request.name(), t);
+                        return new ToolExecutionResult(request, null, t);
+                    } finally {
+                        ToolExecutionContext.clear();
+                    }
+                }, executor))
+                .toList();
+
+        // Wait for all tool executions to finish
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
+        // 3. Process results sequentially in the original request order to ensure stable SSE token sequence
+        List<ToolExecutionResultMessage> results = new ArrayList<>();
+        for (var future : futures) {
+            ToolExecutionResult execution = future.join();
+            ToolExecutionRequest request = execution.request();
+            String output = execution.output();
+            if (execution.error() != null) {
+                output = "Lỗi khi truy cập hệ thống: " + execution.error().getMessage();
             }
 
             String endMsg = "Kết quả: " + getFriendlyToolResultSummary(request.name(), output) + "\n\n";

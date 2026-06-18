@@ -1,6 +1,7 @@
 package com.taskpilot.ai.service;
 
 import com.taskpilot.ai.tools.TaskPilotAiTools;
+import com.taskpilot.ai.tools.ToolExecutionContext;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.service.tool.ToolExecutor;
@@ -10,11 +11,13 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -200,11 +203,58 @@ public class ToolCallingRegistryService {
                 .collect(Collectors.toList());
     }
 
+    private final LocalCache localCache = new LocalCache();
+
+    private boolean isReadOnlyTool(String toolName) {
+        if (toolName == null) return false;
+        String lower = toolName.toLowerCase();
+        return (lower.startsWith("get") || lower.startsWith("query") || lower.startsWith("recommend"))
+                && !lower.contains("create")
+                && !lower.contains("patch")
+                && !lower.contains("update")
+                && !lower.contains("delete")
+                && !lower.contains("assign")
+                && !lower.contains("confirm")
+                && !lower.contains("remove")
+                && !lower.contains("add");
+    }
+
+    private static class LocalCache {
+        private record CacheKey(Long userId, Long sessionId, String toolName, String arguments) {}
+        private record CacheValue(String val, Instant expiry) {}
+        private final ConcurrentHashMap<CacheKey, CacheValue> map = new ConcurrentHashMap<>();
+
+        public void put(Long userId, Long sessionId, String toolName, String arguments, String val, long ttlSeconds) {
+            CacheKey key = new CacheKey(userId, sessionId, toolName, arguments);
+            map.put(key, new CacheValue(val, Instant.now().plusSeconds(ttlSeconds)));
+        }
+
+        public String get(Long userId, Long sessionId, String toolName, String arguments) {
+            CacheKey key = new CacheKey(userId, sessionId, toolName, arguments);
+            CacheValue cv = map.get(key);
+            if (cv == null) return null;
+            if (Instant.now().isAfter(cv.expiry())) {
+                map.remove(key);
+                return null;
+            }
+            return cv.val();
+        }
+
+        public void invalidateSession(Long sessionId) {
+            if (sessionId == null) return;
+            map.keySet().removeIf(key -> sessionId.equals(key.sessionId()));
+        }
+    }
+
     public String execute(ToolExecutionRequest request) {
         ToolExecutor executor = toolExecutors.get(request.name());
         if (executor == null) {
             return "Tool not available: " + request.name();
         }
+
+        ToolExecutionContext.Context ctx = ToolExecutionContext.get();
+        Long userId = ctx != null ? ctx.userId() : null;
+        Long sessionId = ctx != null ? ctx.sessionId() : null;
 
         try {
             String args = request.arguments();
@@ -241,8 +291,31 @@ public class ToolCallingRegistryService {
                         .arguments(args)
                         .build();
             }
+
+            final String finalArgs = request.arguments() != null ? request.arguments() : "";
+
+            if (isReadOnlyTool(request.name())) {
+                String cached = localCache.get(userId, sessionId, request.name(), finalArgs);
+                if (cached != null) {
+                    log.info("[LocalCache] HIT for read tool {} (session={}, user={})", request.name(), sessionId, userId);
+                    return cached;
+                }
+            }
+
             String result = executor.execute(request, null);
-            return minimizeJson(result);
+            String minimizedResult = minimizeJson(result);
+
+            if (isReadOnlyTool(request.name())) {
+                // Cache read-only tool results for 120 seconds
+                localCache.put(userId, sessionId, request.name(), finalArgs, minimizedResult, 120);
+                log.debug("[LocalCache] MISS & CACHED for read tool {}", request.name());
+            } else {
+                // Invalidate cache for session on data-modifying write tools
+                localCache.invalidateSession(sessionId);
+                log.info("[LocalCache] INVALIDATED session cache {} due to write tool {}", sessionId, request.name());
+            }
+
+            return minimizedResult;
         } catch (Exception ex) {
             log.error("[AI Tools] Tool execution failed for {}: {}", request.name(), ex.getMessage(), ex);
             return "Tool execution failed: " + ex.getMessage();
