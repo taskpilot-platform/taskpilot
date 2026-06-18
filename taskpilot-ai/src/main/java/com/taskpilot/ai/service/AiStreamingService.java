@@ -26,6 +26,7 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.googleai.GoogleAiGeminiChatModel;
+import dev.langchain4j.model.openaiofficial.OpenAiOfficialChatModel;
 import dev.langchain4j.model.chat.request.ToolChoice;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
@@ -1249,13 +1250,25 @@ public class AiStreamingService {
             log.info("[GeminiToolFix] Using non-streaming Gemini model to prevent SSE hang: {}", modelName);
             executor.submit(() -> {
                 try {
-                    ChatModel nonStreamingModel = GoogleAiGeminiChatModel.builder()
-                            .apiKey(geminiApiKey)
-                            .modelName(modelName)
-                            .temperature(0.3)
-                            .timeout(Duration.ofSeconds(geminiTimeoutSeconds))
-                            .logRequestsAndResponses(true)
-                            .build();
+                    ChatModel nonStreamingModel;
+                    if (modelName != null && (modelName.contains("gemma-") || modelName.contains("gemma4"))) {
+                        log.info("[GeminiToolFix] Gemma model detected. Using OpenAI-compatible non-streaming client: {}", modelName);
+                        nonStreamingModel = OpenAiOfficialChatModel.builder()
+                                .apiKey(geminiApiKey)
+                                .baseUrl("https://generativelanguage.googleapis.com/v1beta/openai/v1")
+                                .modelName(modelName)
+                                .temperature(0.3)
+                                .timeout(Duration.ofSeconds(geminiTimeoutSeconds))
+                                .build();
+                    } else {
+                        nonStreamingModel = GoogleAiGeminiChatModel.builder()
+                                .apiKey(geminiApiKey)
+                                .modelName(modelName)
+                                .temperature(0.3)
+                                .timeout(Duration.ofSeconds(geminiTimeoutSeconds))
+                                .logRequestsAndResponses(true)
+                                .build();
+                    }
 
                     ChatResponse response = nonStreamingModel.chat(request);
                     if (response.aiMessage() != null && response.aiMessage().text() != null) {

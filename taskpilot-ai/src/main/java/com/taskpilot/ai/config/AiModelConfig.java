@@ -134,6 +134,16 @@ public class AiModelConfig {
 
         @Bean("geminiFlashChatModel")
         public ChatModel geminiFlashChatModel() {
+                if (geminiModelName != null && (geminiModelName.contains("gemma-") || geminiModelName.contains("gemma4"))) {
+                        log.info("[AI Config] Gemma model detected for Gemini API. Using OpenAI-compatible non-streaming endpoint: {}", geminiModelName);
+                        return OpenAiOfficialChatModel.builder()
+                                        .apiKey(geminiApiKey)
+                                        .baseUrl("https://generativelanguage.googleapis.com/v1beta/openai/v1")
+                                        .modelName(geminiModelName)
+                                        .temperature(0.3)
+                                        .timeout(Duration.ofSeconds(geminiTimeoutSeconds))
+                                        .build();
+                }
                 return dev.langchain4j.model.googleai.GoogleAiGeminiChatModel.builder()
                         .apiKey(geminiApiKey)
                         .modelName(geminiModelName)
@@ -184,6 +194,16 @@ public class AiModelConfig {
         }
 
         private StreamingChatModel geminiStreamingModel(String modelName) {
+                if (modelName != null && (modelName.contains("gemma-") || modelName.contains("gemma4"))) {
+                        log.info("[AI Config] Gemma model detected for Gemini API. Using OpenAI-compatible streaming endpoint: {}", modelName);
+                        return OpenAiOfficialStreamingChatModel.builder()
+                                        .apiKey(geminiApiKey)
+                                        .baseUrl("https://generativelanguage.googleapis.com/v1beta/openai/v1")
+                                        .modelName(modelName)
+                                        .temperature(0.3)
+                                        .timeout(Duration.ofSeconds(geminiTimeoutSeconds))
+                                        .build();
+                }
                 return GoogleAiGeminiStreamingChatModel.builder()
                                 .apiKey(geminiApiKey)
                                 .modelName(modelName)
