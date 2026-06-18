@@ -122,7 +122,7 @@ public class AiModelConfig {
         @Value("${ai.model.timeout-seconds:60}")
         private int timeoutSeconds;
 
-        @Value("${ai.gemini.timeout-seconds:20}")
+        @Value("${ai.gemini.timeout-seconds:90}")
         private int geminiTimeoutSeconds;
 
         @Primary

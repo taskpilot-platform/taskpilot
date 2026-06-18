@@ -110,7 +110,7 @@ public class AiStreamingService {
     @Value("${ai.gemini.api-key:}")
     private String geminiApiKey;
 
-    @Value("${ai.gemini.timeout-seconds:20}")
+    @Value("${ai.gemini.timeout-seconds:90}")
     private int geminiTimeoutSeconds;
 
     @Value("${ai.chat.max-output-tokens:3500}")
@@ -230,7 +230,7 @@ public class AiStreamingService {
             """;
 
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-    private final ScheduledExecutorService timeoutScheduler = Executors.newSingleThreadScheduledExecutor();
+    private final ScheduledExecutorService timeoutScheduler = Executors.newScheduledThreadPool(8);
 
     @PreDestroy
     public void shutdown() {
@@ -665,10 +665,11 @@ public class AiStreamingService {
             }
         } else if (requiresTools) {
             boolean expanded = (retryCount > 0);
-            int maxTools = expanded ? 40 : 30;
+            boolean isGemma = modelName != null && (modelName.contains("gemma-") || modelName.contains("gemma4"));
+            int maxTools = isGemma ? (expanded ? 16 : 10) : (expanded ? 40 : 30);
             List<String> dynamicToolNames = toolCallingRegistryService.selectToolNames(userInput, maxTools, expanded);
             toolSpecs = toolCallingRegistryService.toolSpecificationsByNames(dynamicToolNames);
-            log.info("[streamRound] Dynamic tools round={} expanded={} -> injecting {} tool specs", toolRound, expanded, toolSpecs.size());
+            log.info("[streamRound] Dynamic tools round={} expanded={} model={} (isGemma={}) -> injecting {} tool specs", toolRound, expanded, modelName, isGemma, toolSpecs.size());
         } else {
             log.debug("[streamRound] requiresTools=false -> skipping tool specs entirely");
         }
@@ -1246,31 +1247,12 @@ public class AiStreamingService {
             }
         };
 
-        if (routingService.isGeminiModel(model) && toolSpecs != null && !toolSpecs.isEmpty()) {
-            log.info("[GeminiToolFix] Using non-streaming Gemini model to prevent SSE hang: {}", modelName);
+        boolean isGemma = modelName != null && (modelName.contains("gemma-") || modelName.contains("gemma4"));
+        if (isGemma && toolSpecs != null && !toolSpecs.isEmpty()) {
+            log.info("[GeminiToolFix] Using custom HTTP client for Gemini model to bypass OpenAI official adapter strict parsing: {}", modelName);
             executor.submit(() -> {
                 try {
-                    ChatModel nonStreamingModel;
-                    if (modelName != null && (modelName.contains("gemma-") || modelName.contains("gemma4"))) {
-                        log.info("[GeminiToolFix] Gemma model detected. Using OpenAI-compatible non-streaming client: {}", modelName);
-                        nonStreamingModel = OpenAiOfficialChatModel.builder()
-                                .apiKey(geminiApiKey)
-                                .baseUrl("https://generativelanguage.googleapis.com/v1beta/openai/v1")
-                                .modelName(modelName)
-                                .temperature(0.3)
-                                .timeout(Duration.ofSeconds(geminiTimeoutSeconds))
-                                .build();
-                    } else {
-                        nonStreamingModel = GoogleAiGeminiChatModel.builder()
-                                .apiKey(geminiApiKey)
-                                .modelName(modelName)
-                                .temperature(0.3)
-                                .timeout(Duration.ofSeconds(geminiTimeoutSeconds))
-                                .logRequestsAndResponses(true)
-                                .build();
-                    }
-
-                    ChatResponse response = nonStreamingModel.chat(request);
+                    ChatResponse response = callGemmaDirectly(request, modelName);
                     if (response.aiMessage() != null && response.aiMessage().text() != null) {
                         handler.onPartialResponse(response.aiMessage().text());
                     }
@@ -2034,16 +2016,43 @@ public class AiStreamingService {
             return List.of();
         }
 
+        // Tối ưu hóa: giới hạn số lượng tin nhắn lịch sử để tránh phình to context
+        // Giữ lại tin nhắn System đầu tiên (nếu có) và tối đa 8 tin nhắn gần nhất.
+        List<ChatMessage> filteredMessages = new ArrayList<>();
+        if (rawMessages.get(0) instanceof SystemMessage) {
+            filteredMessages.add(rawMessages.get(0));
+        }
+
+        int startIdx = Math.max(filteredMessages.isEmpty() ? 0 : 1, rawMessages.size() - 8);
+        for (int i = startIdx; i < rawMessages.size(); i++) {
+            // Tránh add trùng SystemMessage đầu tiên
+            if (i == 0 && rawMessages.get(0) instanceof SystemMessage) {
+                continue;
+            }
+            filteredMessages.add(rawMessages.get(i));
+        }
+
         List<ChatMessage> safeMessages = new ArrayList<>();
 
-        for (ChatMessage msg : rawMessages) {
+        for (ChatMessage msg : filteredMessages) {
             // 1. Flatten AI messages containing tool requests into pure text
-            if (msg instanceof AiMessage aiMsg && aiMsg.hasToolExecutionRequests()) {
-                String fallbackText = aiMsg.text() != null && !aiMsg.text().isBlank()
-                        ? aiMsg.text()
-                        : "[System: AI utilized internal analytical tools]";
-                safeMessages.add(AiMessage.from(fallbackText));
-                log.info("[Sanitizer] Flattened AiMessage tool_calls into plain text.");
+            if (msg instanceof AiMessage aiMsg) {
+                // Strip thoughts to prevent reasoning confusion and save tokens
+                String cleanText = aiMsg.text();
+                if (cleanText != null) {
+                    cleanText = THINK_BLOCK_PATTERN.matcher(cleanText).replaceAll("");
+                    cleanText = ORPHAN_THINK_TAG_PATTERN.matcher(cleanText).replaceAll("").trim();
+                }
+
+                if (aiMsg.hasToolExecutionRequests()) {
+                    String fallbackText = cleanText != null && !cleanText.isBlank()
+                            ? cleanText
+                            : "[System: AI utilized internal analytical tools]";
+                    safeMessages.add(AiMessage.from(fallbackText));
+                    log.info("[Sanitizer] Flattened AiMessage tool_calls into plain text.");
+                } else {
+                    safeMessages.add(AiMessage.from(cleanText != null ? cleanText : ""));
+                }
             }
             // 2. Flatten Tool Results into System Memory (UserMessage) to preserve context
             // without triggering 400 errors
@@ -2412,6 +2421,203 @@ public class AiStreamingService {
             return "next Groq key " + attempt + "/" + groqModel.keyCount();
         }
         return "";
+    }
+
+    private ChatResponse callGemmaDirectly(ChatRequest chatRequest, String modelName) {
+        try {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("model", modelName);
+            body.put("temperature", 0.3);
+            
+            List<Map<String, Object>> openAiMessages = new ArrayList<>();
+            if (chatRequest.messages() != null) {
+                for (ChatMessage msg : chatRequest.messages()) {
+                    openAiMessages.add(mapMessageToOpenAi(msg));
+                }
+            }
+            body.put("messages", openAiMessages);
+
+            if (chatRequest.toolSpecifications() != null && !chatRequest.toolSpecifications().isEmpty()) {
+                List<Map<String, Object>> openAiTools = new ArrayList<>();
+                for (var spec : chatRequest.toolSpecifications()) {
+                    openAiTools.add(mapToolToOpenAi(spec));
+                }
+                body.put("tools", openAiTools);
+            }
+
+            String requestBodyJson = objectMapper.writeValueAsString(body);
+            log.debug("[GeminiToolFix] Direct request body: {}", requestBodyJson);
+
+            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(10))
+                    .build();
+
+            java.net.http.HttpRequest httpRequest = java.net.http.HttpRequest.newBuilder()
+                    .uri(java.net.URI.create("https://generativelanguage.googleapis.com/v1beta/openai/v1/chat/completions"))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + geminiApiKey)
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(requestBodyJson))
+                    .timeout(Duration.ofSeconds(geminiTimeoutSeconds))
+                    .build();
+
+            log.info("[GeminiToolFix] Sending direct HTTP POST request to Gemini OpenAI-compatible endpoint for model: {}", modelName);
+            java.net.http.HttpResponse<String> httpResponse = client.send(httpRequest, java.net.http.HttpResponse.BodyHandlers.ofString());
+            
+            if (httpResponse.statusCode() >= 400) {
+                throw new RuntimeException("Gemini OpenAI API returned error status: " + httpResponse.statusCode() + " - " + httpResponse.body());
+            }
+
+            String responseBody = httpResponse.body();
+            log.debug("[GeminiToolFix] Direct response body: {}", responseBody);
+
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(responseBody);
+            com.fasterxml.jackson.databind.JsonNode choice = root.path("choices").get(0);
+            if (choice.isMissingNode() || choice.isNull()) {
+                throw new RuntimeException("Invalid API response: choices array is empty or null. Response: " + responseBody);
+            }
+
+            com.fasterxml.jackson.databind.JsonNode messageNode = choice.path("message");
+            String content = messageNode.path("content").asText(null);
+
+            List<ToolExecutionRequest> toolRequests = new ArrayList<>();
+            com.fasterxml.jackson.databind.JsonNode toolCallsNode = messageNode.path("tool_calls");
+            if (toolCallsNode.isArray()) {
+                for (com.fasterxml.jackson.databind.JsonNode tc : toolCallsNode) {
+                    String id = tc.path("id").asText();
+                    com.fasterxml.jackson.databind.JsonNode fn = tc.path("function");
+                    String name = fn.path("name").asText();
+                    String args = fn.path("arguments").asText();
+                    toolRequests.add(ToolExecutionRequest.builder()
+                            .id(id)
+                            .name(name)
+                            .arguments(args)
+                            .build());
+                }
+            }
+
+            AiMessage aiMessage;
+            if (!toolRequests.isEmpty()) {
+                aiMessage = AiMessage.from(content, toolRequests);
+            } else {
+                aiMessage = AiMessage.from(content);
+            }
+
+            int promptTokens = root.path("usage").path("prompt_tokens").asInt(0);
+            int completionTokens = root.path("usage").path("completion_tokens").asInt(0);
+            dev.langchain4j.model.output.TokenUsage tokenUsage = new dev.langchain4j.model.output.TokenUsage(promptTokens, completionTokens);
+
+            return ChatResponse.builder()
+                    .aiMessage(aiMessage)
+                    .tokenUsage(tokenUsage)
+                    .build();
+
+        } catch (Exception e) {
+            log.error("[GeminiToolFix] Direct HTTP call failed: {}", e.getMessage(), e);
+            throw new RuntimeException(e);
+        }
+    }
+
+    private Map<String, Object> mapMessageToOpenAi(ChatMessage message) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        if (message instanceof SystemMessage) {
+            map.put("role", "system");
+            map.put("content", ((SystemMessage) message).text());
+        } else if (message instanceof UserMessage) {
+            map.put("role", "user");
+            map.put("content", ((UserMessage) message).singleText());
+        } else if (message instanceof AiMessage) {
+            map.put("role", "assistant");
+            AiMessage ai = (AiMessage) message;
+            if (ai.text() != null) {
+                map.put("content", ai.text());
+            }
+            if (ai.hasToolExecutionRequests()) {
+                List<Map<String, Object>> toolCalls = new ArrayList<>();
+                for (ToolExecutionRequest req : ai.toolExecutionRequests()) {
+                    Map<String, Object> tc = new LinkedHashMap<>();
+                    tc.put("id", req.id());
+                    tc.put("type", "function");
+                    Map<String, Object> fn = new LinkedHashMap<>();
+                    fn.put("name", req.name());
+                    fn.put("arguments", req.arguments());
+                    tc.put("function", fn);
+                    toolCalls.add(tc);
+                }
+                map.put("tool_calls", toolCalls);
+            }
+        } else if (message instanceof ToolExecutionResultMessage) {
+            map.put("role", "tool");
+            ToolExecutionResultMessage result = (ToolExecutionResultMessage) message;
+            map.put("tool_call_id", result.id());
+            map.put("name", result.toolName());
+            map.put("content", result.text());
+        }
+        return map;
+    }
+
+    private Map<String, Object> mapToolToOpenAi(dev.langchain4j.agent.tool.ToolSpecification spec) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("type", "function");
+        Map<String, Object> fn = new LinkedHashMap<>();
+        fn.put("name", spec.name());
+        if (spec.description() != null) {
+            fn.put("description", spec.description());
+        }
+        if (spec.parameters() != null) {
+            Map<String, Object> params = jsonSchemaElementToMap(spec.parameters());
+            fn.put("parameters", params);
+        } else {
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("type", "object");
+            params.put("properties", Map.of());
+            fn.put("parameters", params);
+        }
+        map.put("function", fn);
+        return map;
+    }
+
+    private Map<String, Object> jsonSchemaElementToMap(dev.langchain4j.model.chat.request.json.JsonSchemaElement element) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        if (element == null) {
+            return map;
+        }
+        
+        String type = "string";
+        if (element instanceof dev.langchain4j.model.chat.request.json.JsonObjectSchema) {
+            type = "object";
+        } else if (element instanceof dev.langchain4j.model.chat.request.json.JsonArraySchema) {
+            type = "array";
+        } else if (element instanceof dev.langchain4j.model.chat.request.json.JsonIntegerSchema) {
+            type = "integer";
+        } else if (element instanceof dev.langchain4j.model.chat.request.json.JsonNumberSchema) {
+            type = "number";
+        } else if (element instanceof dev.langchain4j.model.chat.request.json.JsonBooleanSchema) {
+            type = "boolean";
+        }
+        
+        map.put("type", type);
+        
+        if (element.description() != null) {
+            map.put("description", element.description());
+        }
+        
+        if (element instanceof dev.langchain4j.model.chat.request.json.JsonObjectSchema objSchema) {
+            if (objSchema.properties() != null) {
+                Map<String, Object> props = new LinkedHashMap<>();
+                for (var entry : objSchema.properties().entrySet()) {
+                    props.put(entry.getKey(), jsonSchemaElementToMap(entry.getValue()));
+                }
+                map.put("properties", props);
+            }
+            if (objSchema.required() != null) {
+                map.put("required", objSchema.required());
+            }
+        } else if (element instanceof dev.langchain4j.model.chat.request.json.JsonArraySchema arrSchema) {
+            if (arrSchema.items() != null) {
+                map.put("items", jsonSchemaElementToMap(arrSchema.items()));
+            }
+        }
+        return map;
     }
 
     private record ToolLoopState(String toolName, int consecutiveCount) {

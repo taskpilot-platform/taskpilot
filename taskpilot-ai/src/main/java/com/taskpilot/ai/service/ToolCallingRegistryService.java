@@ -246,7 +246,19 @@ public class ToolCallingRegistryService {
     }
 
     public String execute(ToolExecutionRequest request) {
-        ToolExecutor executor = toolExecutors.get(request.name());
+        String toolName = request.name();
+        if (toolName != null && toolName.contains(":")) {
+            String originalName = toolName;
+            toolName = toolName.substring(toolName.lastIndexOf(":") + 1);
+            log.info("[AI Tools] Strip namespace prefix from tool name: {} -> {}", originalName, toolName);
+            request = dev.langchain4j.agent.tool.ToolExecutionRequest.builder()
+                    .id(request.id())
+                    .name(toolName)
+                    .arguments(request.arguments())
+                    .build();
+        }
+
+        ToolExecutor executor = toolExecutors.get(toolName);
         if (executor == null) {
             return "Tool not available: " + request.name();
         }
