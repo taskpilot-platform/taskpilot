@@ -11,9 +11,13 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 import java.util.Locale;
 
+import org.springframework.beans.factory.annotation.Value;
+
+import java.util.List;
+import java.util.Locale;
+
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class GatekeeperService {
 
     private static final List<String> FALLBACK_KEYWORDS = List.of(
@@ -39,22 +43,36 @@ public class GatekeeperService {
             "workload",
             "chia task");
 
-    @Qualifier("groqGatekeeperModel")
     private final ObjectProvider<dev.langchain4j.model.chat.ChatModel> gatekeeperModelProvider;
+    private final boolean groqEnabled;
 
     private GatekeeperAgent gatekeeperAgent;
 
+    public GatekeeperService(
+            @Qualifier("groqGatekeeperModel") ObjectProvider<dev.langchain4j.model.chat.ChatModel> gatekeeperModelProvider,
+            @Value("${ai.groq.enabled:false}") boolean groqEnabled) {
+        this.gatekeeperModelProvider = gatekeeperModelProvider;
+        this.groqEnabled = groqEnabled;
+    }
+
     @PostConstruct
     void init() {
+        if (!groqEnabled) {
+            log.info("[Gatekeeper] Groq is disabled. Gatekeeper model classifier is disabled. Falling back to keyword checks.");
+            gatekeeperAgent = null;
+            return;
+        }
         dev.langchain4j.model.chat.ChatModel gatekeeperModel = gatekeeperModelProvider.getIfAvailable();
         if (gatekeeperModel == null) {
             log.warn("[Gatekeeper] Groq gatekeeper model is not available. Falling back to keyword checks.");
-            return;
+        } else {
+            gatekeeperAgent = AiServices.builder(GatekeeperAgent.class)
+                    .chatModel(gatekeeperModel)
+                    .build();
         }
-        gatekeeperAgent = AiServices.builder(GatekeeperAgent.class)
-                .chatModel(gatekeeperModel)
-                .build();
     }
+
+
 
     public boolean requiresAHP(String userMessage) {
         if (userMessage == null || userMessage.isBlank()) {

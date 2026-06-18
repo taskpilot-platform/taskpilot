@@ -95,10 +95,10 @@ public class SmartRoutingService {
     @Value("${ai.groq.enabled:false}")
     private boolean groqEnabled;
 
-    @Value("${ai.openrouter.reasoning-model:nvidia/nemotron-3-ultra-550b-a55b:free}")
+    @Value("${ai.openrouter.reasoning-model:google/gemma-4-31b-it:free}")
     private String openRouterReasoningModelName;
 
-    @Value("${ai.openrouter.reasoning-fallback1-model:nvidia/nemotron-3-super-120b-a12b:free}")
+    @Value("${ai.openrouter.reasoning-fallback1-model:nvidia/nemotron-3-ultra-550b-a55b:free}")
     private String openRouterReasoningFallback1ModelName;
 
     @Value("${ai.openrouter.reasoning-fallback2-model:poolside/laguna-m.1:free}")
@@ -119,13 +119,13 @@ public class SmartRoutingService {
     @Value("${ai.openrouter.reasoning-fallback7-model:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free}")
     private String openRouterReasoningFallback7ModelName;
 
-    @Value("${ai.openrouter.reasoning-fallback8-model:google/gemma-4-31b-it:free}")
+    @Value("${ai.openrouter.reasoning-fallback8-model:google/gemma-4-26b-a4b-it:free}")
     private String openRouterReasoningFallback8ModelName;
 
-    @Value("${ai.openrouter.reasoning-fallback9-model:google/gemma-4-26b-a4b-it:free}")
+    @Value("${ai.openrouter.reasoning-fallback9-model:openai/gpt-oss-20b:free}")
     private String openRouterReasoningFallback9ModelName;
 
-    @Value("${ai.openrouter.reasoning-fallback10-model:openai/gpt-oss-20b:free}")
+    @Value("${ai.openrouter.reasoning-fallback10-model:}")
     private String openRouterReasoningFallback10ModelName;
 
     @Value("${ai.openrouter.enabled:false}")
@@ -247,9 +247,11 @@ public class SmartRoutingService {
                         fallbackName);
                 return new RoutingDecision(fallback, fallbackName, false, true);
             }
+            StreamingChatModel primary = getPrimaryModel();
+            String primaryName = getModelName(primary);
             log.info("[SmartRouting] Routing to TOOL-FRIENDLY model ({}) - tokens: {}",
-                    geminiModelName, estimatedTokens);
-            return new RoutingDecision(geminiPrimaryModel, geminiModelName, false, true);
+                    primaryName, estimatedTokens);
+            return new RoutingDecision(primary, primaryName, false, true);
         }
 
         // LIGHT model: no tools needed
@@ -390,7 +392,7 @@ public class SmartRoutingService {
             return getNextGeminiFallback(currentModel);
         }
         if (isGpt4oFallbackModel(currentModel)) {
-            return getOpenRouterEntryModel(currentModel);
+            return currentModel;
         }
         if (isOpenRouterReasoningModel(currentModel)) {
             return getNextOpenRouterReasoningFallback(currentModel);
@@ -402,10 +404,10 @@ public class SmartRoutingService {
             return deepSeekReasoningTextModel;
         }
         if (currentModel == deepSeekReasoningModel) {
-            return getOpenRouterEntryModel(gpt4oFallbackModel);
+            return gpt4oFallbackModel;
         }
         if (currentModel == deepSeekReasoningTextModel) {
-            return getOpenRouterTextFallbackModel(gpt4oFallbackTextModel);
+            return gpt4oFallbackTextModel;
         }
         return currentModel;
     }
@@ -428,6 +430,9 @@ public class SmartRoutingService {
         if (currentModel == openRouterReasoningFallback7Model) return firstAvailable(openRouterReasoningFallback8Model, currentModel);
         if (currentModel == openRouterReasoningFallback8Model) return firstAvailable(openRouterReasoningFallback9Model, currentModel);
         if (currentModel == openRouterReasoningFallback9Model) return firstAvailable(openRouterReasoningFallback10Model, currentModel);
+        if (currentModel == openRouterReasoningFallback10Model) {
+            return deepSeekReasoningModel != null ? deepSeekReasoningModel : gpt4oFallbackModel;
+        }
         return currentModel;
     }
 
@@ -442,11 +447,11 @@ public class SmartRoutingService {
         return fallbackWhenUnavailable;
     }
 
-    public StreamingChatModel getOpenRouterTextFallbackModel(StreamingChatModel fallbackWhenUnavailable) {
-        if (openRouterEnabled && openRouterReasoningTextModel != null) {
+    public StreamingChatModel getOpenRouterTextFallbackModel(StreamingChatModel currentModel) {
+        if (openRouterEnabled && openRouterReasoningTextModel != null && currentModel != openRouterReasoningTextModel) {
             return openRouterReasoningTextModel;
         }
-        return fallbackWhenUnavailable;
+        return getFallbackTextModel();
     }
 
     public boolean isGeminiModel(StreamingChatModel model) {
@@ -497,6 +502,9 @@ public class SmartRoutingService {
     }
 
     public StreamingChatModel getPrimaryModel() {
+        if (openRouterEnabled && openRouterReasoningModel != null) {
+            return openRouterReasoningModel;
+        }
         return geminiPrimaryModel;
     }
 
@@ -504,25 +512,19 @@ public class SmartRoutingService {
         if (openRouterEnabled && openRouterReasoningModel != null) {
             return openRouterReasoningModel;
         }
-        if (groqEnabled && groqOssReasoningModel != null) {
-            return groqOssReasoningModel;
-        }
-        return deepSeekReasoningModel;
+        return geminiPrimaryModel;
     }
 
     public StreamingChatModel getReasoningTextModel() {
-        if (openRouterEnabled && openRouterReasoningTextModel != null) {
-            return openRouterReasoningTextModel;
+        if (openRouterEnabled && openRouterReasoningModel != null) {
+            return openRouterReasoningModel;
         }
-        if (groqEnabled && groqOssReasoningTextModel != null) {
-            return groqOssReasoningTextModel;
-        }
-        return deepSeekReasoningTextModel;
+        return geminiPrimaryModel;
     }
 
     public StreamingChatModel getFallbackTextModel() {
-        if (openRouterEnabled && openRouterReasoningTextModel != null) {
-            return openRouterReasoningTextModel;
+        if (openRouterEnabled && openRouterReasoningFallback1Model != null) {
+            return openRouterReasoningFallback1Model;
         }
         if (groqEnabled && groqOssReasoningTextModel != null) {
             return groqOssReasoningTextModel;

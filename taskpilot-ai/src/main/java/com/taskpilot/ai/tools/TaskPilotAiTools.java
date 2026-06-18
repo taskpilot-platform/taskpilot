@@ -41,7 +41,9 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class TaskPilotAiTools {
 
-    private static final ObjectMapper PATCH_OBJECT_MAPPER = new ObjectMapper();
+    private static final ObjectMapper PATCH_OBJECT_MAPPER = com.fasterxml.jackson.databind.json.JsonMapper.builder()
+            .addModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule())
+            .build();
 
     private final AutoAssignmentService autoAssignmentService;
     private final ProjectMemberPort projectMemberPort;
@@ -55,14 +57,38 @@ public class TaskPilotAiTools {
     private final PendingAiActionService pendingAiActionService;
 
     @Tool("""
-            Use this tool when the user asks to list projects they participate in, joined projects,
-            their current projects, or "du an cua toi". It returns projects where the current user is
-            a project manager or member, including role and dates.
+            Use this tool to search for projects you participate in.
+            It replaces getMyProjects and supports optional filters to narrow down the results,
+            reducing output size. Limit should be used, default is 10.
             """)
-    public List<ProjectOverviewDto> getMyProjects() {
+    public Object queryProjects(
+            @P("Optional status to filter by (e.g. ACTIVE, ARCHIVED)") String status,
+            @P("Optional role to filter by (e.g. MANAGER, MEMBER)") String role,
+            @P("Optional search term for project name or description") String searchTerm,
+            @P("Maximum number of projects to return, default 10, max 20") Integer limit) {
         Long userId = ToolExecutionContext.requireUserId();
-        log.info("[AiTool] getMyProjects called for user {}", userId);
-        return projectInsightsPort.getMyProjects(userId);
+        log.info("[AiTool] queryProjects called for user {} status={} role={} search={}", userId, status, role, searchTerm);
+        List<ProjectOverviewDto> allProjects = projectInsightsPort.getMyProjects(userId);
+
+        // Apply filters in-memory for Stage 1
+        List<Map<String, Object>> filtered = allProjects.stream()
+                .filter(p -> status == null || status.isBlank() || status.equalsIgnoreCase(p.status()))
+                .filter(p -> role == null || role.isBlank() || role.equalsIgnoreCase(p.role()))
+                .filter(p -> searchTerm == null || searchTerm.isBlank() || 
+                        (p.name() != null && p.name().toLowerCase().contains(searchTerm.toLowerCase())) ||
+                        (p.description() != null && p.description().toLowerCase().contains(searchTerm.toLowerCase())))
+                .map(p -> Map.<String, Object>of(
+                        "projectId", p.projectId(),
+                        "name", p.name(),
+                        "role", p.role(),
+                        "status", p.status(),
+                        "startDate", p.startDate() != null ? p.startDate() : "",
+                        "endDate", p.endDate() != null ? p.endDate() : ""
+                ))
+                .limit(limit != null ? Math.max(1, Math.min(limit, 20)) : 10)
+                .collect(Collectors.toList());
+
+        return Map.of("results", filtered, "totalMatched", filtered.size());
     }
 
     @Tool("""
@@ -88,14 +114,34 @@ public class TaskPilotAiTools {
     }
 
     @Tool("""
-            Use this tool when the user asks for the list of members in a specific project.
-            Typical intents include: "thanh vien du an", "ai trong du an", "project members".
-            Provide the project ID. This tool returns member IDs, names, roles, and skills for that project.
+            Use this tool to search for members in a specific project.
+            It replaces getProjectMembers and supports optional filters to narrow down the results,
+            reducing output size. Limit should be used, default is 10.
             """)
-    public List<ProjectMemberDto> getProjectMembers(@P("The ID of the project") String projectId) {
-        log.info("[AiTool] getProjectMembers called for project {}", projectId);
+    public Object queryProjectMembers(
+            @P("The ID of the project") String projectId,
+            @P("Optional role to filter by (e.g. MANAGER, MEMBER, DEVELOPER)") String role,
+            @P("Optional search term for member name") String searchTerm,
+            @P("Maximum number of members to return, default 10, max 20") Integer limit) {
+        log.info("[AiTool] queryProjectMembers called for project {} role={} search={}", projectId, role, searchTerm);
         Long userId = ToolExecutionContext.requireUserId();
-        return projectInsightsPort.getProjectMembers(toLong(projectId), userId);
+        List<ProjectMemberDto> allMembers = projectInsightsPort.getProjectMembers(toLong(projectId), userId);
+
+        // Apply filters in-memory for Stage 1
+        List<Map<String, Object>> filtered = allMembers.stream()
+                .filter(m -> role == null || role.isBlank() || role.equalsIgnoreCase(m.role()))
+                .filter(m -> searchTerm == null || searchTerm.isBlank() || 
+                        (m.fullName() != null && m.fullName().toLowerCase().contains(searchTerm.toLowerCase())))
+                .map(m -> Map.<String, Object>of(
+                        "memberId", m.memberId(),
+                        "fullName", m.fullName(),
+                        "role", m.role(),
+                        "skills", m.skills() != null ? m.skills() : ""
+                ))
+                .limit(limit != null ? Math.max(1, Math.min(limit, 20)) : 10)
+                .collect(Collectors.toList());
+
+        return Map.of("results", filtered, "totalMatched", filtered.size());
     }
 
     @Tool("""
@@ -300,7 +346,7 @@ public class TaskPilotAiTools {
             Set unreadOnly=true when the user asks for unread/chua doc/chưa đọc notifications.
             Limit should be a small number such as 10 or 20.
             """)
-    public Object getMyNotifications(
+    public String getMyNotifications(
             @P("Return only unread notifications when true") Boolean unreadOnly,
             @P("Maximum number of notifications to return, between 1 and 50") Integer limit) {
         Long userId = ToolExecutionContext.requireUserId();
@@ -308,7 +354,14 @@ public class TaskPilotAiTools {
         boolean onlyUnread = Boolean.TRUE.equals(unreadOnly);
         log.info("[AiTool] getMyNotifications called for user {} unreadOnly={} limit={}",
                 userId, onlyUnread, safeLimit);
-        return userNotificationQueryPort.getMyNotifications(userId, onlyUnread, safeLimit);
+        try {
+            return PATCH_OBJECT_MAPPER.writeValueAsString(
+                userNotificationQueryPort.getMyNotifications(userId, onlyUnread, safeLimit)
+            );
+        } catch (Exception e) {
+            log.error("[AiTool] Failed to serialize notifications", e);
+            return "[]";
+        }
     }
 
     @Tool("""
@@ -673,7 +726,7 @@ public class TaskPilotAiTools {
             Typical intents include: "trong X ngay toi", "sap toi han", "upcoming projects", "due soon".
             Provide daysAhead (default 7). This tool returns projects with due dates in that window.
             """)
-    public List<ProjectDueDto> getUpcomingProjects(
+    public String getUpcomingProjects(
             @P("Number of days ahead to check (default 7). Note: send as string like '7'") String daysAhead) {
         int parsedDays = 7;
         if (daysAhead != null && !daysAhead.isBlank()) {
@@ -685,7 +738,14 @@ public class TaskPilotAiTools {
         LocalDate fromDate = LocalDate.now();
         LocalDate toDate = fromDate.plusDays(safeDays);
 
-        return projectMemberPort.findUpcomingProjects(userId, fromDate, toDate, 20);
+        try {
+            return PATCH_OBJECT_MAPPER.writeValueAsString(
+                projectMemberPort.findUpcomingProjects(userId, fromDate, toDate, 20)
+            );
+        } catch (Exception e) {
+            log.error("[AiTool] Failed to serialize upcoming projects", e);
+            return "[]";
+        }
     }
 
     @Tool("""
@@ -693,7 +753,7 @@ public class TaskPilotAiTools {
             into a concrete date range (e.g. "next week", "from 2026-05-01 to 2026-05-07").
             Provide fromDate and toDate in YYYY-MM-DD format. This tool returns projects due within that range.
             """)
-    public List<ProjectDueDto> findProjectsDue(
+    public String findProjectsDue(
             @P("Start date in YYYY-MM-DD format") String fromDate,
             @P("End date in YYYY-MM-DD format") String toDate) {
         
@@ -703,15 +763,22 @@ public class TaskPilotAiTools {
             from = LocalDate.parse(fromDate);
             to = LocalDate.parse(toDate);
         } catch (DateTimeParseException | NullPointerException ex) {
-            return List.of();
+            return "[]";
         }
 
         if (to.isBefore(from)) {
-            return List.of();
+            return "[]";
         }
 
         Long userId = ToolExecutionContext.requireUserId();
-        return projectMemberPort.findUpcomingProjects(userId, from, to, 20);
+        try {
+            return PATCH_OBJECT_MAPPER.writeValueAsString(
+                projectMemberPort.findUpcomingProjects(userId, from, to, 20)
+            );
+        } catch (Exception e) {
+            log.error("[AiTool] Failed to serialize projects due", e);
+            return "[]";
+        }
     }
 
     private Long toLong(Object value) {
@@ -812,29 +879,75 @@ public class TaskPilotAiTools {
     // Project/task CRUD tools backed by the real project data ports.
     // =========================================================================
 
-    @Tool("""
-            Use this tool to fetch all tasks belonging to a specific project.
-            Provide the project ID. Do not use this when the user asks for tasks that are unassigned,
-            not assigned yet, "ch", "chua", "chưa", "ch dc", "ch đc", "chua duoc phan cong",
-            or "chưa được phân công"; use getUnassignedTasksByProject instead.
-            """)
-    public Object getTasksByProject(@P("The ID of the project") String projectId) {
-        log.info("[AiTool] getTasksByProject called for project {}", projectId);
-        Long userId = ToolExecutionContext.requireUserId();
-        return taskCommandPort.getTasksByProject(toLong(projectId), userId);
+    public record AiQueryTaskDto(
+            Long id,
+            Long projectId,
+            String title,
+            String status,
+            String priority,
+            Integer difficultyLevel,
+            Long assigneeId,
+            String assigneeName,
+            String dueDate) {
     }
 
     @Tool("""
-            Use this tool when the user asks which tasks in a project are unassigned, not assigned yet,
-            "ch", "chua", "chưa", "ch dc", "ch đc", "chua duoc phan cong", "chưa được phân công",
-            "task nao chua gan", or asks for work that still needs an owner.
-            Provide the project ID. It returns only tasks whose assignee is empty, with required skills and difficulty
-            when available, so the assistant can ask only for missing fields.
+            Use this tool to search and query tasks within a specific project.
+            You MUST provide the project ID.
+            Optional filters (pass null if not needed):
+            - assigneeId: filter tasks assigned to a specific member
+            - status: TODO, IN_PROGRESS, or DONE
+            - isOverdue: true = only tasks whose dueDate is before today
+            - dueToday: true = only tasks whose dueDate equals today
+            - unassignedOnly: true = only tasks with no assignee
+            - limit: max results (default 10)
             """)
-    public Object getUnassignedTasksByProject(@P("The ID of the project") String projectId) {
-        log.info("[AiTool] getUnassignedTasksByProject called for project {}", projectId);
+    public Object queryTasks(
+            @P("The ID of the project") String projectId,
+            @P("Optional. Filter by assignee ID") String assigneeId,
+            @P("Optional. Filter by status (TODO, IN_PROGRESS, DONE)") String status,
+            @P("Optional. Set to true to find overdue tasks (dueDate < today)") Boolean isOverdue,
+            @P("Optional. Set to true to find tasks with dueDate = today") Boolean dueToday,
+            @P("Optional. Set to true to find tasks that have NO assignee") Boolean unassignedOnly,
+            @P("Optional. Maximum number of results to return. Default 10.") Integer limit) {
+        log.info("[AiTool] queryTasks called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
-        return taskCommandPort.getUnassignedTasksByProject(toLong(projectId), userId);
+
+        java.util.List<?> rawTasks;
+        if (Boolean.TRUE.equals(unassignedOnly)) {
+            rawTasks = taskCommandPort.getUnassignedTasksByProject(toLong(projectId), userId);
+        } else {
+            rawTasks = taskCommandPort.getTasksByProject(toLong(projectId), userId);
+        }
+
+        java.time.LocalDate today = java.time.LocalDate.now();
+
+        return rawTasks.stream().map(task -> {
+            if (task instanceof com.taskpilot.contracts.aiquery.dto.TaskDetailDto d) {
+                return new AiQueryTaskDto(d.id(), d.projectId(), d.title(), d.status(), d.priority(), d.difficultyLevel(), d.assigneeId(), d.assigneeName(), d.dueDate());
+            } else if (task instanceof com.taskpilot.contracts.aiquery.dto.TaskSummaryDto s) {
+                return new AiQueryTaskDto(s.id(), s.projectId(), s.title(), s.status(), s.priority(), s.difficultyLevel(), s.assigneeId(), s.assigneeName(), s.dueDate());
+            }
+            return null;
+        })
+        .filter(dto -> dto != null)
+        .filter(dto -> !Boolean.TRUE.equals(unassignedOnly) || dto.assigneeId() == null)
+        .filter(dto -> assigneeId == null || assigneeId.equals(String.valueOf(dto.assigneeId())))
+        .filter(dto -> status == null || status.equalsIgnoreCase(dto.status()))
+        .filter(dto -> {
+            if (dto.dueDate() == null || dto.dueDate().isBlank()) {
+                return !Boolean.TRUE.equals(isOverdue) && !Boolean.TRUE.equals(dueToday);
+            }
+            try {
+                String dateStr = dto.dueDate().length() > 10 ? dto.dueDate().substring(0, 10) : dto.dueDate();
+                java.time.LocalDate due = java.time.LocalDate.parse(dateStr);
+                if (Boolean.TRUE.equals(dueToday)) return due.equals(today);
+                if (Boolean.TRUE.equals(isOverdue)) return due.isBefore(today);
+            } catch (Exception e) { return false; }
+            return true;
+        })
+        .limit(limit != null ? limit : 10)
+        .toList();
     }
 
     @Tool("""
@@ -850,11 +963,23 @@ public class TaskPilotAiTools {
     @Tool("""
             Use this tool to fetch comments made on a specific task.
             Provide the task ID.
+            Optional limit (pass null if not needed) to limit the comments returned, default 10, max 30.
             """)
-    public Object getTaskComments(@P("The ID of the task") Long taskId) {
+    public String getTaskComments(
+            @P("The ID of the task") Long taskId,
+            @P("Optional. Maximum number of comments to return. Default 10, max 30.") Integer limit) {
         log.info("[AiTool] getTaskComments called for task {}", taskId);
         Long userId = ToolExecutionContext.requireUserId();
-        return taskCommentQueryPort.getTaskComments(taskId, userId);
+        List<com.taskpilot.contracts.aiquery.dto.TaskCommentSummaryDto> comments = taskCommentQueryPort.getTaskComments(taskId, userId);
+        List<com.taskpilot.contracts.aiquery.dto.TaskCommentSummaryDto> limited = comments.stream()
+                .limit(limit != null ? Math.max(1, Math.min(limit, 30)) : 10)
+                .collect(Collectors.toList());
+        try {
+            return PATCH_OBJECT_MAPPER.writeValueAsString(limited);
+        } catch (Exception e) {
+            log.error("[AiTool] Failed to serialize comments", e);
+            return "[]";
+        }
     }
 
     @Tool("""
@@ -862,7 +987,7 @@ public class TaskPilotAiTools {
             or "comment cua toi" without specifying one exact task. Optional projectId/taskId narrow the search.
             Set mentionedMe=true only when the user asks for comments that mention/tag them.
             """)
-    public Object getMyTaskComments(
+    public String getMyTaskComments(
             @P("Optional project ID filter") Long projectId,
             @P("Optional task ID filter") Long taskId,
             @P("True when the user asks for comments mentioning them") Boolean mentionedMe,
@@ -872,7 +997,14 @@ public class TaskPilotAiTools {
         boolean onlyMentioned = Boolean.TRUE.equals(mentionedMe);
         log.info("[AiTool] getMyTaskComments called for user {} project={} task={} mentionedMe={} limit={}",
                 userId, projectId, taskId, onlyMentioned, safeLimit);
-        return taskCommentQueryPort.getMyTaskComments(projectId, taskId, onlyMentioned, safeLimit, userId);
+        try {
+            return PATCH_OBJECT_MAPPER.writeValueAsString(
+                taskCommentQueryPort.getMyTaskComments(projectId, taskId, onlyMentioned, safeLimit, userId)
+            );
+        } catch (Exception e) {
+            log.error("[AiTool] Failed to serialize comments", e);
+            return "[]";
+        }
     }
 
     @Tool("""
@@ -1150,11 +1282,24 @@ public class TaskPilotAiTools {
     @Tool("""
             Use this tool to fetch all sprints belonging to a specific project.
             Provide the project ID.
+            Optional filters (pass null if not needed):
+            - status: filter sprints by status (e.g. ACTIVE, PLANNING, COMPLETED)
+            - limit: max results to return, default 10, max 30
             """)
-    public Object getSprintsByProject(@P("The ID of the project") String projectId) {
+    public Object getSprintsByProject(
+            @P("The ID of the project") String projectId,
+            @P("Optional. Filter sprints by status (e.g. ACTIVE, PLANNING, COMPLETED)") String status,
+            @P("Optional. Maximum number of results to return. Default 10, max 30.") Integer limit) {
         log.info("[AiTool] getSprintsByProject called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
-        return sprintQueryPort.getSprintsByProject(toLong(projectId), userId);
+        List<com.taskpilot.contracts.aiquery.dto.SprintSummaryDto> allSprints = sprintQueryPort.getSprintsByProject(toLong(projectId), userId);
+
+        List<com.taskpilot.contracts.aiquery.dto.SprintSummaryDto> filtered = allSprints.stream()
+                .filter(s -> status == null || status.isBlank() || status.equalsIgnoreCase(s.status()))
+                .limit(limit != null ? Math.max(1, Math.min(limit, 30)) : 10)
+                .collect(Collectors.toList());
+
+        return Map.of("results", filtered, "totalMatched", filtered.size());
     }
 
     @Tool("""
@@ -1515,11 +1660,50 @@ public class TaskPilotAiTools {
             and all sprints (including active, completed, and planned sprints) with their tasks.
             Typical intents include: "xem backlog", "sprint backlog", "backlog du an".
             Provide the project ID.
+            Optional limit (pass null if not needed) to limit the tasks returned per section, default 10, max 30.
             """)
-    public Object getSprintBacklog(@P("The ID of the project") Long projectId) {
+    public Object getSprintBacklog(
+            @P("The ID of the project") Long projectId,
+            @P("Optional. Maximum number of tasks to return per sprint/unscheduled. Default 10, max 30.") Integer limit) {
         log.info("[AiTool] getSprintBacklog called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
-        return sprintQueryPort.getSprintBacklog(projectId, userId);
+        Object rawBacklog = sprintQueryPort.getSprintBacklog(projectId, userId);
+        try {
+            Map<String, Object> backlogMap = PATCH_OBJECT_MAPPER.convertValue(rawBacklog, new TypeReference<Map<String, Object>>() {});
+            if (backlogMap.containsKey("unscheduled")) {
+                List<Map<String, Object>> unscheduled = (List<Map<String, Object>>) backlogMap.get("unscheduled");
+                if (unscheduled != null) {
+                    List<Map<String, Object>> filteredUnscheduled = unscheduled.stream()
+                        .limit(limit != null ? Math.max(1, Math.min(limit, 30)) : 10)
+                        .collect(Collectors.toList());
+                    backlogMap.put("unscheduled", filteredUnscheduled);
+                }
+            }
+            if (backlogMap.containsKey("sections")) {
+                List<Map<String, Object>> sections = (List<Map<String, Object>>) backlogMap.get("sections");
+                if (sections != null) {
+                    List<Map<String, Object>> filteredSections = sections.stream()
+                        .map(section -> {
+                            Map<String, Object> newSec = new LinkedHashMap<>(section);
+                            List<Map<String, Object>> tasks = (List<Map<String, Object>>) newSec.get("tasks");
+                            if (tasks != null) {
+                                List<Map<String, Object>> filteredTasks = tasks.stream()
+                                    .limit(limit != null ? Math.max(1, Math.min(limit, 30)) : 10)
+                                    .collect(Collectors.toList());
+                                newSec.put("tasks", filteredTasks);
+                            }
+                            return newSec;
+                        })
+                        .limit(limit != null ? Math.max(1, Math.min(limit, 10)) : 5)
+                        .collect(Collectors.toList());
+                    backlogMap.put("sections", filteredSections);
+                }
+            }
+            return backlogMap;
+        } catch (Exception e) {
+            log.warn("[AiTool] Failed to parse backlog for limits, returning raw: {}", e.getMessage());
+            return rawBacklog;
+        }
     }
 
     @Tool("""
@@ -1527,11 +1711,30 @@ public class TaskPilotAiTools {
             tasks in the active sprint organized by columns/statuses.
             Typical intents include: "board sprint", "sprint board", "active board", "bang sprint dang chay".
             Provide the project ID.
+            Optional limit (pass null if not needed) to limit the tasks returned, default 15, max 30.
             """)
-    public Object getSprintBoard(@P("The ID of the project") Long projectId) {
+    public Object getSprintBoard(
+            @P("The ID of the project") Long projectId,
+            @P("Optional. Maximum number of active tasks to return. Default 15, max 30.") Integer limit) {
         log.info("[AiTool] getSprintBoard called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
-        return sprintQueryPort.getSprintBoard(projectId, userId);
+        Object rawBoard = sprintQueryPort.getSprintBoard(projectId, userId);
+        try {
+            Map<String, Object> boardMap = PATCH_OBJECT_MAPPER.convertValue(rawBoard, new TypeReference<Map<String, Object>>() {});
+            if (boardMap.containsKey("tasks")) {
+                List<Map<String, Object>> tasks = (List<Map<String, Object>>) boardMap.get("tasks");
+                if (tasks != null) {
+                    List<Map<String, Object>> filteredTasks = tasks.stream()
+                        .limit(limit != null ? Math.max(1, Math.min(limit, 30)) : 15)
+                        .collect(Collectors.toList());
+                    boardMap.put("tasks", filteredTasks);
+                }
+            }
+            return boardMap;
+        } catch (Exception e) {
+            log.warn("[AiTool] Failed to parse board for limits, returning raw: {}", e.getMessage());
+            return rawBoard;
+        }
     }
 
     @Tool("""

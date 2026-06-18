@@ -46,7 +46,7 @@ public class ToolCallingRegistryService {
         toolMetadataRegistry = new HashMap<>();
         
         // GENERAL / PROJECT
-        register("getMyProjects", Set.of(ToolScope.PROJECT, ToolScope.GENERAL, ToolScope.TASK), List.of("project", "du an", "my", "da", "task", "tao task", "tạo task"), 50, true);
+        register("queryProjects", Set.of(ToolScope.PROJECT, ToolScope.GENERAL, ToolScope.TASK), List.of("project", "du an", "my", "da", "task", "tao task", "tạo task"), 50, true);
         register("getProjectStatus", Set.of(ToolScope.PROJECT), List.of("status", "tinh trang", "tien do"), 40, false);
         register("getProjectLabels", Set.of(ToolScope.PROJECT), List.of("label", "nhan"), 10, false);
         register("createProject", Set.of(ToolScope.PROJECT), List.of("create project", "tao du an"), 30, false);
@@ -64,8 +64,7 @@ public class ToolCallingRegistryService {
 
         // TASK
         register("getTaskDetails", Set.of(ToolScope.TASK), List.of("chi tiet", "detail", "cv", "nv"), 50, true);
-        register("getTasksByProject", Set.of(ToolScope.TASK, ToolScope.PROJECT), List.of("list task", "danh sach task", "cac cong viec", "cv", "nv"), 50, true);
-        register("getUnassignedTasksByProject", Set.of(ToolScope.TASK, ToolScope.PROJECT, ToolScope.ASSIGNMENT), List.of("unassigned", "not assigned", "chua gan", "chua phan cong", "chua duoc phan cong", "trong", "ch"), 40, false);
+        register("queryTasks", Set.of(ToolScope.TASK, ToolScope.PROJECT, ToolScope.ASSIGNMENT), List.of("list task", "danh sach task", "cac cong viec", "cv", "nv", "unassigned", "not assigned", "chua gan", "chua phan cong", "chua duoc phan cong", "trong", "ch"), 60, true);
         register("getSubtasks", Set.of(ToolScope.TASK), List.of("subtask", "task con"), 20, false);
         register("createTask", Set.of(ToolScope.TASK), List.of("create task", "new task", "tao task", "tạo task", "tao cong viec", "tạo công việc", "them task", "them cong viec"), 60, false);
         register("updateTask", Set.of(ToolScope.TASK), List.of("update task", "cap nhat cong viec", "sua task"), 30, false);
@@ -101,7 +100,7 @@ public class ToolCallingRegistryService {
         register("markAllNotificationsRead", Set.of(ToolScope.NOTIFICATION), List.of("mark all read", "doc tat ca thong bao", "đọc tất cả thông báo", "tat ca da doc"), 50, false);
 
         // MEMBER / ASSIGNMENT / AHP
-        register("getProjectMembers", Set.of(ToolScope.MEMBER, ToolScope.PROJECT), List.of("member", "thanh vien"), 40, false);
+        register("queryProjectMembers", Set.of(ToolScope.MEMBER, ToolScope.PROJECT), List.of("member", "thanh vien"), 40, false);
         register("getMemberWorkload", Set.of(ToolScope.MEMBER, ToolScope.PROJECT), List.of("workload", "khoi luong", "ban"), 30, false);
         register("getMemberWorkloadByMemberId", Set.of(ToolScope.MEMBER), List.of("workload", "khoi luong"), 20, false);
         register("updateMemberRole", Set.of(ToolScope.MEMBER, ToolScope.PROJECT), List.of("role", "vai tro", "quyen"), 20, false);
@@ -242,11 +241,32 @@ public class ToolCallingRegistryService {
                         .arguments(args)
                         .build();
             }
-            return executor.execute(request, null);
+            String result = executor.execute(request, null);
+            return minimizeJson(result);
         } catch (Exception ex) {
             log.error("[AI Tools] Tool execution failed for {}: {}", request.name(), ex.getMessage(), ex);
             return "Tool execution failed: " + ex.getMessage();
         }
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper COMPACT_MAPPER = com.fasterxml.jackson.databind.json.JsonMapper.builder()
+            .addModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule())
+            .build();
+
+    private String minimizeJson(String text) {
+        if (text == null || text.isBlank()) {
+            return text;
+        }
+        String trimmed = text.trim();
+        if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+            try {
+                Object json = COMPACT_MAPPER.readTree(trimmed);
+                return COMPACT_MAPPER.writeValueAsString(json);
+            } catch (Exception e) {
+                return text;
+            }
+        }
+        return text;
     }
 
     private void normalizeToolArguments(String toolName, Map<String, Object> args) {

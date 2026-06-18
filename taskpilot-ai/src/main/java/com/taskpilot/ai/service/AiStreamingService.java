@@ -101,6 +101,7 @@ public class AiStreamingService {
     private final ToolCallingRegistryService toolCallingRegistryService;
     private final HeuristicConfigProvider heuristicConfigProvider;
     private final ThinkingNarratorService thinkingNarratorService;
+    private final com.taskpilot.ai.gatekeeper.GatekeeperService gatekeeperService;
     private final TokenCountEstimator tokenCountEstimator;
     private final ObjectMapper objectMapper;
     private final UserProfilePort userProfilePort;
@@ -136,8 +137,9 @@ public class AiStreamingService {
     private int maxToolResultMemoryChars;
 
     private static final String MASTER_PROMPT_TEMPLATE = """
-            You are the Senior Project Manager (TaskPilot Agent) of the TaskPilot system. Your task is to
-            recommend task assignments based on analytical data.
+            You are the Backend Executor Agent of the TaskPilot system. Your SOLE purpose is to execute system instructions by calling the appropriate tools.
+            YOU MUST NOT answer the user's question directly with text. YOU MUST ONLY call tools to fetch data or perform actions.
+            If the instruction tells you to fetch data or perform an action, you MUST call the relevant tool(s). Do NOT generate conversational text.
 
             [CURRENT SYSTEM CONTEXT]
             - Today's Date: {{current_date}}
@@ -192,16 +194,25 @@ public class AiStreamingService {
               asked to assign immediately, call recommendAndAssignTask with those skills and difficulty so the
               pending confirmation saves the task skills and assigns the task together. If the user only wants to
               update task skills, call updateTaskRequiredSkills.
-            - Multi-step user requests are allowed. You may call tools repeatedly across rounds when needed:
-              first read data, then recommend candidates, then write assignments if the user clearly asked to apply.
+            - Multi-step user requests are allowed. However, to minimize processing time, you MUST call multiple tools IN PARALLEL whenever possible. If you need data from different sources (e.g. projects, tasks, and members), call all the relevant read tools simultaneously in a single turn instead of waiting for one to finish before calling the next. Only use sequential rounds when a subsequent tool call strictly depends on the result of a previous one.
+            - PARALLEL CALLING EXAMPLE: If the user says "lấy danh sách dự án và kiểm tra task hôm nay", you MUST:
+              Step 1: Call queryProjects() to get projects. After receiving the result with projectId:
+              Step 2: Call queryTasks(projectId=X, assigneeId=currentUserId) AND queryProjectMembers(projectId=X) simultaneously in the SAME turn.
+              Do NOT call them one-by-one in separate turns.
+            - CRITICAL TOOL FORMAT: You MUST use native JSON function calling. DO NOT output pseudo-code like <tool_call> toolName(...) </tool_call>. If native calling fails or you must force a tool call via text, you MUST output EXACTLY this JSON format and nothing else:
+              ```json
+              { "tool": "toolName", "arguments": { "arg1": "value", "arg2": true } }
+              ```
             - Any create/update/delete/assignment tool may return confirmationRequired=true instead of writing data.
               In that case, tell the user exactly what will change and wait for a final confirmation. Do not claim
               the change has been applied until confirmPendingAction returns a success result.
+            - IF A TOOL RETURNS "Pending action not found or expired", DO NOT call confirmPendingAction again! Inform the user that the action expired.
+            - TO FETCH DATA: You MUST call the appropriate read tools (e.g. `queryProjects`, `queryTasks`). NEVER assume you have the data or that the user has no data unless you have explicitly called a read tool and received an empty result.
             - When you need additional structured information from the user, include a fenced `taskpilot-form`
               JSON block so the frontend can render an interactive form.
               CRITICAL FORM RULES:
-              1. DO NOT tell the user to run tools. If a user asks to "tạo task" (create task), you MUST immediately call `getMyProjects` to fetch their projects BEFORE responding with a form. Do NOT generate a `taskpilot-form` in the same turn if you haven't called the tool yet!
-              2. For ID fields (projectId, sprintId, assigneeId), use `type: "number"`. DO NOT provide an `options` array; the frontend will automatically fetch and convert them to dropdowns. However, you MUST still call `getMyProjects` first to know if the user even has projects.
+              1. DO NOT tell the user to run tools. If a user asks to "tạo task" (create task), you MUST immediately call `queryProjects` to fetch their projects BEFORE responding with a form. Do NOT generate a `taskpilot-form` in the same turn if you haven't called the tool yet!
+              2. For ID fields (projectId, sprintId, assigneeId), use `type: "number"`. DO NOT provide an `options` array; the frontend will automatically fetch and convert them to dropdowns. However, you MUST still call `queryProjects` first to know if the user even has projects.
               3. For lists of IDs or multiple selections (e.g., requiredSkillIds, labelIds), you MUST use `type: "multiselect"` instead of "select" and provide an `options` array.
               4. Only ask for fields that are truly missing.
               5. For `createTask`, ONLY `projectId` and `title` are required. `sprintId`, `difficultyLevel`, `startDate`, `dueDate`, etc. MUST have `required: false`.
@@ -313,10 +324,18 @@ public class AiStreamingService {
 
         String finalClientMessageId = effectiveClientMessageId;
         executor.submit(() -> {
-            safeSend(emitter, "model", modelName, null);
-            safeSend(emitter, "phase", Phase.THINKING.name(), null);
-            doStream(emitter, emitterCompleted, session, sessionId, userId, userInput, requestHistory, systemPrompt,
-                    selectedModel, modelName, startTime, false, finalClientMessageId, requiresAHP, requiresTools, 0);
+            try {
+                safeSend(emitter, "model", modelName, null);
+                safeSend(emitter, "phase", Phase.THINKING.name(), null);
+                doStream(emitter, emitterCompleted, session, sessionId, userId, userInput, requestHistory, systemPrompt,
+                        selectedModel, modelName, startTime, false, finalClientMessageId, requiresAHP, requiresTools, 0);
+            } catch (Exception e) {
+                log.error("[SSE] Exception in stream thread for session {}: {}", sessionId, e.getMessage(), e);
+                chatStreamStatusService.updatePhase(sessionId, finalClientMessageId, Phase.FAILED, modelName, null, e.getMessage());
+                safeSend(emitter, "phase", Phase.FAILED.name(), null);
+                safeSend(emitter, "error", java.util.Map.of("error", e.getMessage(), "type", "generation_failed"), org.springframework.http.MediaType.APPLICATION_JSON);
+                safeComplete(emitter, emitterCompleted);
+            }
         });
 
         emitter.onTimeout(() -> {
@@ -399,6 +418,27 @@ public class AiStreamingService {
         List<Map<String, Object>> toolCallSummaries = new ArrayList<>();
         LinkedHashSet<String> toolNames = new LinkedHashSet<>();
 
+        // Start thinking block immediately to reduce perceived latency
+        String initialStep = getInitialStep(userInput);
+        safeSend(emitter, "token", java.util.Map.of("token", "<think>\n" + initialStep + "\n\n"), MediaType.APPLICATION_JSON);
+
+        final List<String> periodicSteps = getPeriodicSteps(userInput);
+        final java.util.concurrent.atomic.AtomicInteger stepIndex = new java.util.concurrent.atomic.AtomicInteger(0);
+        final ScheduledFuture<?>[] futureHolder = new ScheduledFuture<?>[1];
+        futureHolder[0] = timeoutScheduler.scheduleAtFixedRate(() -> {
+            if (emitterCompleted.get() || clientDisconnected.get() || generatingMarked.get()) {
+                if (futureHolder[0] != null) {
+                    futureHolder[0].cancel(false);
+                }
+                return;
+            }
+            int idx = stepIndex.getAndIncrement();
+            if (idx < periodicSteps.size()) {
+                String stepText = periodicSteps.get(idx) + "\n\n";
+                safeSend(emitter, "token", java.util.Map.of("token", stepText), MediaType.APPLICATION_JSON);
+            }
+        }, 10, 10, TimeUnit.SECONDS);
+
         streamRound(
                 emitter,
                 emitterCompleted,
@@ -427,6 +467,158 @@ public class AiStreamingService {
                 initialModelKeyAttempts);
     }
 
+    private String getInitialStep(String userInput) {
+        if (userInput == null) {
+            userInput = "";
+        }
+        String inputLower = userInput.toLowerCase(Locale.ROOT);
+
+        boolean isNotification = inputLower.contains("thông báo") || inputLower.contains("thong bao") || inputLower.contains("tb") 
+                || inputLower.contains("tin nhắn") || inputLower.contains("tin nhan") || inputLower.contains("chưa đọc") 
+                || inputLower.contains("chua doc") || inputLower.contains("unread");
+
+        boolean isAssignment = inputLower.contains("phân công") || inputLower.contains("phan cong") 
+                || inputLower.contains("gợi ý") || inputLower.contains("goi y") || inputLower.contains("rcm") 
+                || inputLower.contains("gán") || inputLower.contains("gan") || inputLower.contains("assign") 
+                || inputLower.contains("kỹ năng") || inputLower.contains("ky nang") || inputLower.contains("skill") 
+                || inputLower.contains("ahp") || inputLower.contains("đề xuất") || inputLower.contains("de xuat");
+
+        boolean isTask = inputLower.contains("task") || inputLower.contains("nhiệm vụ") || inputLower.contains("nhiem vu") 
+                || inputLower.contains("công việc") || inputLower.contains("cong viec") || inputLower.contains("nv") 
+                || inputLower.contains("việc") || inputLower.contains("viec") || inputLower.contains("deadline") 
+                || inputLower.contains("hạn") || inputLower.contains("han") || inputLower.contains("trễ") 
+                || inputLower.contains("tre") || inputLower.contains("to-do") || inputLower.contains("todo");
+
+        boolean isProject = inputLower.contains("dự án") || inputLower.contains("du an") || inputLower.contains("da") 
+                || inputLower.contains("sprint") || inputLower.contains("mốc thời gian") || inputLower.contains("moc thoi gian") 
+                || inputLower.contains("tiến độ") || inputLower.contains("tien do") || inputLower.contains("tài liệu") 
+                || inputLower.contains("tai lieu") || inputLower.contains("tập tin") || inputLower.contains("tap tin")
+                || inputLower.contains("thành viên") || inputLower.contains("thanh vien") || inputLower.contains("người tham gia")
+                || inputLower.contains("nguoi tham gia");
+
+        int matchedGroups = 0;
+        if (isNotification) matchedGroups++;
+        if (isAssignment) matchedGroups++;
+        if (isTask) matchedGroups++;
+        if (isProject) matchedGroups++;
+
+        if (matchedGroups >= 2) {
+            return "Phân tích các yêu cầu tổng hợp liên quan đến công việc và dự án...";
+        }
+
+        if (isNotification) {
+            return "Phân tích yêu cầu về thông báo...";
+        }
+
+        if (isAssignment) {
+            return "Phân tích yêu cầu về nhân sự và đề xuất phân công...";
+        }
+
+        if (isTask) {
+            return "Phân tích yêu cầu về nhiệm vụ và công việc...";
+        }
+
+        if (isProject) {
+            return "Phân tích yêu cầu về dự án và thành viên...";
+        }
+
+        return "Phân tích yêu cầu của bạn...";
+    }
+
+    private List<String> getPeriodicSteps(String userInput) {
+        if (userInput == null) {
+            userInput = "";
+        }
+        String inputLower = userInput.toLowerCase(Locale.ROOT);
+
+        boolean isNotification = inputLower.contains("thông báo") || inputLower.contains("thong bao") || inputLower.contains("tb") 
+                || inputLower.contains("tin nhắn") || inputLower.contains("tin nhan") || inputLower.contains("chưa đọc") 
+                || inputLower.contains("chua doc") || inputLower.contains("unread");
+
+        boolean isAssignment = inputLower.contains("phân công") || inputLower.contains("phan cong") 
+                || inputLower.contains("gợi ý") || inputLower.contains("goi y") || inputLower.contains("rcm") 
+                || inputLower.contains("gán") || inputLower.contains("gan") || inputLower.contains("assign") 
+                || inputLower.contains("kỹ năng") || inputLower.contains("ky nang") || inputLower.contains("skill") 
+                || inputLower.contains("ahp") || inputLower.contains("đề xuất") || inputLower.contains("de xuat");
+
+        boolean isTask = inputLower.contains("task") || inputLower.contains("nhiệm vụ") || inputLower.contains("nhiem vu") 
+                || inputLower.contains("công việc") || inputLower.contains("cong viec") || inputLower.contains("nv") 
+                || inputLower.contains("việc") || inputLower.contains("viec") || inputLower.contains("deadline") 
+                || inputLower.contains("hạn") || inputLower.contains("han") || inputLower.contains("trễ") 
+                || inputLower.contains("tre") || inputLower.contains("to-do") || inputLower.contains("todo");
+
+        boolean isProject = inputLower.contains("dự án") || inputLower.contains("du an") || inputLower.contains("da") 
+                || inputLower.contains("sprint") || inputLower.contains("mốc thời gian") || inputLower.contains("moc thoi gian") 
+                || inputLower.contains("tiến độ") || inputLower.contains("tien do") || inputLower.contains("tài liệu") 
+                || inputLower.contains("tai lieu") || inputLower.contains("tập tin") || inputLower.contains("tap tin")
+                || inputLower.contains("thành viên") || inputLower.contains("thanh vien") || inputLower.contains("người tham gia")
+                || inputLower.contains("nguoi tham gia");
+
+        int matchedGroups = 0;
+        if (isNotification) matchedGroups++;
+        if (isAssignment) matchedGroups++;
+        if (isTask) matchedGroups++;
+        if (isProject) matchedGroups++;
+
+        if (matchedGroups >= 2) {
+            return List.of(
+                "Kết nối cơ sở dữ liệu kiểm tra thông tin liên quan...",
+                "Truy xuất danh sách dự án và thành viên tương ứng...",
+                "Rà soát danh sách nhiệm vụ và đối chiếu thời hạn (deadline)...",
+                "Đối chiếu thông tin và xử lý dữ liệu tổng hợp...",
+                "Chuẩn bị thông tin phản hồi chi tiết..."
+            );
+        }
+
+        if (isNotification) {
+            return List.of(
+                "Kết nối dịch vụ thông báo để kiểm tra dữ liệu...",
+                "Truy xuất danh sách các thông báo chưa đọc...",
+                "Phân tích nội dung và sắp xếp thông báo theo thời gian...",
+                "Cập nhật trạng thái hiển thị các thông báo mới...",
+                "Tổng hợp thông tin thông báo chi tiết..."
+            );
+        }
+
+        if (isAssignment) {
+            return List.of(
+                "Truy xuất thông tin kỹ năng và khối lượng công việc của thành viên...",
+                "Đánh giá yêu cầu kỹ năng và độ khó của nhiệm vụ...",
+                "Áp dụng mô hình phân tích AHP để đánh giá độ phù hợp...",
+                "So sánh hiệu suất và mức độ sẵn sàng của các thành viên...",
+                "Tối ưu hóa phương án đề xuất phân công công việc..."
+            );
+        }
+
+        if (isTask) {
+            return List.of(
+                "Kiểm tra danh sách nhiệm vụ được giao cho bạn...",
+                "Rà soát thời hạn (deadline) và mức độ ưu tiên của các công việc...",
+                "Kiểm tra các task đến hạn hoặc bị trễ hạn...",
+                "Phân tích trạng thái tiến độ các nhiệm vụ hiện tại...",
+                "Tổng hợp thông tin công việc chi tiết..."
+            );
+        }
+
+        if (isProject) {
+            return List.of(
+                "Truy xuất danh sách dự án bạn tham gia...",
+                "Tải thông tin chi tiết và tiến độ các dự án...",
+                "Kiểm tra danh sách thành viên trong các dự án liên quan...",
+                "Rà soát các mốc thời gian và trạng thái hoạt động của dự án...",
+                "Tổng hợp thông tin dự án chi tiết..."
+            );
+        }
+
+        return List.of(
+            "Kết nối cơ sở dữ liệu để kiểm tra thông tin...",
+            "Truy xuất các thông tin liên quan từ cơ sở dữ liệu...",
+            "Tiến hành đối chiếu và kiểm tra tính toàn vẹn của dữ liệu...",
+            "Lập phương án xử lý tối ưu cho yêu cầu...",
+            "Chuẩn bị phản hồi chi tiết..."
+        );
+    }
+
     private void streamRound(SseEmitter emitter,
             AtomicBoolean emitterCompleted,
             ChatSessionEntity session,
@@ -452,6 +644,8 @@ public class AiStreamingService {
             LinkedHashSet<String> toolNames,
             int retryCount,
             int modelKeyAttempts) {
+        final String resolvedUserInput = userInput;
+
         List<ChatMessage> sanitizedHistory = cleanAndAlternateRoles(
                 compactHistoryForRequest(
                         sanitizeHistoryForTools(history),
@@ -599,28 +793,46 @@ public class AiStreamingService {
                         firstModelSignalReceived.set(true);
                         fullResponse.append(partialResponse);
 
-                        // Thinking expansion logic: buffer tokens between <think> and </think>
-                        if (partialResponse.contains("<think>")) {
+                        boolean isExecutor = requiresTools && !routingService.isGeminiModel(model);
+
+                        boolean hasThinkOpen = partialResponse.contains("<think>");
+                        boolean hasThinkClose = partialResponse.contains("</think>");
+
+                        if (hasThinkOpen) {
                             insideThink.set(true);
                         }
                         if (insideThink.get()) {
                             thinkingBuffer.append(partialResponse);
                         }
-                        if (partialResponse.contains("</think>")) {
-                            insideThink.set(false);
-                        }
 
-                        if (generatingMarked.compareAndSet(false, true)) {
-                            chatStreamStatusService.updatePhase(sessionId, clientMessageId,
-                                    Phase.GENERATING, modelName, null, null);
-                            if (!safeSend(emitter, "phase", Phase.GENERATING.name(), null)) {
-                                clientDisconnected.set(true);
+                        if (!isExecutor && !generatingMarked.get()) {
+                            if (hasThinkClose) {
+                                insideThink.set(false);
+                                safeSend(emitter, "token", Map.of("token", "</think>\n\n"), MediaType.APPLICATION_JSON);
+                                generatingMarked.set(true);
+                                chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.GENERATING, modelName, null, null);
+                                safeSend(emitter, "phase", Phase.GENERATING.name(), null);
+                            } else if (!insideThink.get() && !hasThinkOpen && !partialResponse.trim().isEmpty()) {
+                                safeSend(emitter, "token", Map.of("token", "</think>\n\n"), MediaType.APPLICATION_JSON);
+                                generatingMarked.set(true);
+                                chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.GENERATING, modelName, null, null);
+                                safeSend(emitter, "phase", Phase.GENERATING.name(), null);
                             }
                         }
 
+                        if (hasThinkClose) {
+                            insideThink.set(false);
+                        }
+
                         if (!clientDisconnected.get()) {
-                            if (!safeSend(emitter, "token", Map.of("token", partialResponse), MediaType.APPLICATION_JSON)) {
-                                clientDisconnected.set(true);
+                            boolean shouldStream = !isExecutor || insideThink.get() || hasThinkOpen || hasThinkClose;
+                            if (shouldStream) {
+                                String clientToken = partialResponse.replace("<think>", "").replace("</think>", "");
+                                if (!clientToken.isEmpty()) {
+                                    if (!safeSend(emitter, "token", Map.of("token", clientToken), MediaType.APPLICATION_JSON)) {
+                                        clientDisconnected.set(true);
+                                    }
+                                }
                             }
                         }
                     }
@@ -648,6 +860,137 @@ public class AiStreamingService {
 
                         if (aiMessage != null && aiMessage.text() != null && !aiMessage.hasToolExecutionRequests()) {
                             String text = aiMessage.text().trim();
+                            List<ToolExecutionRequest> extractedRequests = new ArrayList<>();
+                            
+                            // Fallback for models (like Groq) that hallucinate tool calls as raw JSON text
+                            if (text.contains("\"tool\"") || text.contains("```json")) {
+                                // Try to match ```json { "tool": "name", "arguments": {} } ```
+                                Matcher m = Pattern.compile("(?s)```json\\s*(\\{\\s*\"tool\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"arguments\"\\s*:\\s*(\\{.*?\\})\\s*\\})\\s*```").matcher(text);
+                                while (m.find()) {
+                                    extractedRequests.add(ToolExecutionRequest.builder()
+                                        .id(UUID.randomUUID().toString())
+                                        .name(m.group(2))
+                                        .arguments(m.group(3))
+                                        .build());
+                                }
+                                
+                                // Try to match raw {"tool":"name","arguments":{}} anywhere in the text
+                                if (extractedRequests.isEmpty()) {
+                                    Matcher m2 = Pattern.compile("(?s)(\\{\\s*\"tool\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"arguments\"\\s*:\\s*(\\{.*?\\})\\s*\\})").matcher(text);
+                                    while (m2.find()) {
+                                        extractedRequests.add(ToolExecutionRequest.builder()
+                                            .id(UUID.randomUUID().toString())
+                                            .name(m2.group(2))
+                                            .arguments(m2.group(3))
+                                            .build());
+                                    }
+                                }
+                            }
+
+                            // Fallback for XML-like tool calls
+                            if (extractedRequests.isEmpty() && text.contains("<tool_call>")) {
+                                Matcher toolCallMatcher = Pattern.compile("(?s)<tool_call>(.*?)</tool_call>").matcher(text);
+                                while (toolCallMatcher.find()) {
+                                    String content = toolCallMatcher.group(1);
+                                    
+                                    // Parse function name
+                                    String tName = null;
+                                    Matcher funcMatcher = Pattern.compile("<function(?:\\s*=\\s*|\\s+name\\s*=\\s*\"?)([a-zA-Z0-9_]+)\"?[\\s>]*").matcher(content);
+                                    if (funcMatcher.find()) {
+                                        tName = funcMatcher.group(1);
+                                    } else {
+                                        Matcher funcTagMatcher = Pattern.compile("<function>\\s*([a-zA-Z0-9_]+)\\s*</function>").matcher(content);
+                                        if (funcTagMatcher.find()) {
+                                            tName = funcTagMatcher.group(1);
+                                        }
+                                    }
+                                    
+                                    if (tName != null) {
+                                        Map<String, String> params = new LinkedHashMap<>();
+                                        Matcher paramMatcher = Pattern.compile("<parameter(?:\\s*=\\s*|\\s+name\\s*=\\s*\"?)([a-zA-Z0-9_]+)\"?[\\s>]*([^<]*?)</parameter>").matcher(content);
+                                        while (paramMatcher.find()) {
+                                            String pName = paramMatcher.group(1);
+                                            String pVal = paramMatcher.group(2).trim();
+                                            if (pVal.endsWith(">")) {
+                                                pVal = pVal.substring(0, pVal.length() - 1).trim();
+                                            }
+                                            params.put(pName, pVal);
+                                        }
+                                        
+                                        String jsonArgs = "{";
+                                        if (!params.isEmpty()) {
+                                            List<String> jsonPairs = new ArrayList<>();
+                                            for (Map.Entry<String, String> entry : params.entrySet()) {
+                                                String k = entry.getKey();
+                                                String v = entry.getValue();
+                                                if (v.equalsIgnoreCase("null") || v.equalsIgnoreCase("true") || v.equalsIgnoreCase("false") || v.matches("-?\\d+")) {
+                                                    jsonPairs.add("\"" + k + "\":" + v.toLowerCase());
+                                                } else {
+                                                    jsonPairs.add("\"" + k + "\":\"" + v.replace("\"", "\\\"") + "\"");
+                                                }
+                                            }
+                                            jsonArgs += String.join(",", jsonPairs);
+                                        }
+                                        jsonArgs += "}";
+                                        
+                                        extractedRequests.add(ToolExecutionRequest.builder()
+                                            .id(UUID.randomUUID().toString())
+                                            .name(tName)
+                                            .arguments(jsonArgs)
+                                            .build());
+                                    }
+                                }
+                            }
+
+                            // Fallback for OpenRouter Gemma models leaking <tool_call> tags
+                            if (extractedRequests.isEmpty() && text.contains("<tool_call>")) {
+                                Matcher m = Pattern.compile("(?s)<tool_call>\\s*([a-zA-Z0-9_]+)[({](.*?)[)}]\\s*</tool_call>").matcher(text);
+                                while (m.find()) {
+                                    String tName = m.group(1);
+                                    String argsRaw = m.group(2);
+                                    String jsonArgs = "{";
+                                    if (!argsRaw.isBlank()) {
+                                        String[] pairs = argsRaw.split(",");
+                                        List<String> jsonPairs = new ArrayList<>();
+                                        for (String pair : pairs) {
+                                            String[] kv = pair.split("[=:]", 2);
+                                            if (kv.length == 2) {
+                                                String k = kv[0].trim();
+                                                String v = kv[1].trim();
+                                                if (v.equalsIgnoreCase("null") || v.equalsIgnoreCase("true") || v.equalsIgnoreCase("false") || v.matches("-?\\d+")) {
+                                                    jsonPairs.add("\"" + k + "\":" + v);
+                                                } else {
+                                                    jsonPairs.add("\"" + k + "\":\"" + v.replace("\"", "\\\"") + "\"");
+                                                }
+                                            }
+                                        }
+                                        jsonArgs += String.join(",", jsonPairs);
+                                    }
+                                    jsonArgs += "}";
+                                    extractedRequests.add(ToolExecutionRequest.builder()
+                                        .id(UUID.randomUUID().toString())
+                                        .name(tName)
+                                        .arguments(jsonArgs)
+                                        .build());
+                                }
+                            }
+
+                            if (!extractedRequests.isEmpty()) {
+                                log.warn("[AiChat] Recovered hallucinated tool calls from text!");
+                                String cleanedText = text.replaceAll("(?s)```json\\s*\\{.*?\\}\\s*```", "").trim();
+                                cleanedText = cleanedText.replaceAll("(?s)<tool_call>.*?</tool_call>", "").trim();
+                                cleanedText = cleanedText.replaceAll("(?s)^\\s*\\{.*?\\}\\s*$", "").trim();
+                                if (cleanedText.isBlank()) {
+                                    cleanedText = "Đang kết nối hệ thống để gọi công cụ...";
+                                }
+                                // Add <think> tags around the cleaned text so the UI knows it's reasoning
+                                if (!cleanedText.contains("<think>")) {
+                                    cleanedText = "<think>\n" + cleanedText + "\n</think>";
+                                }
+                                safeSend(emitter, "token", java.util.Map.of("token", cleanedText), org.springframework.http.MediaType.APPLICATION_JSON);
+                                aiMessage = dev.langchain4j.data.message.AiMessage.from(cleanedText, extractedRequests);
+                            }
+                            
                             boolean explicitMissingTool = text.startsWith("MISSING_TOOL:");
                             
                             if (explicitMissingTool && retryCount > 0) {
@@ -773,6 +1116,27 @@ public class AiStreamingService {
                 if ((rawResponseText == null || rawResponseText.isBlank()) && aiMessage != null && aiMessage.text() != null) {
                     rawResponseText = aiMessage.text();
                 }
+
+                if (requiresTools && !routingService.isGeminiModel(model)) {
+                    log.info("[Multi-Agent] Chặng 3: Executor finished. Forwarding result to Communicator (Gemma) for streaming...");
+                    try {
+                        emitter.send(SseEmitter.event().id(clientMessageId).name("status").data("🟢 Hoàn tất truy xuất! Đang tổng hợp kết quả..."));
+                    } catch (Exception ignored) {}
+                    
+                    safeSend(emitter, "token", java.util.Map.of("token", "\n\n"), org.springframework.http.MediaType.APPLICATION_JSON);
+                    
+                    String promptForGemma = "Đây là kết quả hệ thống vừa truy xuất từ Database. Hãy trả lời trực tiếp cho người dùng dựa trên thông tin này một cách thân thiện, ngắn gọn và chính xác. TUYỆT ĐỐI KHÔNG sinh ra thẻ <think> hay bất kỳ quá trình suy nghĩ nào khác. Trả lời trực tiếp vào nội dung câu hỏi: \n" + rawResponseText;
+                    
+                    forceTextOnlyResponse(
+                            emitter, emitterCompleted, session, sessionId, userId, userInput,
+                            history, systemPrompt, routingService.getReasoningTextModel(), routingService.getModelName(routingService.getReasoningTextModel()), startTime,
+                            isFallbackAttempt, clientMessageId, fullResponse,
+                            clientDisconnected, generatingMarked, requiresAHP,
+                            toolCallSummaries, toolNames,
+                            promptForGemma);
+                    return;
+                }
+
                 String responseText = appendTaskPilotBlocks(stripThinkBlocks(rawResponseText), toolCallSummaries);
                 String extractedReasoning = extractAllThinkBlocks(rawResponseText);
 
@@ -806,6 +1170,10 @@ public class AiStreamingService {
 
                 String cleanResponse = sessionChatMemoryService.sanitizeAssistantMessage(responseText);
                 sessionChatMemoryService.appendAssistantMessage(sessionId, cleanResponse, systemPrompt);
+
+                if (generatingMarked.compareAndSet(false, true)) {
+                    safeSend(emitter, "token", Map.of("token", "</think>\n\n"), MediaType.APPLICATION_JSON);
+                }
 
                 chatStreamStatusService.updatePhase(sessionId, clientMessageId,
                         Phase.FINALIZED, modelName, assistantMsg.getId(), null);
@@ -996,10 +1364,10 @@ public class AiStreamingService {
 
         // Tool data is already in the prompt at this point. Use the fast text-only
         // finalizer instead of a reasoning/tool model so the UI gets a real answer quickly.
-        StreamingChatModel textModel = routingService.getFallbackTextModel();
-        String textModelName = routingService.getModelName(textModel);
-        log.info("[ForceTextOnly] Using fast text-only finalizer {} after {} for session {}",
-                textModelName, modelName, sessionId);
+        StreamingChatModel textModel = model;
+        String textModelName = modelName;
+        log.info("[ForceTextOnly] Using text-only finalizer {} for session {}",
+                textModelName, sessionId);
 
         List<ChatMessage> textOnlyHistory = new ArrayList<>(sanitizeHistoryForTools(history));
         textOnlyHistory.add(SystemMessage.from(guardrailInstruction));
@@ -1038,10 +1406,14 @@ public class AiStreamingService {
                         toolCallSummaries,
                         toolNames,
                         fallbackResponse,
-                        null);
+                        null,
+                        generatingMarked);
                 safeComplete(emitter, emitterCompleted);
             }
         }, Math.max(1, textOnlyFirstResponseTimeoutSeconds), TimeUnit.SECONDS);
+
+        final AtomicBoolean insideLlmThink = new AtomicBoolean(false);
+        final StringBuilder filterBuffer = new StringBuilder();
 
         textModel.chat(request, new StreamingChatResponseHandler() {
             @Override
@@ -1052,17 +1424,48 @@ public class AiStreamingService {
                 firstModelSignalReceived.set(true);
                 roundResponse.append(partialResponse);
 
-                if (generatingMarked.compareAndSet(false, true)) {
-                    chatStreamStatusService.updatePhase(sessionId, clientMessageId,
-                            Phase.GENERATING, textModelName, null, null);
-                    if (!safeSend(emitter, "phase", Phase.GENERATING.name(), null)) {
-                        clientDisconnected.set(true);
-                    }
-                }
+                filterBuffer.append(partialResponse);
+                String content = filterBuffer.toString();
+                filterBuffer.setLength(0);
 
-                if (!clientDisconnected.get()) {
-                    if (!safeSend(emitter, "token", Map.of("token", partialResponse), MediaType.APPLICATION_JSON)) {
-                        clientDisconnected.set(true);
+                while (!content.isEmpty()) {
+                    if (insideLlmThink.get()) {
+                        int closeIdx = content.indexOf("</think>");
+                        if (closeIdx != -1) {
+                            insideLlmThink.set(false);
+                            content = content.substring(closeIdx + 8);
+                        } else {
+                            int potentialIdx = getPotentialPrefixIndex(content, "</think>");
+                            if (potentialIdx != -1) {
+                                filterBuffer.append(content.substring(potentialIdx));
+                            }
+                            break;
+                        }
+                    } else {
+                        int openIdx = content.indexOf("<think>");
+                        if (openIdx != -1) {
+                            String before = content.substring(0, openIdx);
+                            if (!before.isEmpty()) {
+                                sendTokenToClient(emitter, before, clientDisconnected, generatingMarked, sessionId, clientMessageId, textModelName);
+                            }
+                            insideLlmThink.set(true);
+                            content = content.substring(openIdx + 7);
+                        } else {
+                            int potentialOpen = getPotentialPrefixIndex(content, "<think>");
+                            int potentialClose = getPotentialPrefixIndex(content, "</think>");
+                            int potentialIdx = Math.max(potentialOpen, potentialClose);
+
+                            if (potentialIdx != -1) {
+                                String before = content.substring(0, potentialIdx);
+                                if (!before.isEmpty()) {
+                                    sendTokenToClient(emitter, before, clientDisconnected, generatingMarked, sessionId, clientMessageId, textModelName);
+                                }
+                                filterBuffer.append(content.substring(potentialIdx));
+                            } else {
+                                sendTokenToClient(emitter, content, clientDisconnected, generatingMarked, sessionId, clientMessageId, textModelName);
+                            }
+                            break;
+                        }
                     }
                 }
             }
@@ -1093,7 +1496,8 @@ public class AiStreamingService {
                         toolCallSummaries,
                         toolNames,
                         rawResponseText,
-                        completeResponse);
+                        completeResponse,
+                        generatingMarked);
                 safeComplete(emitter, emitterCompleted);
             }
 
@@ -1121,9 +1525,10 @@ public class AiStreamingService {
                             Phase.THINKING, fallbackName, null, null);
                     safeSend(emitter, "model", fallbackName + " (OpenRouter fallback)", null);
                     safeSend(emitter, "phase", Phase.THINKING.name(), null);
-                    doStreamWithKeyAttempts(emitter, emitterCompleted, session, sessionId, userId, userInput,
+                    forceTextOnlyResponse(emitter, emitterCompleted, session, sessionId, userId, userInput,
                             history, systemPrompt, fallback, fallbackName, startTime,
-                            true, clientMessageId, requiresAHP, false, 1, 1);
+                            true, clientMessageId, new StringBuilder(), clientDisconnected, generatingMarked, requiresAHP,
+                            toolCallSummaries, toolNames, guardrailInstruction);
                     return;
                 }
 
@@ -1152,7 +1557,8 @@ public class AiStreamingService {
             List<Map<String, Object>> toolCallSummaries,
             LinkedHashSet<String> toolNames,
             String rawResponseText,
-            ChatResponse completeResponse) {
+            ChatResponse completeResponse,
+            AtomicBoolean generatingMarked) {
         String responseText = appendTaskPilotBlocks(stripThinkBlocks(rawResponseText), toolCallSummaries);
         String extractedReasoning = extractAllThinkBlocks(rawResponseText);
 
@@ -1190,6 +1596,10 @@ public class AiStreamingService {
 
         String cleanResponse = sessionChatMemoryService.sanitizeAssistantMessage(responseText);
         sessionChatMemoryService.appendAssistantMessage(sessionId, cleanResponse, systemPrompt);
+
+        if (generatingMarked.compareAndSet(false, true)) {
+            safeSend(emitter, "token", Map.of("token", "</think>\n\n"), MediaType.APPLICATION_JSON);
+        }
 
         chatStreamStatusService.updatePhase(sessionId, clientMessageId,
                 Phase.FINALIZED, modelName, assistantMsg.getId(), null);
@@ -1244,6 +1654,9 @@ public class AiStreamingService {
         List<ToolExecutionResultMessage> results = new ArrayList<>();
 
         for (ToolExecutionRequest request : requests) {
+            String startMsg = "Truy cập hệ thống: " + getFriendlyToolName(request.name()) + "...\n\n";
+            safeSend(emitter, "token", Map.of("token", startMsg), MediaType.APPLICATION_JSON);
+
             String output;
             ToolExecutionContext.set(new ToolExecutionContext.Context(userId, sessionId, userInput));
             try {
@@ -1251,6 +1664,9 @@ public class AiStreamingService {
             } finally {
                 ToolExecutionContext.clear();
             }
+
+            String endMsg = "Kết quả: " + getFriendlyToolResultSummary(request.name(), output) + "\n\n";
+            safeSend(emitter, "token", Map.of("token", endMsg), MediaType.APPLICATION_JSON);
 
             Map<String, Object> eventPayload = new LinkedHashMap<>();
             eventPayload.put("name", request.name());
@@ -1268,6 +1684,91 @@ public class AiStreamingService {
         }
 
         return results;
+    }
+
+    private String getFriendlyToolName(String toolName) {
+        if (toolName == null) return "truy vấn hệ thống";
+        switch (toolName) {
+            case "getMyNotifications":
+            case "queryNotifications":
+                return "truy xuất danh sách thông báo";
+            case "getMyProjects":
+            case "queryProjects":
+                return "truy xuất danh sách dự án";
+            case "getProjectMembers":
+            case "queryProjectMembers":
+                return "truy xuất danh sách thành viên dự án";
+            case "getMyTasks":
+            case "queryTasks":
+                return "truy xuất danh sách nhiệm vụ";
+            case "getTaskDetails":
+                return "truy xuất chi tiết nhiệm vụ";
+            case "getProjectStatus":
+                return "truy xuất trạng thái dự án";
+            case "getMemberWorkload":
+                return "truy xuất khối lượng công việc thành viên";
+            case "recommendAssignmentCandidates":
+            case "recommendTaskAssignmentCandidates":
+                return "phân tích và gợi ý người thực hiện nhiệm vụ";
+            case "assignTaskToMember":
+            case "assignTaskToMemberByName":
+            case "recommendAndAssignTask":
+                return "đề xuất phân công nhiệm vụ";
+            default:
+                return "thực thi công cụ hệ thống (" + toolName + ")";
+        }
+    }
+
+    private String getFriendlyToolResultSummary(String toolName, String output) {
+        if (output == null || output.isBlank()) {
+            return "kết quả rỗng.";
+        }
+        if (output.contains("Tool execution failed") || output.contains("failed") || output.contains("Error")) {
+            return "gặp lỗi hệ thống hoặc không thể thực thi.";
+        }
+        
+        switch (toolName) {
+            case "getMyNotifications":
+            case "queryNotifications":
+                return "tìm thấy dữ liệu thông báo liên quan.";
+            case "getMyProjects":
+            case "queryProjects":
+                return "đã tải thông tin các dự án.";
+            case "getProjectMembers":
+            case "queryProjectMembers":
+                return "đã lấy danh sách thành viên thành công.";
+            case "getMyTasks":
+            case "queryTasks":
+                return "đã xác định các nhiệm vụ tương ứng.";
+            case "getTaskDetails":
+                return "đã lấy thông tin chi tiết nhiệm vụ.";
+            case "recommendAssignmentCandidates":
+            case "recommendTaskAssignmentCandidates":
+                return "đã hoàn tất tính toán điểm số và xếp hạng ứng viên phù hợp.";
+            default:
+                return "nhận được kết quả phản hồi từ hệ thống.";
+        }
+    }
+
+    private int getPotentialPrefixIndex(String content, String target) {
+        for (int i = 1; i < target.length(); i++) {
+            String prefix = target.substring(0, i);
+            if (content.endsWith(prefix)) {
+                return content.length() - prefix.length();
+            }
+        }
+        return -1;
+    }
+
+    private void sendTokenToClient(SseEmitter emitter, String token, AtomicBoolean clientDisconnected, AtomicBoolean generatingMarked, Long sessionId, String clientMessageId, String modelName) {
+        if (generatingMarked.compareAndSet(false, true)) {
+            safeSend(emitter, "token", Map.of("token", "</think>\n\n"), MediaType.APPLICATION_JSON);
+            chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.GENERATING, modelName, null, null);
+            safeSend(emitter, "phase", Phase.GENERATING.name(), null);
+        }
+        if (!clientDisconnected.get()) {
+            safeSend(emitter, "token", Map.of("token", token), MediaType.APPLICATION_JSON);
+        }
     }
 
     private String truncate(String text, int maxLength) {

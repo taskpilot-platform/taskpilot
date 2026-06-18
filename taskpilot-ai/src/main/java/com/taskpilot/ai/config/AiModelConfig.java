@@ -80,10 +80,10 @@ public class AiModelConfig {
         @Value("${ai.openrouter.base-url:https://openrouter.ai/api/v1}")
         private String openRouterBaseUrl;
 
-        @Value("${ai.openrouter.reasoning-model:nvidia/nemotron-3-ultra-550b-a55b:free}")
+        @Value("${ai.openrouter.reasoning-model:google/gemma-4-31b-it:free}")
         private String openRouterReasoningModelName;
 
-        @Value("${ai.openrouter.reasoning-fallback1-model:nvidia/nemotron-3-super-120b-a12b:free}")
+        @Value("${ai.openrouter.reasoning-fallback1-model:nvidia/nemotron-3-ultra-550b-a55b:free}")
         private String openRouterReasoningFallback1ModelName;
 
         @Value("${ai.openrouter.reasoning-fallback2-model:poolside/laguna-m.1:free}")
@@ -104,13 +104,13 @@ public class AiModelConfig {
         @Value("${ai.openrouter.reasoning-fallback7-model:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free}")
         private String openRouterReasoningFallback7ModelName;
 
-        @Value("${ai.openrouter.reasoning-fallback8-model:google/gemma-4-31b-it:free}")
+        @Value("${ai.openrouter.reasoning-fallback8-model:google/gemma-4-26b-a4b-it:free}")
         private String openRouterReasoningFallback8ModelName;
 
-        @Value("${ai.openrouter.reasoning-fallback9-model:google/gemma-4-26b-a4b-it:free}")
+        @Value("${ai.openrouter.reasoning-fallback9-model:openai/gpt-oss-20b:free}")
         private String openRouterReasoningFallback9ModelName;
 
-        @Value("${ai.openrouter.reasoning-fallback10-model:openai/gpt-oss-20b:free}")
+        @Value("${ai.openrouter.reasoning-fallback10-model:}")
         private String openRouterReasoningFallback10ModelName;
 
         @Value("${ai.model.timeout-seconds:60}")
@@ -124,6 +124,15 @@ public class AiModelConfig {
         public StreamingChatModel geminiFlashModel() {
                 log.info("[AI Config] Initializing PRIMARY Gemini model: {} (GoogleAiGemini)", geminiModelName);
                 return geminiStreamingModel(geminiModelName);
+        }
+
+        @Bean("geminiFlashChatModel")
+        public ChatModel geminiFlashChatModel() {
+                return dev.langchain4j.model.googleai.GoogleAiGeminiChatModel.builder()
+                        .apiKey(geminiApiKey)
+                        .modelName(geminiModelName)
+                        .temperature(0.3)
+                        .build();
         }
 
         @Bean("geminiFallback1Model")
