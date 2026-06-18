@@ -62,11 +62,17 @@ public class AiModelConfig {
         @Value("${ai.groq.api-key:}")
         private String groqApiKey;
 
+        @Value("${ai.groq.api-keys:}")
+        private String groqApiKeys;
+
         @Value("${ai.groq.base-url:https://api.groq.com/openai/v1}")
         private String groqBaseUrl;
 
-        @Value("${ai.groq.reasoning-model:openai/gpt-oss-120b}")
+        @Value("${ai.groq.reasoning-model:meta-llama/llama-4-scout-17b-16e-instruct}")
         private String groqReasoningModelName;
+
+        @Value("${ai.groq.reasoning-fallback1-model:llama-3.3-70b-versatile}")
+        private String groqReasoningFallback1ModelName;
 
         @Value("${ai.groq.gatekeeper-model:llama-3.1-8b-instant}")
         private String groqGatekeeperModelName;
@@ -240,37 +246,47 @@ public class AiModelConfig {
                                 .build();
         }
 
+        private List<String> getRequiredGroqApiKeys() {
+                List<String> apiKeys = groqApiKeyPool();
+                if (apiKeys.isEmpty()) {
+                        throw new IllegalStateException("ai.groq.enabled=true but no Groq API keys are configured");
+                }
+                return apiKeys;
+        }
+
         @Bean("groqOssReasoningModel")
         @ConditionalOnProperty(value = "ai.groq.enabled", havingValue = "true")
         public StreamingChatModel groqOssReasoningModel() {
-                if (groqApiKey == null || groqApiKey.isBlank()) {
-                        throw new IllegalStateException("ai.groq.enabled=true but ai.groq.api-key is missing");
-                }
-
-                log.info("[AI Config] Initializing OSS REASONING model: {} (Groq OpenAI-compatible API)",
-                                groqReasoningModelName);
-                return OpenAiOfficialStreamingChatModel.builder()
-                                .apiKey(groqApiKey)
-                                .baseUrl(groqBaseUrl)
-                                .modelName(groqReasoningModelName)
-                                .temperature(0.4)
-                                .timeout(Duration.ofSeconds(timeoutSeconds * 2))
-                                .build();
+                List<String> apiKeys = getRequiredGroqApiKeys();
+                log.info("[AI Config] Initializing OSS REASONING model: {} with {} API key(s) (Groq OpenAI-compatible API)",
+                                groqReasoningModelName, apiKeys.size());
+                List<GroqMultiKeyStreamingChatModel.KeyedModel> keyedModels = apiKeys.stream()
+                                .map(apiKey -> new GroqMultiKeyStreamingChatModel.KeyedModel(
+                                                maskGroqKey(apiKey),
+                                                singleGroqStreamingModel(apiKey, groqReasoningModelName)))
+                                .toList();
+                return new GroqMultiKeyStreamingChatModel(groqReasoningModelName, keyedModels);
         }
 
         @Bean("groqOssReasoningTextModel")
         @ConditionalOnProperty(value = "ai.groq.enabled", havingValue = "true")
         public StreamingChatModel groqOssReasoningTextModel() {
-                if (groqApiKey == null || groqApiKey.isBlank()) {
-                        throw new IllegalStateException("ai.groq.enabled=true but ai.groq.api-key is missing");
-                }
+                List<String> apiKeys = getRequiredGroqApiKeys();
+                log.info("[AI Config] Initializing OSS REASONING TEXT model: {} with {} API key(s) (Groq OpenAI-compatible API)",
+                                groqReasoningModelName, apiKeys.size());
+                List<GroqMultiKeyStreamingChatModel.KeyedModel> keyedModels = apiKeys.stream()
+                                .map(apiKey -> new GroqMultiKeyStreamingChatModel.KeyedModel(
+                                                maskGroqKey(apiKey),
+                                                singleGroqStreamingModel(apiKey, groqReasoningModelName)))
+                                .toList();
+                return new GroqMultiKeyStreamingChatModel(groqReasoningModelName, keyedModels);
+        }
 
-                log.info("[AI Config] Initializing OSS REASONING TEXT model: {} (Groq OpenAI-compatible API)",
-                                groqReasoningModelName);
+        private StreamingChatModel singleGroqStreamingModel(String apiKey, String modelName) {
                 return OpenAiOfficialStreamingChatModel.builder()
-                                .apiKey(groqApiKey)
+                                .apiKey(apiKey)
                                 .baseUrl(groqBaseUrl)
-                                .modelName(groqReasoningModelName)
+                                .modelName(modelName)
                                 .temperature(0.4)
                                 .timeout(Duration.ofSeconds(timeoutSeconds * 2))
                                 .build();
@@ -279,19 +295,55 @@ public class AiModelConfig {
         @Bean("groqGatekeeperModel")
         @ConditionalOnProperty(value = "ai.groq.enabled", havingValue = "true")
         public ChatModel groqGatekeeperModel() {
-                if (groqApiKey == null || groqApiKey.isBlank()) {
-                        throw new IllegalStateException("ai.groq.enabled=true but ai.groq.api-key is missing");
-                }
+                List<String> apiKeys = getRequiredGroqApiKeys();
+                log.info("[AI Config] Initializing GATEKEEPER model: {} with {} API key(s) (Groq OpenAI-compatible API)",
+                                groqGatekeeperModelName, apiKeys.size());
+                List<GroqMultiKeyChatModel.KeyedModel> keyedModels = apiKeys.stream()
+                                .map(apiKey -> new GroqMultiKeyChatModel.KeyedModel(
+                                                maskGroqKey(apiKey),
+                                                singleGroqChatModel(apiKey, groqGatekeeperModelName)))
+                                .toList();
+                return new GroqMultiKeyChatModel(groqGatekeeperModelName, keyedModels);
+        }
 
-                log.info("[AI Config] Initializing GATEKEEPER model: {} (Groq OpenAI-compatible API)",
-                                groqGatekeeperModelName);
+        private ChatModel singleGroqChatModel(String apiKey, String modelName) {
                 return OpenAiOfficialChatModel.builder()
-                                .apiKey(groqApiKey)
+                                .apiKey(apiKey)
                                 .baseUrl(groqBaseUrl)
-                                .modelName(groqGatekeeperModelName)
+                                .modelName(modelName)
                                 .temperature(0.0)
                                 .timeout(Duration.ofSeconds(timeoutSeconds))
                                 .build();
+        }
+
+        @Bean("groqOssReasoningFallback1Model")
+        @ConditionalOnProperty(value = "ai.groq.enabled", havingValue = "true")
+        @ConditionalOnExpression("'${ai.groq.reasoning-fallback1-model:}'.trim().length() > 0")
+        public StreamingChatModel groqOssReasoningFallback1Model() {
+                List<String> apiKeys = getRequiredGroqApiKeys();
+                log.info("[AI Config] Initializing OSS REASONING fallback-1 model: {} with {} API key(s) (Groq OpenAI-compatible API)",
+                                groqReasoningFallback1ModelName, apiKeys.size());
+                List<GroqMultiKeyStreamingChatModel.KeyedModel> keyedModels = apiKeys.stream()
+                                .map(apiKey -> new GroqMultiKeyStreamingChatModel.KeyedModel(
+                                                maskGroqKey(apiKey),
+                                                singleGroqStreamingModel(apiKey, groqReasoningFallback1ModelName)))
+                                .toList();
+                return new GroqMultiKeyStreamingChatModel(groqReasoningFallback1ModelName, keyedModels);
+        }
+
+        @Bean("groqOssReasoningFallback1TextModel")
+        @ConditionalOnProperty(value = "ai.groq.enabled", havingValue = "true")
+        @ConditionalOnExpression("'${ai.groq.reasoning-fallback1-model:}'.trim().length() > 0")
+        public StreamingChatModel groqOssReasoningFallback1TextModel() {
+                List<String> apiKeys = getRequiredGroqApiKeys();
+                log.info("[AI Config] Initializing OSS REASONING fallback-1 text model: {} with {} API key(s) (Groq OpenAI-compatible API)",
+                                groqReasoningFallback1ModelName, apiKeys.size());
+                List<GroqMultiKeyStreamingChatModel.KeyedModel> keyedModels = apiKeys.stream()
+                                .map(apiKey -> new GroqMultiKeyStreamingChatModel.KeyedModel(
+                                                maskGroqKey(apiKey),
+                                                singleGroqStreamingModel(apiKey, groqReasoningFallback1ModelName)))
+                                .toList();
+                return new GroqMultiKeyStreamingChatModel(groqReasoningFallback1ModelName, keyedModels);
         }
 
         @Bean("openRouterReasoningModel")
@@ -416,6 +468,24 @@ public class AiModelConfig {
         }
 
         private String maskOpenRouterKey(String apiKey) {
+                if (apiKey == null || apiKey.length() < 12) {
+                        return "<redacted>";
+                }
+                return apiKey.substring(0, 8) + "..." + apiKey.substring(apiKey.length() - 4);
+        }
+
+        private List<String> groqApiKeyPool() {
+                String raw = String.join(",",
+                                groqApiKey == null ? "" : groqApiKey,
+                                groqApiKeys == null ? "" : groqApiKeys);
+                return Arrays.stream(raw.split(","))
+                                .map(String::trim)
+                                .filter(s -> !s.isBlank())
+                                .distinct()
+                                .toList();
+        }
+
+        private String maskGroqKey(String apiKey) {
                 if (apiKey == null || apiKey.length() < 12) {
                         return "<redacted>";
                 }

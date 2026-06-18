@@ -7,6 +7,7 @@ import com.taskpilot.ai.entity.ChatMessageEntity;
 import com.taskpilot.ai.entity.ChatMessageEntity.SenderType;
 import com.taskpilot.ai.entity.ChatSessionEntity;
 import com.taskpilot.ai.config.OpenRouterMultiKeyStreamingChatModel;
+import com.taskpilot.ai.config.GroqMultiKeyStreamingChatModel;
 import com.taskpilot.ai.heuristic.HeuristicConfigProvider;
 import com.taskpilot.ai.repository.ChatMessageRepository;
 import com.taskpilot.ai.repository.ChatSessionRepository;
@@ -1194,12 +1195,12 @@ public class AiStreamingService {
                 log.error("[SSE] Model {} failed for session {}: {}", modelName, sessionId,
                         error.getMessage());
 
-                if (hasRemainingOpenRouterKeys(model, modelKeyAttempts)) {
+                if (hasRemainingKeys(model, modelKeyAttempts)) {
                     int nextAttempt = modelKeyAttempts + 1;
                     chatStreamStatusService.updatePhase(sessionId, clientMessageId,
                             Phase.THINKING, modelName, null, null);
                     safeSend(emitter, "model",
-                            modelName + " (next OpenRouter key " + nextAttempt + "/" + openRouterKeyCount(model) + ")",
+                            modelName + " (" + getModelKeyLabel(model, nextAttempt) + ")",
                             null);
                     safeSend(emitter, "phase", Phase.THINKING.name(), null);
                     doStreamWithKeyAttempts(emitter, emitterCompleted, session, sessionId, userId, userInput,
@@ -1292,12 +1293,12 @@ public class AiStreamingService {
                 + streamFirstResponseTimeoutSeconds + "s";
         log.warn("[SSE] {} for session {} using model {}", message, sessionId, modelName);
 
-        if (hasRemainingOpenRouterKeys(model, initialModelKeyAttempts)) {
+        if (hasRemainingKeys(model, initialModelKeyAttempts)) {
             int nextAttempt = initialModelKeyAttempts + 1;
             chatStreamStatusService.updatePhase(sessionId, clientMessageId,
                     Phase.THINKING, modelName, null, null);
             safeSend(emitter, "model",
-                    modelName + " (next OpenRouter key " + nextAttempt + "/" + openRouterKeyCount(model) + ")",
+                    modelName + " (" + getModelKeyLabel(model, nextAttempt) + ")",
                     null);
             safeSend(emitter, "phase", Phase.THINKING.name(), null);
             doStreamWithKeyAttempts(emitter, emitterCompleted, session, sessionId, userId, userInput,
@@ -2380,16 +2381,24 @@ public class AiStreamingService {
         return SystemMessage.from(combinedText);
     }
 
-    private boolean hasRemainingOpenRouterKeys(StreamingChatModel model, int modelKeyAttempts) {
-        return model instanceof OpenRouterMultiKeyStreamingChatModel openRouterModel
-                && modelKeyAttempts < openRouterModel.keyCount();
+    private boolean hasRemainingKeys(StreamingChatModel model, int modelKeyAttempts) {
+        if (model instanceof OpenRouterMultiKeyStreamingChatModel openRouterModel) {
+            return modelKeyAttempts < openRouterModel.keyCount();
+        }
+        if (model instanceof GroqMultiKeyStreamingChatModel groqModel) {
+            return modelKeyAttempts < groqModel.keyCount();
+        }
+        return false;
     }
 
-    private int openRouterKeyCount(StreamingChatModel model) {
+    private String getModelKeyLabel(StreamingChatModel model, int attempt) {
         if (model instanceof OpenRouterMultiKeyStreamingChatModel openRouterModel) {
-            return openRouterModel.keyCount();
+            return "next OpenRouter key " + attempt + "/" + openRouterModel.keyCount();
         }
-        return 1;
+        if (model instanceof GroqMultiKeyStreamingChatModel groqModel) {
+            return "next Groq key " + attempt + "/" + groqModel.keyCount();
+        }
+        return "";
     }
 
     private record ToolLoopState(String toolName, int consecutiveCount) {

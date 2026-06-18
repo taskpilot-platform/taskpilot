@@ -15,13 +15,15 @@ import java.util.concurrent.Executors;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ThinkingNarratorService {
 
-    @Qualifier("groqGatekeeperModel") // Reuse the fast Groq model if available
     private final ObjectProvider<ChatModel> fastModelProvider;
     private ThinkingNarratorAgent agent;
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+
+    public ThinkingNarratorService(@Qualifier("groqGatekeeperModel") ObjectProvider<ChatModel> fastModelProvider) {
+        this.fastModelProvider = fastModelProvider;
+    }
 
     @PostConstruct
     void init() {
