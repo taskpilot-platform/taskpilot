@@ -72,15 +72,13 @@ public class AiStreamingService {
      * instead of ~3356 for the full set.
      */
     private static final List<String> ESSENTIAL_TOOL_NAMES = List.of(
-            "getMyProjects",
-            "getMyTasks",
+            "queryProjects",
+            "queryTasks",
             "getProjectStatus",
             "getTaskDetails",
-            "getTasksByProject",
-            "getUnassignedTasksByProject",
             "getMemberWorkload",
-            "getProjectMembers",
-            "recommendAssignmentCandidates",
+            "queryProjectMembers",
+            "recommendTaskAssignmentCandidates",
             "recommendAndAssignTask",
             "assignTaskToMember",
             "assignTaskToMemberByName",
@@ -142,7 +140,7 @@ public class AiStreamingService {
             YOU MUST NOT answer the user's question directly with text. YOU MUST ONLY call tools to fetch data or perform actions.
             EXCEPTION: If the user asks to perform an action or query but the required tool is not available, you MUST output exactly:
             MISSING_TOOL: <short reason>
-            Do NOT generate any conversational text.
+            Do NOT generate any conversational or explanatory text.
 
             [CURRENT SYSTEM CONTEXT]
             - Today's Date: {{current_date}}
@@ -150,8 +148,6 @@ public class AiStreamingService {
             - Current User: {{current_user_name}} (ID: {{current_user_id}})
 
             [TASKPILOT TOOL WORKFLOW RULES]
-            - If the user asks you to perform an action but the required tool is not available, respond exactly with:
-              MISSING_TOOL: <short reason>
             - The user frequently uses Vietnamese shorthand, abbreviations, and chat slang (e.g., "ch" = chưa, "tb" = thông báo, "da" = dự án, "nv" = nhiệm vụ/nhân viên, "đc" = được, "sl" = số lượng). You MUST actively infer the full meaning of any unrecognized acronyms or abbreviations based on the surrounding context. Never assume an unrecognized abbreviation is a typo; always try to interpret it as a Vietnamese abbreviation first. For task assignment questions, interpret "ch" as unassigned/not assigned.
             - If the user names a specific assignee (for example "cho Julia Design", "gán cho Ian",
               "assign task 68 to Julia"), the user's explicit assignee overrides the recommendation algorithm.
@@ -160,12 +156,11 @@ public class AiStreamingService {
               as dueDate, call patchTask with patchData containing every changed field, e.g.
               {"dueDate":"2026-07-31","assigneeId":9}. Do NOT call recommendAndAssignTask, because
               recommendAndAssignTask always picks the top ranked candidate.
-            - If the user asks which tasks are not assigned yet in a project, call getUnassignedTasksByProject.
-              Do not answer from the full task list unless the unassigned-only tool is unavailable.
-            - If the user asks for overdue tasks, use getTasksByProject and filter the results yourself comparing dueDate to Today's Date. Do NOT invent or assume a getOverdueTasks tool exists.
+            - If the user asks which tasks are not assigned yet in a project, call queryTasks with unassignedOnly=true.
+            - If the user asks for overdue tasks, use queryTasks with isOverdue=true. Do NOT invent or assume a getOverdueTasks tool exists.
             - If the user asks for unassigned tasks in the project that contains a task ID (for example
               "du an co chua task 67"), first call getTaskDetails(taskId) to resolve projectId, then call
-              getUnassignedTasksByProject(projectId).
+              queryTasks(projectId=projectId, unassignedOnly=true).
             - If the user asks to recommend suitable assignees, "rcm", "gợi ý", or asks to reassign to
               "người khác" without naming the final assignee, call recommendTaskAssignmentCandidates for each
               concrete task. This is recommendation-only and MUST NOT create a pending write confirmation.
@@ -202,8 +197,7 @@ public class AiStreamingService {
               { "tool": "toolName", "arguments": { "arg1": "value", "arg2": true } }
               ```
             - Any create/update/delete/assignment tool may return confirmationRequired=true instead of writing data.
-              In that case, tell the user exactly what will change and wait for a final confirmation. Do not claim
-              the change has been applied until confirmPendingAction returns a success result.
+              In that case, do not claim the change has been applied until confirmPendingAction returns a success result.
             - IF A TOOL RETURNS "Pending action not found or expired", DO NOT call confirmPendingAction again! Inform the user that the action expired.
             - TO FETCH DATA: You MUST call the appropriate read tools (e.g. `queryProjects`, `queryTasks`). NEVER assume you have the data or that the user has no data unless you have explicitly called a read tool and received an empty result.
             - When you need additional structured information from the user, include a fenced `taskpilot-form`
@@ -221,28 +215,16 @@ public class AiStreamingService {
               ```
 
             [REASONING OBJECTIVES & TRADE-OFFS]
-            Think privately before providing your final recommendation. You are not a simple calculator; you are
-            a strategic manager. Balance the candidates' AHP (Analytic Hierarchy Process) scores, their current
-            workload, and the 'Current Assignment Mode'.
-
-            Your private reasoning process should be granular and structured:
+            Think privately inside the <think>...</think> tags before selecting tools. Decide which tools are needed to satisfy the request.
+            Your private reasoning process should evaluate:
             - Step 1: Analyze user intent and project requirements.
-            - Step 2: Retrieve relevant data using available tools (if needed).
-            - Step 3: Evaluate results, compare candidates, and weigh trade-offs based on the 'Current Assignment Mode'.
-            - Step 4: Formulate the final strategic recommendation.
+            - Step 2: Formulate candidate tools and determine if parallel execution is possible.
+            - Step 3: Explain the decision to call specific tools.
 
             [STRICT OUTPUT RULES]
             1. Respond in Vietnamese by default. If the user writes in another language, mirror that language.
             2. ALWAYS write your step-by-step thinking process in Vietnamese enclosed in <think>...</think> tags at the very beginning of your response. Explain what tools you need to call and why. This rule is absolute and applies even when a tool is missing or unavailable. You MUST write your thinking inside <think>...</think> in Vietnamese first, and only then output the tool calls or the MISSING_TOOL keyword outside the tags. Never write your thoughts in English.
-            3. Provide the final recommendation clearly and professionally. Include key data, metrics, or a
-                markdown table when useful so the user sees the concrete evidence for your decision.
-            4. When a write tool returns confirmationRequired=true, explain the pending change in Vietnamese and
-                tell the user they can approve or reject it in the confirmation card. Do not claim the change has
-                been applied until confirmPendingAction returns a success result.
-            5. PROHIBITED ACTION: You MUST NEVER justify your choice by simply stating "because they have the
-                highest score" or "due to the highest AHP score". You must explain your decision using
-                professional management terminology (e.g., "to optimize resource allocation", "to ensure project
-                timelines", or "to foster skill development").
+            3. DO NOT output any general explanation, summary, or recommendation text outside the <think>...</think> tags. Output ONLY tool calls or the MISSING_TOOL keyword.
             """;
 
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();

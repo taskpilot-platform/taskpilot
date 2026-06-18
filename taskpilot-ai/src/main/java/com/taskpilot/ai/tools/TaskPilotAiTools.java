@@ -56,11 +56,7 @@ public class TaskPilotAiTools {
     private final UserNotificationQueryPort userNotificationQueryPort;
     private final PendingAiActionService pendingAiActionService;
 
-    @Tool("""
-            Use this tool to search for projects you participate in.
-            It replaces getMyProjects and supports optional filters to narrow down the results,
-            reducing output size. Limit should be used, default is 10.
-            """)
+    @Tool("Search for projects the current user participates in. Supports optional status, role, and searchTerm filters.")
     public Object queryProjects(
             @P("Optional status to filter by (e.g. ACTIVE, ARCHIVED)") String status,
             @P("Optional role to filter by (e.g. MANAGER, MEMBER)") String role,
@@ -91,33 +87,21 @@ public class TaskPilotAiTools {
         return Map.of("results", filtered, "totalMatched", filtered.size());
     }
 
-    @Tool("""
-            Use this tool when the user asks about the status, progress, or health of a specific project.
-            Typical intents include: "tien do du an", "bao cao du an", "project status", "progress report".
-            Provide the project ID, and this tool returns a short status summary for that project.
-            """)
+    @Tool("Get the status, progress, and health summary of a project by its project ID.")
     public ProjectStatusDto getProjectStatus(@P("The ID of the project to query") String projectId) {
         log.info("[AiTool] getProjectStatus called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
         return projectInsightsPort.getProjectStatus(toLong(projectId), userId);
     }
 
-    @Tool("""
-            Use this tool when the user asks who is busy or available in a project team.
-            Typical intents include: "ai ranh", "load team", "workload", "team availability".
-            Provide the project ID to get a workload snapshot of members in that project.
-            """)
+    @Tool("Get the workload snapshot of all members in a project by project ID.")
     public List<MemberWorkloadDto> getMemberWorkload(@P("The ID of the project") String projectId) {
         log.info("[AiTool] getMemberWorkload called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
         return memberAnalyticsPort.getMemberWorkloadForProject(toLong(projectId), userId);
     }
 
-    @Tool("""
-            Use this tool to search for members in a specific project.
-            It replaces getProjectMembers and supports optional filters to narrow down the results,
-            reducing output size. Limit should be used, default is 10.
-            """)
+    @Tool("Search for members in a specific project. Supports filtering by role and member name.")
     public Object queryProjectMembers(
             @P("The ID of the project") String projectId,
             @P("Optional role to filter by (e.g. MANAGER, MEMBER, DEVELOPER)") String role,
@@ -144,43 +128,28 @@ public class TaskPilotAiTools {
         return Map.of("results", filtered, "totalMatched", filtered.size());
     }
 
-    @Tool("""
-            Use this tool to fetch labels configured for a project.
-            Provide the project ID. It returns label IDs, names, and colors.
-            """)
+    @Tool("Fetch all labels configured for a project by project ID.")
     public List<LabelSummaryDto> getProjectLabels(@P("The ID of the project") String projectId) {
         log.info("[AiTool] getProjectLabels called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
         return projectInsightsPort.getProjectLabels(toLong(projectId), userId);
     }
 
-    @Tool("""
-            Use this tool when the user asks for workload details of a specific member.
-            Typical intents include: "member workload", "load cua thanh vien", "dang lam bao nhieu task".
-            Provide the member ID. This tool returns open tasks, overdue tasks, and estimated hours.
-            """)
+    @Tool("Get workload details of a specific member by member ID (open tasks, overdue tasks, estimated hours).")
     public MemberWorkloadDto getMemberWorkloadByMemberId(@P("The ID of the member") String memberId) {
         log.info("[AiTool] getMemberWorkloadByMemberId called for member {}", memberId);
         Long userId = ToolExecutionContext.requireUserId();
         return memberAnalyticsPort.getMemberWorkload(toLong(memberId), userId);
     }
 
-    @Tool("""
-            Use this tool when the user asks for task details before assigning or analyzing it.
-            Typical intents include: "task details", "chi tiet cong viec", "yeu cau task".
-            Provide the task ID. This tool returns task name, description, difficulty, skills, and deadline.
-            """)
+    @Tool("Get task details (title, description, status, priority, difficulty, required skills, due date) by task ID.")
     public TaskDetailDto getTaskDetails(@P("The ID of the task") String taskId) {
         log.info("[AiTool] getTaskDetails called for task {}", taskId);
         Long userId = ToolExecutionContext.requireUserId();
         return taskCommandPort.getTaskDetails(toLong(taskId), userId);
     }
 
-    @Tool("""
-            Use this tool when you need the active system skill directory for a form, validation, or task assignment.
-            Provide a keyword to search, or an empty keyword to return the first active skills. Use the returned skill
-            names exactly when filling task required skills.
-            """)
+    @Tool("Search the global system skill directory by keyword (use empty string to list default active skills).")
     public List<SkillDto> searchSystemSkills(
             @P("Skill search keyword. Use empty string to list common active skills.") String keyword) {
         String safeKeyword = keyword == null ? "" : keyword.trim();
@@ -188,10 +157,7 @@ public class TaskPilotAiTools {
         return skillPort.search(safeKeyword);
     }
 
-    @Tool("""
-            Use this tool to create a system skill in the shared skill directory. Admin permission is required.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Create a new system skill in the shared skill directory. Requires confirmation.")
     public Object createSystemSkill(
             @P("Skill name") String name,
             @P("Optional skill description") String description) {
@@ -208,12 +174,7 @@ public class TaskPilotAiTools {
                 () -> skillPort.createSystemSkill(name, description, userId));
     }
 
-    @Tool("""
-            Use this tool for partial updates to a system skill in the shared skill directory.
-            Admin permission is required. Send patch map containing only changed fields.
-            Allowed patch fields: name, description. Example patch: {"description":"Frontend framework"}
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Partially update a system skill. Send patchData map containing changed fields (name, description). Requires confirmation.")
     public Object patchSystemSkill(
             @P("The ID of the skill") Long skillId,
             @P("Map containing only changed fields") Object patchData,
@@ -235,11 +196,7 @@ public class TaskPilotAiTools {
                 () -> skillPort.patchSystemSkill(skillId, name, description, userId));
     }
 
-    @Tool("""
-            Use this tool to delete/deactivate a system skill in the shared skill directory.
-            Admin permission is required.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Delete or deactivate a system skill in the shared directory by skill ID. Requires confirmation.")
     public Object deleteSystemSkill(@P("System skill ID to deactivate") Long skillId) {
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
@@ -257,20 +214,14 @@ public class TaskPilotAiTools {
                 });
     }
 
-    @Tool("""
-            Use this tool to list the current user's personal skills ("my skills").
-            """)
+    @Tool("List the current user's personal skills.")
     public Object getMySkills() {
         Long userId = ToolExecutionContext.requireUserId();
         log.info("[AiTool] getMySkills called for user {}", userId);
         return skillPort.getMySkills(userId);
     }
 
-    @Tool("""
-            Use this tool to add a skill to the current user's personal skills.
-            Provide skillId from the system skill directory and level from 1 to 5.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Add a system skill to the current user's personal skills with a level (1-5). Requires confirmation.")
     public Object addMySkill(
             @P("System skill ID") Long skillId,
             @P("Skill level from 1 to 5") Integer level) {
@@ -288,12 +239,7 @@ public class TaskPilotAiTools {
                 () -> skillPort.addMySkill(skillId, safeLevel, userId));
     }
 
-    @Tool("""
-            Use this tool for partial updates to the current user's personal skill.
-            Send patch map containing only changed fields. Allowed patch fields: level.
-            Example patch: {"level":4}
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Partially update a personal skill. Send patchData map containing changed fields (level 1-5). Requires confirmation.")
     public Object patchMySkill(
             @P("The ID of the skill") Long skillId,
             @P("Map containing only changed fields") Object patchData,
@@ -319,10 +265,7 @@ public class TaskPilotAiTools {
                 () -> skillPort.updateMySkill(skillId, safeLevel, userId));
     }
 
-    @Tool("""
-            Use this tool to remove a skill from the current user's personal skills.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Remove a skill from the current user's personal skills. Requires confirmation.")
     public Object deleteMySkill(@P("System skill ID to remove from my skills") Long skillId) {
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
@@ -340,12 +283,7 @@ public class TaskPilotAiTools {
                 });
     }
 
-    @Tool("""
-            Use this tool when the user asks to list their notifications, unread notifications,
-            recent notifications, alerts, "thong bao cua toi", or "thong bao chua doc".
-            Set unreadOnly=true when the user asks for unread/chua doc/chưa đọc notifications.
-            Limit should be a small number such as 10 or 20.
-            """)
+    @Tool("List notifications for the current user. Set unreadOnly=true to get unread notifications only.")
     public String getMyNotifications(
             @P("Return only unread notifications when true") Boolean unreadOnly,
             @P("Maximum number of notifications to return, between 1 and 50") Integer limit) {
@@ -364,21 +302,14 @@ public class TaskPilotAiTools {
         }
     }
 
-    @Tool("""
-            Use this tool when the user asks how many unread notifications they have.
-            Typical intents include "bao nhieu thong bao chua doc", "unread notification count",
-            or "so thong bao chua doc".
-            """)
+    @Tool("Get the count of unread notifications for the current user.")
     public Object getUnreadNotificationCount() {
         Long userId = ToolExecutionContext.requireUserId();
         log.info("[AiTool] getUnreadNotificationCount called for user {}", userId);
         return Map.of("unreadCount", userNotificationQueryPort.getUnreadNotificationCount(userId));
     }
 
-    @Tool("""
-            Use this tool to mark one of the current user's notifications as read.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Mark a specific notification as read by its ID. Requires confirmation.")
     public Object markNotificationRead(@P("The ID of the notification to mark as read") Long notificationId) {
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
@@ -393,10 +324,7 @@ public class TaskPilotAiTools {
                 () -> userNotificationQueryPort.markNotificationRead(notificationId, userId));
     }
 
-    @Tool("""
-            Use this tool to mark all of the current user's notifications as read.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Mark all notifications for the current user as read. Requires confirmation.")
     public Object markAllNotificationsRead() {
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
@@ -411,11 +339,7 @@ public class TaskPilotAiTools {
                 () -> Map.of("updatedCount", userNotificationQueryPort.markAllNotificationsRead(userId)));
     }
 
-    @Tool("""
-            Use this tool when the user explicitly asks to assign a task to a member.
-            Provide taskId, memberId, and a short reason. This tool performs the assignment.
-            If the user names a specific assignee but does not provide memberId, use assignTaskToMemberByName instead.
-            """)
+    @Tool("Assign a task to a project member by task ID and member ID. Requires confirmation.")
     public Object assignTaskToMember(
             @P("The ID of the task") String taskId,
             @P("The ID of the member") String memberId,
@@ -437,13 +361,7 @@ public class TaskPilotAiTools {
                 () -> taskCommandPort.assignTaskToMember(resolvedTaskId, resolvedMemberId, safeReason, userId, false));
     }
 
-    @Tool("""
-            Use this tool when the user explicitly asks to assign a task to a named member, for example
-            "assign task 68 to Julia Design" or "phân công task 68 cho Julia".
-            This is a direct user override and must be preferred over recommendAndAssignTask.
-            The tool resolves the task project, finds the member by name in that project, and creates a pending
-            confirmation for the real assignment.
-            """)
+    @Tool("Assign a task to a project member by task ID and member name. Resolves project and member. Requires confirmation.")
     public Object assignTaskToMemberByName(
             @P("The ID of the task") String taskId,
             @P("Full or partial member name, e.g. Julia Design") String memberName,
@@ -471,15 +389,7 @@ public class TaskPilotAiTools {
                 () -> taskCommandPort.assignTaskToMember(resolvedTaskId, member.memberId(), safeReason, userId, false));
     }
 
-    @Tool("""
-            Use this tool when the user asks to recommend the best member for a concrete task and also assign it
-            in the same request, for example: "goi y roi gan luon", "phan cong task nay cho nguoi phu hop",
-            "recommend and assign". This tool reads the task when project ID, skills, or difficulty are omitted,
-            runs candidate scoring, picks the top candidate, and performs the real assignment.
-
-            If neither the task nor the provided arguments contain required skills, this tool will NOT assign and
-            will return a message asking for task skills. Only use it when the user clearly wants assignment applied.
-            """)
+    @Tool("Recommend the top candidate and assign the task to them in a single write operation. Requires confirmation.")
     public Object recommendAndAssignTask(
             @P("The ID of the task to assign") String taskId,
             @P("Optional project ID. If omitted, it is read from task details") String projectId,
@@ -554,13 +464,7 @@ public class TaskPilotAiTools {
                 });
     }
 
-    @Tool("""
-            Use this tool when the user provides or changes the required skills for a task.
-            Provide the task ID and comma-separated skill names exactly from the system skill directory.
-            This updates real task data and therefore returns a pending confirmation action.
-            If the user is filling a missing-skills assignment form, call this before assignment or use
-            recommendAndAssignTask with the provided skills so the confirmation can save skills and assign together.
-            """)
+    @Tool("Update required skills for a task (comma-separated skill names). Requires confirmation.")
     public Object updateTaskRequiredSkills(
             @P("The ID of the task") Long taskId,
             @P("Comma-separated active skill names from the system skill directory") String skills) {
@@ -577,10 +481,7 @@ public class TaskPilotAiTools {
                 () -> taskCommandPort.updateTaskRequiredSkills(taskId, skills, userId));
     }
 
-    @Tool("""
-            Use this tool only after the user explicitly confirms a pending write action by sending the action ID.
-            It performs the previously prepared real database write.
-            """)
+    @Tool("Confirm and execute a pending write action by its unique action ID.")
     public Object confirmPendingAction(@P("Pending action ID returned by a confirmationRequired tool result") String actionId) {
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
@@ -594,11 +495,7 @@ public class TaskPilotAiTools {
         return pendingAiActionService.confirm(actionId, userId, sessionId);
     }
 
-    @Tool("""
-            Use this tool when the user explicitly confirms the latest pending write action without providing
-            an action ID, for example "ok", "yes", "confirm", "xác nhận", "đồng ý", or "thực hiện".
-            It performs the most recent pending database write for the current user and chat session.
-            """)
+    @Tool("Confirm and execute the most recent pending write action in this session.")
     public Object confirmLatestPendingAction() {
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
@@ -608,9 +505,7 @@ public class TaskPilotAiTools {
         return pendingAiActionService.confirmLatest(userId, sessionId);
     }
 
-    @Tool("""
-            Use this tool when the user explicitly cancels a pending write action by action ID.
-            """)
+    @Tool("Cancel a pending write action by its unique action ID.")
     public Object cancelPendingAction(@P("Pending action ID to cancel") String actionId) {
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
@@ -618,25 +513,9 @@ public class TaskPilotAiTools {
         return Map.of("cancelled", true, "actionId", actionId);
     }
 
-    @Tool("""
-            Use this tool when the user wants to find suitable people for a task but does not specify task difficulty.
-            Typical intents include: "ai lam", "chon nguoi", "goi y dev", "find candidates".
-            Provide the project ID and a comma-separated list of skills. This tool uses a default difficulty of 5.
-            """)
-    public AutoAssignmentResponse findBestCandidates(
-            @P("The project ID") String projectId,
-            @P("Comma-separated list of required skill names, e.g. 'Java, Spring Boot, React'") String skills) {
-        return recommendAssignmentCandidates(projectId, skills, "5");
-    }
 
-    @Tool("""
-            Use this tool IMMEDIATELY when the user wants to assign a task or project to a member,
-            or asks for recommendations on who should do the work.
-            Typical intents include: "phan cong", "giao task", "ai lam", "chon nguoi", "goi y dev",
-            "recommend candidate", "assign member".
-            Provide the project ID, required skills, and a difficulty level (1-10). This tool runs AHP scoring
-            with the current heuristic mode and returns ranked candidates.
-            """)
+
+    @Tool("Recommend ranked candidates for a project based on skills and difficulty (1-10, default is 5). Read-only.")
     public AutoAssignmentResponse recommendAssignmentCandidates(
             @P("The project ID") String projectId,
             @P("Comma-separated list of required skill names") String skills,
@@ -654,16 +533,7 @@ public class TaskPilotAiTools {
         return autoAssignmentService.recommendCandidates(toLong(projectId), requiredSkills, safeDifficulty, userId);
     }
 
-    @Tool("""
-            Use this tool when the user asks for recommendations for a concrete task ID, especially reassignment,
-            "recommend someone else", or comparing a limited set of named members for that task.
-            The tool reads the task's project, required skills, current assignee, and difficulty automatically.
-            Set excludeCurrentAssignee=true for phrases like "người khác", "someone else", "đổi người làm",
-            or "reassign" when the user wants alternatives to the current assignee.
-            Use includeMemberNames/includeMemberIds when the user asks to compare specific people only.
-            Use excludeMemberNames/excludeMemberIds to remove specific people from the recommendation pool.
-            This tool only recommends/compares candidates; it does NOT write data.
-            """)
+    @Tool("Recommend and compare candidates specifically for a task ID, reading its metrics automatically. Supports filters. Read-only.")
     public AutoAssignmentResponse recommendTaskAssignmentCandidates(
             @P("The ID of the task") String taskId,
             @P("Optional comma-separated required skill names or IDs. Use this when the task is missing skills and the user provided them in a form.") String skills,
@@ -721,11 +591,7 @@ public class TaskPilotAiTools {
                 .build();
     }
 
-    @Tool("""
-            Use this tool when the user asks about projects due soon within a number-of-days window.
-            Typical intents include: "trong X ngay toi", "sap toi han", "upcoming projects", "due soon".
-            Provide daysAhead (default 7). This tool returns projects with due dates in that window.
-            """)
+    @Tool("Fetch projects due soon within a number-of-days window (daysAhead, default is 7).")
     public String getUpcomingProjects(
             @P("Number of days ahead to check (default 7). Note: send as string like '7'") String daysAhead) {
         int parsedDays = 7;
@@ -748,11 +614,7 @@ public class TaskPilotAiTools {
         }
     }
 
-    @Tool("""
-            Use this tool when the user specifies a concrete date range or a phrase that can be translated
-            into a concrete date range (e.g. "next week", "from 2026-05-01 to 2026-05-07").
-            Provide fromDate and toDate in YYYY-MM-DD format. This tool returns projects due within that range.
-            """)
+    @Tool("Find projects due within a concrete date range (fromDate and toDate in YYYY-MM-DD format).")
     public String findProjectsDue(
             @P("Start date in YYYY-MM-DD format") String fromDate,
             @P("End date in YYYY-MM-DD format") String toDate) {
@@ -891,17 +753,7 @@ public class TaskPilotAiTools {
             String dueDate) {
     }
 
-    @Tool("""
-            Use this tool to search and query tasks within a specific project.
-            You MUST provide the project ID.
-            Optional filters (pass null if not needed):
-            - assigneeId: filter tasks assigned to a specific member
-            - status: TODO, IN_PROGRESS, or DONE
-            - isOverdue: true = only tasks whose dueDate is before today
-            - dueToday: true = only tasks whose dueDate equals today
-            - unassignedOnly: true = only tasks with no assignee
-            - limit: max results (default 10)
-            """)
+    @Tool("Search and query tasks in a project. Supports filters: assigneeId, status (TODO, IN_PROGRESS, DONE), isOverdue, dueToday, unassignedOnly.")
     public Object queryTasks(
             @P("The ID of the project") String projectId,
             @P("Optional. Filter by assignee ID") String assigneeId,
@@ -950,21 +802,14 @@ public class TaskPilotAiTools {
         .toList();
     }
 
-    @Tool("""
-            Use this tool to fetch subtasks of a specific task.
-            Provide the parent task ID.
-            """)
+    @Tool("Fetch subtasks belonging to a specific parent task ID.")
     public Object getSubtasks(@P("The ID of the parent task") Long parentTaskId) {
         log.info("[AiTool] getSubtasks called for parent task {}", parentTaskId);
         Long userId = ToolExecutionContext.requireUserId();
         return taskCommandPort.getSubtasks(parentTaskId, userId);
     }
 
-    @Tool("""
-            Use this tool to fetch comments made on a specific task.
-            Provide the task ID.
-            Optional limit (pass null if not needed) to limit the comments returned, default 10, max 30.
-            """)
+    @Tool("Fetch comments made on a specific task by task ID.")
     public String getTaskComments(
             @P("The ID of the task") Long taskId,
             @P("Optional. Maximum number of comments to return. Default 10, max 30.") Integer limit) {
@@ -982,11 +827,7 @@ public class TaskPilotAiTools {
         }
     }
 
-    @Tool("""
-            Use this tool when the user asks to list comments made by them, comments mentioning them,
-            or "comment cua toi" without specifying one exact task. Optional projectId/taskId narrow the search.
-            Set mentionedMe=true only when the user asks for comments that mention/tag them.
-            """)
+    @Tool("Fetch comments authored by or mentioning the current user, across projects/tasks. Set mentionedMe=true for mentions.")
     public String getMyTaskComments(
             @P("Optional project ID filter") Long projectId,
             @P("Optional task ID filter") Long taskId,
@@ -1007,11 +848,7 @@ public class TaskPilotAiTools {
         }
     }
 
-    @Tool("""
-            Use this tool to create a comment on a task, or reply to a task comment.
-            Provide task ID and content. parentCommentId is optional for replies; mentionedUserIds is optional.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Create a comment or reply to a comment on a task. Requires confirmation.")
     public Object createTaskComment(
             @P("The ID of the task") Long taskId,
             @P("Comment content") String content,
@@ -1032,11 +869,7 @@ public class TaskPilotAiTools {
                         userId));
     }
 
-    @Tool("""
-            Use this tool to update an existing task comment authored by the current user.
-            Provide task ID, comment ID, new content, and optional mentioned user IDs.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Update the content of an existing task comment authored by the current user. Requires confirmation.")
     public Object updateTaskComment(
             @P("The ID of the task") Long taskId,
             @P("The ID of the comment") Long commentId,
@@ -1057,13 +890,7 @@ public class TaskPilotAiTools {
                         userId));
     }
 
-    @Tool("""
-            Use this tool for partial task comment updates. Send map containing only changed fields.
-            Allowed patch fields: content, mentionedUserIds. If content is omitted, the tool keeps the existing
-            comment content.
-            Example patch: {"content":"Updated status note","mentionedUserIds":[2,5]}
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Partially update a task comment. Send patchData map containing changed fields (content, mentionedUserIds). Requires confirmation.")
     public Object patchTaskComment(
             @P("The ID of the task") Long taskId,
             @P("The ID of the comment to patch") Long commentId,
@@ -1101,11 +928,7 @@ public class TaskPilotAiTools {
                         userId));
     }
 
-    @Tool("""
-            Use this tool to delete a task comment. Authors and project managers may delete comments according
-            to project permissions.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Delete a comment from a task. Requires confirmation.")
     public Object deleteTaskComment(
             @P("The ID of the task") Long taskId,
             @P("The ID of the comment") Long commentId) {
@@ -1122,11 +945,7 @@ public class TaskPilotAiTools {
                 () -> taskCommentQueryPort.deleteTaskComment(taskId, commentId, userId));
     }
 
-    @Tool("""
-            Use this tool to update the status of a task (e.g. TODO, IN_PROGRESS, REVIEW, DONE).
-            Provide the task ID and the new status.
-            This tool updates real task data and should only be used when the user explicitly asks for a status change.
-            """)
+    @Tool("Update the status of a task (TODO, IN_PROGRESS, REVIEW, DONE). Requires confirmation.")
     public Object updateTaskStatus(
             @P("The ID of the task") Long taskId,
             @P("The new status (TODO, IN_PROGRESS, REVIEW, DONE)") String status) {
@@ -1143,12 +962,7 @@ public class TaskPilotAiTools {
                 () -> taskCommandPort.updateTaskStatus(taskId, status, userId));
     }
 
-    @Tool("""
-            Use this tool to update task fields such as title, description, status, priority, position, labels,
-            difficulty, required skills, assignee, start date, or due date.
-            For unchanged fields pass null. Dates should be ISO-8601 instants or YYYY-MM-DD.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Update multiple fields of a task. Omit unchanged parameters. Requires confirmation.")
     public Object updateTask(
             @P("The ID of the task") Long taskId,
             @P("Optional title") String title,
@@ -1186,14 +1000,7 @@ public class TaskPilotAiTools {
                         finalDifficultyLevel, requiredSkillIds, assigneeId, startDate, dueDate, userId));
     }
 
-    @Tool("""
-            Use this tool for partial task updates. Send a JSON object containing only the fields that should
-            change. Do not include unchanged fields and do not ask the user to re-enter unchanged task data.
-            Allowed patch fields: title, description, status, priority, position, labelIds, difficultyLevel,
-            requiredSkillIds, assigneeId, startDate, dueDate. Dates should be ISO-8601 instants or YYYY-MM-DD.
-            Example patch: {"dueDate":"2026-06-30","assigneeId":2}
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Partially update a task. Send patchData map containing changed fields (title, status, assigneeId, dueDate, etc). Requires confirmation.")
     public Object patchTask(
             @P("The ID of the task") Long taskId,
             @P("Map containing only changed fields") Object patchData,
@@ -1234,11 +1041,7 @@ public class TaskPilotAiTools {
                         difficultyLevel, requiredSkillIds, assigneeId, startDate, dueDate, userId));
     }
 
-    @Tool("""
-            Use this tool to delete a task. The backend enforces whether the current user can delete it
-            (reporter or project manager).
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Delete a task by task ID. Requires confirmation.")
     public Object deleteTask(@P("The ID of the task to delete") Long taskId) {
         log.info("[AiTool] deleteTask called for task {}", taskId);
         Long userId = ToolExecutionContext.requireUserId();
@@ -1256,11 +1059,7 @@ public class TaskPilotAiTools {
                 });
     }
 
-    @Tool("""
-            Use this tool to move a task on the kanban board by setting status and position.
-            Provide the task ID, target status, and target position.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Move a task on the kanban board by updating status and position. Requires confirmation.")
     public Object moveTaskKanban(
             @P("The ID of the task") String taskId,
             @P("Target status (TODO, IN_PROGRESS, REVIEW, DONE)") String status,
@@ -1279,13 +1078,7 @@ public class TaskPilotAiTools {
                 () -> taskCommandPort.moveTaskKanban(resolvedTaskId, status, position, userId));
     }
 
-    @Tool("""
-            Use this tool to fetch all sprints belonging to a specific project.
-            Provide the project ID.
-            Optional filters (pass null if not needed):
-            - status: filter sprints by status (e.g. ACTIVE, PLANNING, COMPLETED)
-            - limit: max results to return, default 10, max 30
-            """)
+    @Tool("Fetch all sprints belonging to a project. Supports optional status filter.")
     public Object getSprintsByProject(
             @P("The ID of the project") String projectId,
             @P("Optional. Filter sprints by status (e.g. ACTIVE, PLANNING, COMPLETED)") String status,
@@ -1302,11 +1095,7 @@ public class TaskPilotAiTools {
         return Map.of("results", filtered, "totalMatched", filtered.size());
     }
 
-    @Tool("""
-            Use this tool to create a label in a project. Only project managers can perform this.
-            Provide project ID, label name, and optional hex color (#RRGGBB).
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Create a new label in a project with optional name and hex color. Requires confirmation.")
     public Object createProjectLabel(
             @P("The ID of the project") Long projectId,
             @P("Label name") String name,
@@ -1324,11 +1113,7 @@ public class TaskPilotAiTools {
                 () -> projectInsightsPort.createProjectLabel(projectId, name, color, userId));
     }
 
-    @Tool("""
-            Use this tool to delete a label from a project.
-            Provide the project ID and label ID.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Delete a label from a project by project ID and label ID. Requires confirmation.")
     public Object deleteProjectLabel(
             @P("The ID of the project") Long projectId,
             @P("The ID of the label") Long labelId) {
@@ -1348,12 +1133,7 @@ public class TaskPilotAiTools {
                 });
     }
 
-    @Tool("""
-            Use this tool to create a new project.
-            Provide the project name. Optional fields include description, startDate (YYYY-MM-DD),
-            and endDate (YYYY-MM-DD).
-            This tool creates real database data and requires final user confirmation.
-            """)
+    @Tool("Create a new project. Supports optional description, startDate, endDate. Requires confirmation.")
     public Object createProject(
             @P("Name of the project") String projectName,
             @P("Optional description of the project") String description,
@@ -1373,13 +1153,7 @@ public class TaskPilotAiTools {
                 () -> projectInsightsPort.createProject(projectName, description, startDate, endDate, userId));
     }
 
-    @Tool("""
-            Use this tool to update details of an existing project.
-            Provide the project ID. Optional fields include name, description, status (ACTIVE, COMPLETED, ARCHIVED),
-            heuristicMode (BALANCED, SKILL_FIT_ONLY, WORKLOAD_ONLY), workflowMode (STANDARD, SCRUM, KANBAN),
-            startDate (YYYY-MM-DD), and endDate (YYYY-MM-DD).
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Update multiple fields of an existing project. Omit unchanged parameters. Requires confirmation.")
     public Object updateProject(
             @P("The ID of the project to update") Long projectId,
             @P("Optional name of the project") String name,
@@ -1404,13 +1178,7 @@ public class TaskPilotAiTools {
                 () -> projectInsightsPort.updateProject(projectId, name, description, status, heuristicMode, workflowMode, startDate, endDate, userId));
     }
 
-    @Tool("""
-            Use this tool for partial project updates. Send patch map containing only changed fields.
-            Allowed patch fields: name, description, status, heuristicMode, workflowMode, startDate, endDate.
-            Do not include unchanged fields and do not ask the user to re-enter unchanged project data.
-            Example patch: {"endDate":"2026-06-30","status":"ACTIVE"}
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Partially update a project. Send patchData map containing changed fields (name, status, endDate, etc). Requires confirmation.")
     public Object patchProject(
             @P("The ID of the project to update") Long projectId,
             @P("Map containing only changed fields") Object patchData,
@@ -1442,11 +1210,7 @@ public class TaskPilotAiTools {
                         workflowMode, startDate, endDate, userId));
     }
 
-    @Tool("""
-            Use this tool to join an existing project using an invitation code.
-            Provide the projectCode (invitation code).
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Join an existing project using an invitation code. Requires confirmation.")
     public Object joinProject(@P("The invitation project code") String projectCode) {
         log.info("[AiTool] joinProject called with code={}", projectCode);
         Long userId = ToolExecutionContext.requireUserId();
@@ -1462,11 +1226,7 @@ public class TaskPilotAiTools {
                 () -> projectInsightsPort.joinProject(projectCode, userId));
     }
 
-    @Tool("""
-            Use this tool to leave an existing project (remove membership).
-            Provide the project ID.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Leave a project by project ID. Requires confirmation.")
     public Object leaveProject(@P("The ID of the project to leave") Long projectId) {
         log.info("[AiTool] leaveProject called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
@@ -1485,11 +1245,7 @@ public class TaskPilotAiTools {
                 });
     }
 
-    @Tool("""
-            Use this tool to update the role of a project member. Only project managers can perform this.
-            Provide the project ID, target user ID, and new role (MANAGER, MEMBER).
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Update a project member's role (MANAGER, MEMBER). Requires confirmation.")
     public Object updateMemberRole(
             @P("The ID of the project") Long projectId,
             @P("The ID of the target user to update role") Long targetUserId,
@@ -1511,11 +1267,7 @@ public class TaskPilotAiTools {
                 });
     }
 
-    @Tool("""
-            Use this tool to remove a member from a project. Only project managers can perform this.
-            Provide the project ID and target user ID to remove.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Remove a member from a project by user ID. Requires confirmation.")
     public Object removeMember(
             @P("The ID of the project") Long projectId,
             @P("The ID of the target user to remove") Long targetUserId) {
@@ -1536,11 +1288,7 @@ public class TaskPilotAiTools {
                 });
     }
 
-    @Tool("""
-            Use this tool to archive a project to make it read-only. Only project managers can perform this.
-            Provide the project ID.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Archive a project to make it read-only. Requires confirmation.")
     public Object archiveProject(@P("The ID of the project to archive") Long projectId) {
         log.info("[AiTool] archiveProject called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
@@ -1559,12 +1307,7 @@ public class TaskPilotAiTools {
                 });
     }
 
-    @Tool("""
-            Use this tool to restore an archived project to active status. Only project managers can perform this.
-            Provide the project ID.
-            CRITICAL INSTRUCTION: If the user explicitly asks to restore a project, you MUST use this tool and NOT `patchProject` with status ACTIVE!
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Restore an archived project to active status. Requires confirmation.")
     public Object restoreProject(@P("The ID of the project to restore") Long projectId) {
         log.info("[AiTool] restoreProject called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
@@ -1583,11 +1326,7 @@ public class TaskPilotAiTools {
                 });
     }
 
-    @Tool("""
-            Use this tool to permanently delete a project and all its data. Only project managers can perform this.
-            Provide the project ID.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Permanently delete a project and all its data. Requires confirmation.")
     public Object deleteProject(@P("The ID of the project to delete") Long projectId) {
         log.info("[AiTool] deleteProject called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
@@ -1607,15 +1346,9 @@ public class TaskPilotAiTools {
     }
 
     @Tool("""
-            Use this tool to create a new root-level task in a project.
-            Required: projectId, title. Optional: description, priority (LOW/MEDIUM/HIGH/URGENT),
-            sprintId, difficultyLevel (1-10 as string), labelIds, requiredSkillIds, assigneeId,
-            startDate, dueDate (ISO-8601 or YYYY-MM-DD format).
-            Do NOT set parentTaskId - only root-level tasks are supported via this tool.
-            This tool creates real task data and must only be used when the user explicitly requests task creation.
-            CRITICAL INSTRUCTION: If you do not know the user's `projectId`, DO NOT output a form! You MUST call `getMyProjects` tool right now to get the project list!
-            CRITICAL: Only `projectId` and `title` are required. Do NOT make `sprintId`, `difficultyLevel`, `startDate`, or `dueDate` required.
-            DO NOT pass null for any optional parameters. Omit the parameter entirely if not provided.
+            Create a new task in a project. Required: projectId, title. Optional: description, priority, sprintId, difficultyLevel (1-10 as string), labelIds, requiredSkillIds, assigneeId, startDate, dueDate.
+            CRITICAL INSTRUCTION: If you do not know the user's projectId, DO NOT output a form! You MUST call queryProjects tool right now to get the project list!
+            Requires confirmation.
             """)
     public Object createTask(
             @P("The project ID") Long projectId,
@@ -1655,13 +1388,7 @@ public class TaskPilotAiTools {
     }
 
 
-    @Tool("""
-            Use this tool to fetch the backlog of a specific project, which contains unscheduled tasks
-            and all sprints (including active, completed, and planned sprints) with their tasks.
-            Typical intents include: "xem backlog", "sprint backlog", "backlog du an".
-            Provide the project ID.
-            Optional limit (pass null if not needed) to limit the tasks returned per section, default 10, max 30.
-            """)
+    @Tool("Fetch the sprint backlog of a project (unscheduled tasks and sprints).")
     public Object getSprintBacklog(
             @P("The ID of the project") Long projectId,
             @P("Optional. Maximum number of tasks to return per sprint/unscheduled. Default 10, max 30.") Integer limit) {
@@ -1706,13 +1433,7 @@ public class TaskPilotAiTools {
         }
     }
 
-    @Tool("""
-            Use this tool to fetch the active sprint board for a specific project, which contains
-            tasks in the active sprint organized by columns/statuses.
-            Typical intents include: "board sprint", "sprint board", "active board", "bang sprint dang chay".
-            Provide the project ID.
-            Optional limit (pass null if not needed) to limit the tasks returned, default 15, max 30.
-            """)
+    @Tool("Fetch the active sprint board for a project (tasks in the active sprint organized by column).")
     public Object getSprintBoard(
             @P("The ID of the project") Long projectId,
             @P("Optional. Maximum number of active tasks to return. Default 15, max 30.") Integer limit) {
@@ -1737,12 +1458,7 @@ public class TaskPilotAiTools {
         }
     }
 
-    @Tool("""
-            Use this tool to plan and create a new sprint in a specific project.
-            Provide the project ID and sprint name. Optional arguments include startDate (YYYY-MM-DD),
-            endDate (YYYY-MM-DD), and goal.
-            This tool creates real database data and requires final user confirmation.
-            """)
+    @Tool("Plan and create a new sprint in a project. Requires confirmation.")
     public Object createSprint(
             @P("The project ID") Long projectId,
             @P("Name of the sprint, e.g. 'Sprint 3'") String name,
@@ -1763,11 +1479,7 @@ public class TaskPilotAiTools {
                 () -> sprintQueryPort.createSprint(projectId, name, startDate, endDate, goal, userId));
     }
 
-    @Tool("""
-            Use this tool to update a planning or active sprint's details.
-            Provide project ID and sprint ID. Optional fields include name, startDate, endDate, and goal.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Update multiple fields of a planning or active sprint. Requires confirmation.")
     public Object updateSprint(
             @P("The project ID") Long projectId,
             @P("The ID of the sprint") Long sprintId,
@@ -1789,13 +1501,7 @@ public class TaskPilotAiTools {
                 () -> sprintQueryPort.updateSprint(projectId, sprintId, name, startDate, endDate, goal, userId));
     }
 
-    @Tool("""
-            Use this tool for partial sprint updates. Send patch map containing only changed fields.
-            Allowed patch fields: name, startDate, endDate, goal.
-            Do not include unchanged fields and do not ask the user to re-enter unchanged sprint data.
-            Example patch: {"endDate":"2026-06-30","goal":"Finish checkout flow"}
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Partially update a sprint. Send patchData map containing changed fields (name, goal, dates). Requires confirmation.")
     public Object patchSprint(
             @P("The project ID") Long projectId,
             @P("The ID of the sprint") Long sprintId,
@@ -1821,11 +1527,7 @@ public class TaskPilotAiTools {
                 () -> sprintQueryPort.updateSprint(projectId, sprintId, name, startDate, endDate, goal, userId));
     }
 
-    @Tool("""
-            Use this tool to delete a planning sprint. Only project managers can perform this.
-            Provide project ID and sprint ID.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Delete a planned sprint by sprint ID and project ID. Requires confirmation.")
     public Object deleteSprint(
             @P("The project ID") Long projectId,
             @P("The ID of the sprint") Long sprintId) {
@@ -1845,11 +1547,7 @@ public class TaskPilotAiTools {
                 });
     }
 
-    @Tool("""
-            Use this tool to start a planned sprint in a specific project.
-            Provide the project ID and sprint ID.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Start a planned sprint in a project. Requires confirmation.")
     public Object startSprint(
             @P("The project ID") Long projectId,
             @P("The ID of the sprint to start") Long sprintId) {
@@ -1867,11 +1565,7 @@ public class TaskPilotAiTools {
                 () -> sprintQueryPort.startSprint(projectId, sprintId, userId));
     }
 
-    @Tool("""
-            Use this tool to mark an active sprint as completed in a specific project.
-            Provide the project ID and sprint ID.
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Mark an active sprint as completed in a project. Requires confirmation.")
     public Object completeSprint(
             @P("The project ID") Long projectId,
             @P("The ID of the sprint to complete") Long sprintId) {
@@ -1889,11 +1583,7 @@ public class TaskPilotAiTools {
                 () -> sprintQueryPort.completeSprint(projectId, sprintId, userId));
     }
 
-    @Tool("""
-            Use this tool to move or assign a task to a specific sprint (or remove it from sprint by setting sprintId to null).
-            Provide the task ID and the sprint ID (or null to put it in the backlog).
-            This tool performs a real database modification and requires final user confirmation.
-            """)
+    @Tool("Move or assign a task to a sprint (or set sprintId=null to move to backlog). Requires confirmation.")
     public Object assignTaskToSprint(
             @P("The ID of the task") Long taskId,
             @P("The ID of the target sprint, or null to move it to the backlog") Long sprintId) {

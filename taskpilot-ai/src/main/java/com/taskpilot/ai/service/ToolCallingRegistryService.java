@@ -119,7 +119,6 @@ public class ToolCallingRegistryService {
         register("updateTaskRequiredSkills", Set.of(ToolScope.TASK, ToolScope.AHP, ToolScope.ASSIGNMENT), List.of("required skill", "ky nang can thiet"), 20, false);
         register("assignTaskToMember", Set.of(ToolScope.ASSIGNMENT, ToolScope.TASK), List.of("assign", "giao", "phan cong"), 65, false);
         register("assignTaskToMemberByName", Set.of(ToolScope.ASSIGNMENT, ToolScope.TASK), List.of("assign by name", "giao cho", "phân công cho", "phan cong cho"), 65, false);
-        register("findBestCandidates", Set.of(ToolScope.AHP, ToolScope.ASSIGNMENT, ToolScope.MEMBER), List.of("best candidate", "ung vien", "phu hop nhat"), 30, false);
         register("recommendAssignmentCandidates", Set.of(ToolScope.AHP, ToolScope.ASSIGNMENT, ToolScope.MEMBER), List.of("recommend", "goi y"), 30, false);
         register("recommendTaskAssignmentCandidates", Set.of(ToolScope.TASK, ToolScope.AHP, ToolScope.ASSIGNMENT, ToolScope.MEMBER), List.of("recommend task", "goi y task", "rcm", "nguoi khac", "người khác", "so sanh", "so sánh", "compare", "reassign"), 70, false);
         register("recommendAndAssignTask", Set.of(ToolScope.TASK, ToolScope.ASSIGNMENT, ToolScope.AHP, ToolScope.MEMBER), List.of("assign", "giao viec", "phan cong", "phu hop", "best member", "nguoi phu hop"), 50, false);
