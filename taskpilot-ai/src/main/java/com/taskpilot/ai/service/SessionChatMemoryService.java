@@ -41,8 +41,8 @@ public class SessionChatMemoryService {
     @Value("${ai.chat.max-assistant-memory-chars:1500}")
     private int maxAssistantMemoryChars;
 
-    private static final Pattern THINK_TAG_PATTERN = Pattern.compile("(?is)<\\s*d?think\\b[^>]*>.*?<\\s*/\\s*d?think\\s*>");
-    private static final Pattern ORPHAN_THINK_TAG_PATTERN = Pattern.compile("(?i)</?\\s*d?think\\b[^>]*>");
+    private static final Pattern THINK_TAG_PATTERN = Pattern.compile("(?is)<\\s*(?:d?think|thought)\\b[^>]*>.*?<\\s*/\\s*(?:d?think|thought)\\s*>");
+    private static final Pattern ORPHAN_THINK_TAG_PATTERN = Pattern.compile("(?i)</?\\s*(?:d?think|thought)\\b[^>]*>");
     private static final Pattern TASKPILOT_CONFIRM_BLOCK_PATTERN = Pattern.compile("(?is)```taskpilot-confirm\\s*.*?```");
 
     public List<ChatMessage> appendUserMessage(Long sessionId, String systemPrompt, String userInput) {

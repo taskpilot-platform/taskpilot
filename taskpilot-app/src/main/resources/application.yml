@@ -83,7 +83,7 @@ ai:
     fallback7-model: ${AI_GEMINI_FALLBACK7_MODEL:gemini-3.1-pro-preview}
     waterfall-max-attempts: ${AI_GEMINI_WATERFALL_MAX_ATTEMPTS:2}
     use-for-tools: ${AI_GEMINI_USE_FOR_TOOLS:true}
-    timeout-seconds: ${AI_GEMINI_TIMEOUT_SECONDS:90}
+    timeout-seconds: ${AI_GEMINI_TIMEOUT_SECONDS:180}
 
   github:
     token: ${GITHUB_TOKEN}
@@ -135,8 +135,8 @@ ai:
     compact-summary-max-chars: ${AI_COMPACT_SUMMARY_MAX_CHARS:5000}
     compact-message-max-chars: ${AI_COMPACT_MESSAGE_MAX_CHARS:2000}
     max-tool-result-memory-chars: ${AI_MAX_TOOL_RESULT_MEMORY_CHARS:30000}
-    stream-first-response-timeout-seconds: ${AI_STREAM_FIRST_RESPONSE_TIMEOUT_SECONDS:90}
-    text-only-first-response-timeout-seconds: ${AI_TEXT_ONLY_FIRST_RESPONSE_TIMEOUT_SECONDS:45}
+    stream-first-response-timeout-seconds: ${AI_STREAM_FIRST_RESPONSE_TIMEOUT_SECONDS:25}
+    text-only-first-response-timeout-seconds: ${AI_TEXT_ONLY_FIRST_RESPONSE_TIMEOUT_SECONDS:15}
     max-user-input-chars: ${AI_MAX_USER_INPUT_CHARS:10000}
     max-user-input-tokens: ${AI_MAX_USER_INPUT_TOKENS:10000}
     max-output-tokens: ${AI_MAX_OUTPUT_TOKENS:8000}

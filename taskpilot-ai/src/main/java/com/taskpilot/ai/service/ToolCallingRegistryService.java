@@ -126,6 +126,8 @@ public class ToolCallingRegistryService {
         // GENERAL / ACTIONS
         register("confirmPendingAction", Set.of(ToolScope.GENERAL), List.of("confirm", "dong y", "xac nhan"), 40, false);
         register("cancelPendingAction", Set.of(ToolScope.GENERAL), List.of("cancel", "huy", "tu choi"), 40, false);
+        register("executeQuerySql", Set.of(ToolScope.GENERAL, ToolScope.PROJECT, ToolScope.TASK, ToolScope.MEMBER), List.of("sql", "query sql", "execute sql", "database", "select", "executeQuerySql", "truy van"), 90, true);
+        register("smartQuery", Set.of(ToolScope.GENERAL, ToolScope.PROJECT, ToolScope.TASK, ToolScope.MEMBER, ToolScope.SPRINT, ToolScope.NOTIFICATION), List.of("smart query", "multi query", "truy van nhieu", "lay nhieu du lieu", "du an va thanh vien", "du an va task", "nhieu thong tin", "project and members", "batch query", "parallel"), 95, true);
     }
 
     private void register(String name, Set<ToolScope> scopes, List<String> keywords, int priorityScore, boolean essential) {

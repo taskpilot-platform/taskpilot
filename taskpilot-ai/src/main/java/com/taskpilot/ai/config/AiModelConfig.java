@@ -134,21 +134,14 @@ public class AiModelConfig {
 
         @Bean("geminiFlashChatModel")
         public ChatModel geminiFlashChatModel() {
-                if (geminiModelName != null && (geminiModelName.contains("gemma-") || geminiModelName.contains("gemma4"))) {
-                        log.info("[AI Config] Gemma model detected for Gemini API. Using OpenAI-compatible non-streaming endpoint: {}", geminiModelName);
-                        return OpenAiOfficialChatModel.builder()
-                                        .apiKey(geminiApiKey)
-                                        .baseUrl("https://generativelanguage.googleapis.com/v1beta/openai/v1")
-                                        .modelName(geminiModelName)
-                                        .temperature(0.3)
-                                        .timeout(Duration.ofSeconds(geminiTimeoutSeconds))
-                                        .build();
-                }
-                return dev.langchain4j.model.googleai.GoogleAiGeminiChatModel.builder()
-                        .apiKey(geminiApiKey)
-                        .modelName(geminiModelName)
-                        .temperature(0.3)
-                        .build();
+                log.info("[AI Config] Using OpenAI-compatible non-streaming endpoint for Gemini model: {}", geminiModelName);
+                return OpenAiOfficialChatModel.builder()
+                                .apiKey(geminiApiKey)
+                                .baseUrl("https://generativelanguage.googleapis.com/v1beta/openai/v1")
+                                .modelName(geminiModelName)
+                                .temperature(0.3)
+                                .timeout(Duration.ofSeconds(geminiTimeoutSeconds))
+                                .build();
         }
 
         @Bean("geminiFallback1Model")
@@ -194,23 +187,13 @@ public class AiModelConfig {
         }
 
         private StreamingChatModel geminiStreamingModel(String modelName) {
-                if (modelName != null && (modelName.contains("gemma-") || modelName.contains("gemma4"))) {
-                        log.info("[AI Config] Gemma model detected for Gemini API. Using OpenAI-compatible streaming endpoint: {}", modelName);
-                        return OpenAiOfficialStreamingChatModel.builder()
-                                        .apiKey(geminiApiKey)
-                                        .baseUrl("https://generativelanguage.googleapis.com/v1beta/openai/v1")
-                                        .modelName(modelName)
-                                        .temperature(0.3)
-                                        .timeout(Duration.ofSeconds(geminiTimeoutSeconds))
-                                        .build();
-                }
-                return GoogleAiGeminiStreamingChatModel.builder()
+                log.info("[AI Config] Using OpenAI-compatible streaming endpoint for Gemini model: {}", modelName);
+                return OpenAiOfficialStreamingChatModel.builder()
                                 .apiKey(geminiApiKey)
+                                .baseUrl("https://generativelanguage.googleapis.com/v1beta/openai/v1")
                                 .modelName(modelName)
-                                .toolConfig(GeminiMode.AUTO)
                                 .temperature(0.3)
                                 .timeout(Duration.ofSeconds(geminiTimeoutSeconds))
-                                .logRequestsAndResponses(true)
                                 .build();
         }
 

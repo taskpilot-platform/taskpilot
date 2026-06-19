@@ -90,7 +90,7 @@ public class AiStreamingService {
     );
 
     /** GitHub Models hard limit; Gemini/Groq have much larger budgets. */
-    private static final int GITHUB_MODELS_MAX_TOKENS = 8000;
+    private static final int GITHUB_MODELS_MAX_TOKENS = 32768;
     private static final int LARGE_CONTEXT_MAX_TOKENS = 128_000;
 
     private final ChatSessionRepository sessionRepository;
@@ -189,11 +189,8 @@ public class AiStreamingService {
               asked to assign immediately, call recommendAndAssignTask with those skills and difficulty so the
               pending confirmation saves the task skills and assigns the task together. If the user only wants to
               update task skills, call updateTaskRequiredSkills.
-            - Multi-step user requests are allowed. However, to minimize processing time, you MUST call multiple tools IN PARALLEL whenever possible. If you need data from different sources (e.g. projects, tasks, and members), call all the relevant read tools simultaneously in a single turn instead of waiting for one to finish before calling the next. Only use sequential rounds when a subsequent tool call strictly depends on the result of a previous one.
-            - PARALLEL CALLING EXAMPLE: If the user says "lấy danh sách dự án và kiểm tra task hôm nay", you MUST:
-              Step 1: Call queryProjects() to get projects. After receiving the result with projectId:
-              Step 2: Call queryTasks(projectId=X, assigneeId=currentUserId) AND queryProjectMembers(projectId=X) simultaneously in the SAME turn.
-              Do NOT call them one-by-one in separate turns.
+            - Multi-step user requests are allowed. However, to minimize processing time and server roundtrips, when you need data from 2+ different sources (e.g. projects, tasks, members, sprints, workload), you MUST use `smartQuery` instead of calling multiple individual tools (like queryTasks, queryProjectMembers, getSprintsByProject) in parallel. Parallel calling of individual read tools is ONLY allowed if you are querying the same entity type or there is no overlap in entity types that `smartQuery` supports.
+            - SMART QUERY PREFERENCE: If the user says "lấy danh sách dự án và kiểm tra task hôm nay", this involves two entities ("projects" and "tasks"). You MUST use `smartQuery` with parallel chains instead of queryProjects and queryTasks. Do NOT call them one-by-one in separate turns.
             - CRITICAL TOOL FORMAT: You MUST use native JSON function calling. DO NOT output pseudo-code like <tool_call> toolName(...) </tool_call>. If native calling fails or you must force a tool call via text, you MUST output EXACTLY this JSON format and nothing else:
               ```json
               { "tool": "toolName", "arguments": { "arg1": "value", "arg2": true } }
@@ -215,6 +212,41 @@ public class AiStreamingService {
               ```taskpilot-form
               {"title":"Tao task moi","description":"Vui long chon project va nhap tieu de","submitLabel":"Tao task","intent":"continue_previous_request","fields":[{"name":"projectId","label":"Project","type":"number","required":true},{"name":"title","label":"Tieu de","type":"text","required":true},{"name":"sprintId","label":"Sprint","type":"number","required":false}]}
               ```
+
+            - SMART QUERY (PARALLEL CHAINS): When the user requests data from 2+ different entities (e.g. projects, tasks, members, sprints, workload, comments) or asks complex nested questions, you MUST use `smartQuery` with parallel chains. You are STRICTLY FORBIDDEN from calling individual read tools (like queryProjects, queryTasks, queryProjectMembers, getSprintsByProject) in parallel to fetch multiple entities.
+              CRITICAL 1: Note that there are NO individual query/get tools for "workload", "comments", or "notifications". If the user asks for workload, comments, or notifications (either alone or combined with other queries), you MUST use `smartQuery` with the corresponding entity type (e.g. "workload").
+              CRITICAL 2: When querying the "tasks" entity in `smartQuery`, you MUST ALWAYS include "projectId" in the filters of that step (e.g. filters={"projectId":"38","taskId":"112"} or filters={"projectId":"38","id":"112"}). Querying tasks without a projectId filter will fail.
+              For example, if the user asks: "Lấy chi tiết của task có ID 109, đồng thời kiểm tra workload của các thành viên trong dự án có ID 35", this involves two entities ("tasks" and "workload"). You MUST call `smartQuery` with two parallel chains:
+              - Chain 1 (tasks): step 1 key="t", entity="tasks", filters={"projectId":"35","taskId":"109"}
+              - Chain 2 (workload): step 1 key="w", entity="workload", filters={"projectId":"35"}
+              DO NOT attempt to call `getTaskDetails` in parallel with a hallucinated `queryWorkload`.
+              DESIGN PRINCIPLE:
+              1. Each chain is a sequence of dependent queries (step 2 needs step 1's result).
+              2. Multiple chains are independent data flows -> executed in PARALLEL on separate threads.
+              3. Use 'ref' to reference a previous step's key within the SAME chain.
+              4. Use 'aggregate' ($latest, $mostMembers, $mostTasks) for smart project selection.
+              EXAMPLE 1 - Single chain (nested query):
+              "Task chưa phân công ở sprint đang chạy của dự án gần nhất"
+              -> smartQuery(chains=[
+                  {"steps": [
+                    {"key": "p", "entity": "projects", "aggregate": "$latest"},
+                    {"key": "s", "entity": "sprints", "ref": {"projectId": "p"}, "filters": {"status": "ACTIVE"}},
+                    {"key": "t", "entity": "tasks", "ref": {"projectId": "p", "sprintId": "s"}, "filters": {"unassignedOnly": "true"}}
+                  ]}
+                ])
+              EXAMPLE 2 - Two parallel chains:
+              "Dự án gần nhất + thành viên, và workload cao nhất ở dự án đông người nhất"
+              -> smartQuery(chains=[
+                  {"steps": [
+                    {"key": "p", "entity": "projects", "aggregate": "$latest"},
+                    {"key": "m", "entity": "members", "ref": {"projectId": "p"}}
+                  ]},
+                  {"steps": [
+                    {"key": "bp", "entity": "projects", "aggregate": "$mostMembers"},
+                    {"key": "w", "entity": "workload", "ref": {"projectId": "bp"}, "sort": "activeWorkloadScore DESC", "limit": 1}
+                  ]}
+                ])
+              WHEN NOT TO USE: If the user only needs 1 entity (e.g., "list my projects"), use the specific tool (queryProjects) instead.
 
             [REASONING OBJECTIVES & TRADE-OFFS]
             Think privately inside the <think>...</think> tags before selecting tools. Decide which tools are needed to satisfy the request.
@@ -242,7 +274,7 @@ public class AiStreamingService {
         ChatSessionEntity session = sessionRepository.findByIdAndUserId(sessionId, userId)
                 .orElseThrow(() -> new SecurityException("Session not found or access denied"));
 
-        SseEmitter emitter = new SseEmitter(180_000L);
+        SseEmitter emitter = new SseEmitter(300_000L);
         log.info("[SSE] AI chat stream opened for session {}", sessionId);
         // Bug fix #4: per-request guard so emitter.complete() is never called twice
         AtomicBoolean emitterCompleted = new AtomicBoolean(false);
@@ -633,6 +665,36 @@ public class AiStreamingService {
                         sanitizeHistoryForTools(history),
                         "tool-round-" + toolRound),
                 routingService.isGeminiModel(model));
+
+        if (!sanitizedHistory.isEmpty() && sanitizedHistory.get(0) instanceof SystemMessage sysMsg) {
+            String text = sysMsg.text();
+            String modified = text;
+            if (toolRound == 0) {
+                modified = text.replaceAll(
+                    "(?s)\\[REASONING\\s*OBJECTIVES\\s*&\\s*TRADE-OFFS\\].*?Explain\\s*the\\s*decision\\s*to\\s*call\\s*specific\\s*tools\\.",
+                    ""
+                ).replaceAll(
+                    "(?s)2\\.\\s*ALWAYS\\s*write\\s*your\\s*step-by-step\\s*thinking\\s*process.*?Never\\s*write\\s*your\\s*thoughts\\s*in\\s*English\\.",
+                    "2. DO NOT write any thinking process or explanation inside <think> or <thought> tags. Output ONLY the tool calls immediately in JSON function call format. Do not write text."
+                );
+            } else {
+                modified = text.replaceAll(
+                    "(?s)\\[REASONING\\s*OBJECTIVES\\s*&\\s*TRADE-OFFS\\].*?Explain\\s*the\\s*decision\\s*to\\s*call\\s*specific\\s*tools\\.",
+                    ""
+                ).replaceAll(
+                    "(?s)2\\.\\s*ALWAYS\\s*write\\s*your\\s*step-by-step\\s*thinking\\s*process.*?Never\\s*write\\s*your\\s*thoughts\\s*in\\s*English\\.",
+                    "2. DO NOT write any thinking process or explanation inside <think> or <thought> tags. Provide your final answer in Vietnamese directly and concisely to optimize response speed."
+                ).replaceAll(
+                    "(?s)3\\.\\s*DO\\s*NOT\\s*output\\s*any\\s*general\\s*explanation.*?Output\\s*ONLY\\s*tool\\s*calls\\s*or\\s*the\\s*MISSING_TOOL\\s*keyword\\.",
+                    "3. You MUST output your final answer directly outside any tags in clean Vietnamese."
+                ).replace(
+                    "YOU MUST NOT answer the user's question directly with text. YOU MUST ONLY call tools to fetch data or perform actions.",
+                    "YOU MUST answer the user's question directly with text using the provided tool results. DO NOT call any tools."
+                );
+            }
+            sanitizedHistory.set(0, SystemMessage.from(modified));
+        }
+
         // Smart tool injection: only send tools that the routing decision actually needs.
         // FULL  = all tools (~3356 tokens) — only for Gemini with large context
         // ESSENTIAL = core query/assignment tools (~1200 tokens) — for GitHub Models / Groq
@@ -663,15 +725,15 @@ public class AiStreamingService {
                         "Based on the tool data already provided in the context above, provide your final recommendation now. Do not call any tools.");
                 return;
             }
-        } else if (requiresTools) {
-            boolean expanded = (retryCount > 0);
+        } else if (requiresTools && toolRound == 0) {
             boolean isGemma = modelName != null && (modelName.contains("gemma-") || modelName.contains("gemma4"));
-            int maxTools = isGemma ? (expanded ? 16 : 10) : (expanded ? 40 : 30);
+            boolean expanded = (retryCount > 0);
+            int maxTools = isGemma ? (expanded ? 30 : 20) : (expanded ? 40 : 30);
             List<String> dynamicToolNames = toolCallingRegistryService.selectToolNames(userInput, maxTools, expanded);
             toolSpecs = toolCallingRegistryService.toolSpecificationsByNames(dynamicToolNames);
             log.info("[streamRound] Dynamic tools round={} expanded={} model={} (isGemma={}) -> injecting {} tool specs", toolRound, expanded, modelName, isGemma, toolSpecs.size());
         } else {
-            log.debug("[streamRound] requiresTools=false -> skipping tool specs entirely");
+            log.debug("[streamRound] requiresTools=false or toolRound > 0 -> skipping tool specs entirely");
         }
 
         // Dynamic max output tokens based on model capacity and current payload
@@ -778,8 +840,8 @@ public class AiStreamingService {
 
                         boolean isExecutor = requiresTools && !routingService.isGeminiModel(model);
 
-                        boolean hasThinkOpen = partialResponse.contains("<think>");
-                        boolean hasThinkClose = partialResponse.contains("</think>");
+                        boolean hasThinkOpen = partialResponse.contains("<think>") || partialResponse.contains("<thought>");
+                        boolean hasThinkClose = partialResponse.contains("</think>") || partialResponse.contains("</thought>");
 
                         if (hasThinkOpen) {
                             insideThink.set(true);
@@ -810,7 +872,8 @@ public class AiStreamingService {
                         if (!clientDisconnected.get()) {
                             boolean shouldStream = !isExecutor || insideThink.get() || hasThinkOpen || hasThinkClose;
                             if (shouldStream) {
-                                String clientToken = partialResponse.replace("<think>", "").replace("</think>", "");
+                                String clientToken = partialResponse.replace("<think>", "").replace("</think>", "")
+                                        .replace("<thought>", "").replace("</thought>", "");
                                 if (!clientToken.isEmpty()) {
                                     if (!safeSend(emitter, "token", Map.of("token", clientToken), MediaType.APPLICATION_JSON)) {
                                         clientDisconnected.set(true);
@@ -829,7 +892,7 @@ public class AiStreamingService {
                         timeoutFuture.cancel(false);
                         // After completion, if we have a thinking buffer, expand it in the background
                         String rawThinking = thinkingBuffer.toString();
-                        if (rawThinking.contains("<think>")) {
+                        if (rawThinking.contains("<think>") || rawThinking.contains("<thought>")) {
                             String thinkingContent = extractAllThinkBlocks(rawThinking);
                             if (thinkingContent != null && !thinkingContent.isBlank()) {
                                 thinkingNarratorService.expandAsync(thinkingContent).thenAccept(expanded -> {
@@ -845,26 +908,65 @@ public class AiStreamingService {
                             String text = aiMessage.text().trim();
                             List<ToolExecutionRequest> extractedRequests = new ArrayList<>();
                             
-                            // Fallback for models (like Groq) that hallucinate tool calls as raw JSON text
-                            if (text.contains("\"tool\"") || text.contains("```json")) {
-                                // Try to match ```json { "tool": "name", "arguments": {} } ```
-                                Matcher m = Pattern.compile("(?s)```json\\s*(\\{\\s*\"tool\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"arguments\"\\s*:\\s*(\\{.*?\\})\\s*\\})\\s*```").matcher(text);
-                                while (m.find()) {
-                                    extractedRequests.add(ToolExecutionRequest.builder()
-                                        .id(UUID.randomUUID().toString())
-                                        .name(m.group(2))
-                                        .arguments(m.group(3))
-                                        .build());
+                            // 1. Strip reasoning blocks
+                            String textWithoutThink = stripThinkBlocks(text);
+
+                            // 2. Find JSON code blocks or free-form JSON objects
+                            List<String> jsonCandidates = new ArrayList<>();
+                            Matcher codeBlockMatcher = Pattern.compile("(?s)```(?:json)?\\s*(.*?)\\s*```").matcher(textWithoutThink);
+                            while (codeBlockMatcher.find()) {
+                                jsonCandidates.add(codeBlockMatcher.group(1).trim());
+                            }
+
+                            if (jsonCandidates.isEmpty()) {
+                                int firstBrace = textWithoutThink.indexOf('{');
+                                int lastBrace = textWithoutThink.lastIndexOf('}');
+                                if (firstBrace != -1 && lastBrace > firstBrace) {
+                                    jsonCandidates.add(textWithoutThink.substring(firstBrace, lastBrace + 1).trim());
                                 }
-                                
-                                // Try to match raw {"tool":"name","arguments":{}} anywhere in the text
-                                if (extractedRequests.isEmpty()) {
-                                    Matcher m2 = Pattern.compile("(?s)(\\{\\s*\"tool\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"arguments\"\\s*:\\s*(\\{.*?\\})\\s*\\})").matcher(text);
-                                    while (m2.find()) {
+                            }
+
+                            for (String candidate : jsonCandidates) {
+                                if (candidate.isBlank() || !candidate.startsWith("{")) {
+                                    continue;
+                                }
+
+                                try {
+                                    Map<String, Object> map = objectMapper.readValue(candidate, MAP_TYPE);
+                                    if (map != null) {
+                                        if (map.containsKey("tool") && map.get("tool") instanceof String) {
+                                            String toolName = (String) map.get("tool");
+                                            Object argumentsObj = map.get("arguments");
+                                            String argumentsStr = "";
+                                            if (argumentsObj != null) {
+                                                if (argumentsObj instanceof String) {
+                                                    argumentsStr = (String) argumentsObj;
+                                                } else {
+                                                    argumentsStr = objectMapper.writeValueAsString(argumentsObj);
+                                                }
+                                            }
+                                            extractedRequests.add(ToolExecutionRequest.builder()
+                                                .id(UUID.randomUUID().toString())
+                                                .name(toolName)
+                                                .arguments(argumentsStr)
+                                                .build());
+                                        } else if (map.containsKey("chains") || map.containsKey("steps")) {
+                                            // Auto map to smartQuery
+                                            extractedRequests.add(ToolExecutionRequest.builder()
+                                                .id(UUID.randomUUID().toString())
+                                                .name("smartQuery")
+                                                .arguments(candidate)
+                                                .build());
+                                        }
+                                    }
+                                } catch (Exception e) {
+                                    log.debug("[AiChat] Failed to parse candidate JSON from text, trying manual regex fallback", e);
+                                    Matcher m = Pattern.compile("(?s)\"tool\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"arguments\"\\s*:\\s*(\\{.*?\\})").matcher(candidate);
+                                    if (m.find()) {
                                         extractedRequests.add(ToolExecutionRequest.builder()
                                             .id(UUID.randomUUID().toString())
-                                            .name(m2.group(2))
-                                            .arguments(m2.group(3))
+                                            .name(m.group(1))
+                                            .arguments(m.group(2))
                                             .build());
                                     }
                                 }
@@ -967,7 +1069,7 @@ public class AiStreamingService {
                                     cleanedText = "Đang kết nối hệ thống để gọi công cụ...";
                                 }
                                 // Add <think> tags around the cleaned text so the UI knows it's reasoning
-                                if (!cleanedText.contains("<think>")) {
+                                if (!cleanedText.contains("<think>") && !cleanedText.contains("<thought>")) {
                                     cleanedText = "<think>\n" + cleanedText + "\n</think>";
                                 }
                                 safeSend(emitter, "token", java.util.Map.of("token", cleanedText), org.springframework.http.MediaType.APPLICATION_JSON);
@@ -980,7 +1082,7 @@ public class AiStreamingService {
                                 aiMessage = dev.langchain4j.data.message.AiMessage.from("Hệ thống hiện chưa có công cụ phù hợp để thực hiện thao tác này.");
                             } else {
                                 boolean regexMissingTool = text.matches("(?is).*(không có công cụ|không tìm thấy công cụ|không thể thực hiện|không có quyền truy cập|not provided with a tool|missing tool|cannot perform|cannot access).*");
-                                boolean executionExpectedButNoToolCalled = requiresTools && !text.matches("(?is).*(vui lòng|bạn có muốn|cung cấp thêm|task là gì).*");
+                                boolean executionExpectedButNoToolCalled = (toolRound == 0) && requiresTools && extractedRequests.isEmpty() && !text.matches("(?is).*(vui lòng|bạn có muốn|cung cấp thêm|task là gì).*");
                                 
                                 if ((explicitMissingTool || regexMissingTool || executionExpectedButNoToolCalled) && retryCount == 0) {
                                     log.warn("[Fallback] Missing tool detected. Retrying with expanded context and tools enabled...");
@@ -1120,7 +1222,7 @@ public class AiStreamingService {
                     return;
                 }
 
-                String responseText = appendTaskPilotBlocks(stripThinkBlocks(rawResponseText), toolCallSummaries);
+                String responseText = appendTaskPilotBlocks(stripToolCallJson(stripThinkBlocks(rawResponseText)), toolCallSummaries);
                 String extractedReasoning = extractAllThinkBlocks(rawResponseText);
 
                 int estimatedTokens = completeResponse.tokenUsage() != null
@@ -1252,7 +1354,7 @@ public class AiStreamingService {
             log.info("[GeminiToolFix] Using custom HTTP client for Gemini model to bypass OpenAI official adapter strict parsing: {}", modelName);
             executor.submit(() -> {
                 try {
-                    ChatResponse response = callGemmaDirectly(request, modelName);
+                    ChatResponse response = callGemmaDirectly(request, modelName, toolRound);
                     if (response.aiMessage() != null && response.aiMessage().text() != null) {
                         handler.onPartialResponse(response.aiMessage().text());
                     }
@@ -1545,7 +1647,7 @@ public class AiStreamingService {
             String rawResponseText,
             ChatResponse completeResponse,
             AtomicBoolean generatingMarked) {
-        String responseText = appendTaskPilotBlocks(stripThinkBlocks(rawResponseText), toolCallSummaries);
+        String responseText = appendTaskPilotBlocks(stripToolCallJson(stripThinkBlocks(rawResponseText)), toolCallSummaries);
         String extractedReasoning = extractAllThinkBlocks(rawResponseText);
 
         if (responseText == null || responseText.isBlank()) {
@@ -1991,7 +2093,7 @@ public class AiStreamingService {
         if (text == null) {
             return "";
         }
-        return text.replaceAll("<think>[\\s\\S]*?</think>", "").trim();
+        return text.replaceAll("<(?:think|thought)>[\\s\\S]*?</(?:think|thought)>", "").trim();
     }
 
     private String compactText(String text, int maxChars) {
@@ -2077,10 +2179,10 @@ public class AiStreamingService {
     }
 
     private static final Pattern THINK_BLOCK_PATTERN = Pattern.compile(
-            "<\\s*d?think\\b[^>]*>(.*?)<\\s*/\\s*d?think\\s*>",
+            "<\\s*(?:d?think|thought)\\b[^>]*>(.*?)<\\s*/\\s*(?:d?think|thought)\\s*>",
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     private static final Pattern ORPHAN_THINK_TAG_PATTERN = Pattern.compile(
-            "</?\\s*d?think\\b[^>]*>",
+            "</?\\s*(?:d?think|thought)\\b[^>]*>",
             Pattern.CASE_INSENSITIVE);
     private static final Pattern RECORD_CONFIRMATION_PATTERN = Pattern.compile(
             "confirmationRequired\\s*=\\s*true.*?actionId\\s*=\\s*([^,\\]\\s]+)",
@@ -2122,6 +2224,33 @@ public class AiStreamingService {
         String withoutCompleteBlocks = THINK_BLOCK_PATTERN.matcher(rawResponse).replaceAll(" ");
         String withoutOrphanTags = ORPHAN_THINK_TAG_PATTERN.matcher(withoutCompleteBlocks).replaceAll(" ");
         return withoutOrphanTags.trim();
+    }
+
+    private String stripToolCallJson(String text) {
+        if (text == null || text.isBlank()) {
+            return "";
+        }
+        Pattern p = Pattern.compile("(?s)```(?:json)?\\s*(\\{.*?\\})\\s*```");
+        Matcher m = p.matcher(text);
+        StringBuilder sb = new StringBuilder();
+        while (m.find()) {
+            String jsonContent = m.group(1);
+            if (jsonContent.contains("\"tool\"") || jsonContent.contains("\"chains\"") || jsonContent.contains("\"steps\"")) {
+                m.appendReplacement(sb, "");
+            } else {
+                m.appendReplacement(sb, Matcher.quoteReplacement(m.group(0)));
+            }
+        }
+        m.appendTail(sb);
+        String result = sb.toString().trim();
+        
+        if (result.startsWith("{") && result.contains("\"tool\"") && result.contains("\"arguments\"")) {
+            int lastBrace = result.lastIndexOf("}");
+            if (lastBrace != -1) {
+                result = result.substring(lastBrace + 1).trim();
+            }
+        }
+        return result;
     }
 
     private Optional<Map<String, Object>> parseConfirmationPayload(String rawToolOutput) {
@@ -2423,7 +2552,7 @@ public class AiStreamingService {
         return "";
     }
 
-    private ChatResponse callGemmaDirectly(ChatRequest chatRequest, String modelName) {
+    private ChatResponse callGemmaDirectly(ChatRequest chatRequest, String modelName, int toolRound) {
         try {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("model", modelName);
@@ -2432,7 +2561,35 @@ public class AiStreamingService {
             List<Map<String, Object>> openAiMessages = new ArrayList<>();
             if (chatRequest.messages() != null) {
                 for (ChatMessage msg : chatRequest.messages()) {
-                    openAiMessages.add(mapMessageToOpenAi(msg));
+                    if (msg instanceof SystemMessage sysMsg) {
+                        String text = sysMsg.text();
+                        String modified;
+                        if (toolRound == 0) {
+                            // Round 0: Model must only output tool calls, no thinking, no explanation
+                            modified = text.replaceAll(
+                                "(?s)\\[REASONING\\s*OBJECTIVES\\s*&\\s*TRADE-OFFS\\].*?Explain\\s*the\\s*decision\\s*to\\s*call\\s*specific\\s*tools\\.",
+                                ""
+                            ).replaceAll(
+                                "(?s)2\\.\\s*ALWAYS\\s*write\\s*your\\s*step-by-step\\s*thinking\\s*process.*?Never\\s*write\\s*your\\s*thoughts\\s*in\\s*English\\.",
+                                "2. DO NOT write any thinking process or explanation inside <think> or <thought> tags. Output ONLY the tool calls immediately in JSON function call format. Do not write text."
+                            );
+                        } else {
+                            // Round 1+: Model must answer the user, but keep thinking extremely short/disabled for speed
+                            modified = text.replaceAll(
+                                "(?s)\\[REASONING\\s*OBJECTIVES\\s*&\\s*TRADE-OFFS\\].*?Explain\\s*the\\s*decision\\s*to\\s*call\\s*specific\\s*tools\\.",
+                                ""
+                            ).replaceAll(
+                                "(?s)2\\.\\s*ALWAYS\\s*write\\s*your\\s*step-by-step\\s*thinking\\s*process.*?Never\\s*write\\s*your\\s*thoughts\\s*in\\s*English\\.",
+                                "2. DO NOT write any thinking process or explanation inside <think> or <thought> tags. Provide your final answer in Vietnamese directly and concisely to optimize response speed."
+                            ).replaceAll(
+                                "(?s)3\\.\\s*DO\\s*NOT\\s*output\\s*any\\s*general\\s*explanation.*?Output\\s*ONLY\\s*tool\\s*calls\\s*or\\s*the\\s*MISSING_TOOL\\s*keyword\\.",
+                                "3. You MUST output your final answer directly outside any tags in clean Vietnamese."
+                            );
+                        }
+                        openAiMessages.add(mapMessageToOpenAi(SystemMessage.from(modified)));
+                    } else {
+                        openAiMessages.add(mapMessageToOpenAi(msg));
+                    }
                 }
             }
             body.put("messages", openAiMessages);
@@ -2561,7 +2718,7 @@ public class AiStreamingService {
         Map<String, Object> fn = new LinkedHashMap<>();
         fn.put("name", spec.name());
         if (spec.description() != null) {
-            fn.put("description", spec.description());
+            fn.put("description", spec.description().replace("\n", " ").replaceAll("\\s+", " ").trim());
         }
         if (spec.parameters() != null) {
             Map<String, Object> params = jsonSchemaElementToMap(spec.parameters());
@@ -2598,7 +2755,7 @@ public class AiStreamingService {
         map.put("type", type);
         
         if (element.description() != null) {
-            map.put("description", element.description());
+            map.put("description", element.description().replace("\n", " ").replaceAll("\\s+", " ").trim());
         }
         
         if (element instanceof dev.langchain4j.model.chat.request.json.JsonObjectSchema objSchema) {
@@ -2610,7 +2767,18 @@ public class AiStreamingService {
                 map.put("properties", props);
             }
             if (objSchema.required() != null) {
-                map.put("required", objSchema.required());
+                List<String> cleanedRequired = new ArrayList<>();
+                for (String reqField : objSchema.required()) {
+                    var fieldSchema = objSchema.properties().get(reqField);
+                    if (fieldSchema != null && fieldSchema.description() != null) {
+                        String desc = fieldSchema.description().toLowerCase();
+                        if (desc.startsWith("optional") || desc.contains("(optional)") || desc.contains("is optional")) {
+                            continue;
+                        }
+                    }
+                    cleanedRequired.add(reqField);
+                }
+                map.put("required", cleanedRequired);
             }
         } else if (element instanceof dev.langchain4j.model.chat.request.json.JsonArraySchema arrSchema) {
             if (arrSchema.items() != null) {

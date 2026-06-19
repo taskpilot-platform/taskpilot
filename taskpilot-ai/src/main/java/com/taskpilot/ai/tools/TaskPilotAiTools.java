@@ -8,6 +8,7 @@ import com.taskpilot.ai.dto.ConfirmationRequiredDto;
 import com.taskpilot.ai.dto.RecommendAndAssignResult;
 import com.taskpilot.ai.service.AutoAssignmentService;
 import com.taskpilot.ai.service.PendingAiActionService;
+import com.taskpilot.ai.service.SmartQueryService;
 import com.taskpilot.contracts.assignment.dto.ProjectDueDto;
 import com.taskpilot.contracts.assignment.port.out.ProjectMemberPort;
 import com.taskpilot.contracts.aiquery.dto.*;
@@ -55,16 +56,52 @@ public class TaskPilotAiTools {
     private final SkillPort skillPort;
     private final UserNotificationQueryPort userNotificationQueryPort;
     private final PendingAiActionService pendingAiActionService;
+    private final SmartQueryService smartQueryService;
 
-    @Tool("Search for projects the current user participates in. Supports optional status, role, and searchTerm filters.")
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+
+    @Tool("Search for projects the current user participates in. All filters are optional (can be null/empty). Supports keyword search and sorting.")
     public Object queryProjects(
-            @P("Optional status to filter by (e.g. ACTIVE, ARCHIVED)") String status,
-            @P("Optional role to filter by (e.g. MANAGER, MEMBER)") String role,
-            @P("Optional search term for project name or description") String searchTerm,
-            @P("Maximum number of projects to return, default 10, max 20") Integer limit) {
+            @P("Optional. Status to filter by (e.g. PLANNING, ACTIVE, COMPLETED, ARCHIVED). Use null/empty to get all statuses.") String status,
+            @P("Optional. Role of the user in the project (e.g. MANAGER, MEMBER). Use null/empty to get all roles.") String role,
+            @P("Optional. Search keyword for project name or description") String searchTerm,
+            @P("Optional. Field to sort by: 'name', 'startDate', 'endDate', 'status' (default 'name')") String sortBy,
+            @P("Optional. Sort direction: 'ASC' or 'DESC' (default 'ASC')") String sortDirection,
+            @P("Optional. Maximum number of projects to return (default 10, max 20)") Integer limit) {
         Long userId = ToolExecutionContext.requireUserId();
-        log.info("[AiTool] queryProjects called for user {} status={} role={} search={}", userId, status, role, searchTerm);
+        log.info("[AiTool] queryProjects called for user {} status={} role={} search={} sortBy={} sortDir={}", userId, status, role, searchTerm, sortBy, sortDirection);
         List<ProjectOverviewDto> allProjects = projectInsightsPort.getMyProjects(userId);
+
+        String sortField = sortBy != null ? sortBy.trim().toLowerCase() : "name";
+        String direction = sortDirection != null ? sortDirection.trim().toUpperCase() : "ASC";
+        boolean isAsc = !"DESC".equals(direction);
+
+        java.util.Comparator<ProjectOverviewDto> comparator = (p1, p2) -> {
+            int comp = 0;
+            switch (sortField) {
+                case "status":
+                    comp = String.valueOf(p1.status()).compareToIgnoreCase(String.valueOf(p2.status()));
+                    break;
+                case "startdate":
+                    if (p1.startDate() == null && p2.startDate() == null) comp = 0;
+                    else if (p1.startDate() == null) comp = -1;
+                    else if (p2.startDate() == null) comp = 1;
+                    else comp = p1.startDate().compareTo(p2.startDate());
+                    break;
+                case "enddate":
+                    if (p1.endDate() == null && p2.endDate() == null) comp = 0;
+                    else if (p1.endDate() == null) comp = -1;
+                    else if (p2.endDate() == null) comp = 1;
+                    else comp = p1.endDate().compareTo(p2.endDate());
+                    break;
+                case "name":
+                default:
+                    comp = String.valueOf(p1.name()).compareToIgnoreCase(String.valueOf(p2.name()));
+                    break;
+            }
+            return isAsc ? comp : -comp;
+        };
 
         // Apply filters in-memory for Stage 1
         List<Map<String, Object>> filtered = allProjects.stream()
@@ -73,14 +110,17 @@ public class TaskPilotAiTools {
                 .filter(p -> searchTerm == null || searchTerm.isBlank() || 
                         (p.name() != null && p.name().toLowerCase().contains(searchTerm.toLowerCase())) ||
                         (p.description() != null && p.description().toLowerCase().contains(searchTerm.toLowerCase())))
-                .map(p -> Map.<String, Object>of(
-                        "projectId", p.projectId(),
-                        "name", p.name(),
-                        "role", p.role(),
-                        "status", p.status(),
-                        "startDate", p.startDate() != null ? p.startDate() : "",
-                        "endDate", p.endDate() != null ? p.endDate() : ""
-                ))
+                .sorted(comparator)
+                .map(p -> {
+                    Map<String, Object> map = new LinkedHashMap<>();
+                    map.put("projectId", p.projectId());
+                    map.put("name", p.name());
+                    map.put("role", p.role());
+                    map.put("status", p.status());
+                    map.put("startDate", p.startDate() != null ? p.startDate().toString() : "");
+                    map.put("endDate", p.endDate() != null ? p.endDate().toString() : "");
+                    return map;
+                })
                 .limit(limit != null ? Math.max(1, Math.min(limit, 20)) : 10)
                 .collect(Collectors.toList());
 
@@ -101,27 +141,50 @@ public class TaskPilotAiTools {
         return memberAnalyticsPort.getMemberWorkloadForProject(toLong(projectId), userId);
     }
 
-    @Tool("Search for members in a specific project. Supports filtering by role and member name.")
+    @Tool("Search and list members in a specific project. All filters except projectId are optional. Supports sorting.")
     public Object queryProjectMembers(
             @P("The ID of the project") String projectId,
-            @P("Optional role to filter by (e.g. MANAGER, MEMBER, DEVELOPER)") String role,
-            @P("Optional search term for member name") String searchTerm,
-            @P("Maximum number of members to return, default 10, max 20") Integer limit) {
-        log.info("[AiTool] queryProjectMembers called for project {} role={} search={}", projectId, role, searchTerm);
+            @P("Optional. Role to filter by (e.g. MANAGER, MEMBER). Can be null/empty.") String role,
+            @P("Optional. Search keyword for member name") String searchTerm,
+            @P("Optional. Field to sort by: 'fullName', 'role' (default 'fullName')") String sortBy,
+            @P("Optional. Sort direction: 'ASC' or 'DESC' (default 'ASC')") String sortDirection,
+            @P("Optional. Maximum number of members to return (default 10, max 20)") Integer limit) {
+        log.info("[AiTool] queryProjectMembers called for project {} role={} search={} sortBy={} sortDir={}", projectId, role, searchTerm, sortBy, sortDirection);
         Long userId = ToolExecutionContext.requireUserId();
         List<ProjectMemberDto> allMembers = projectInsightsPort.getProjectMembers(toLong(projectId), userId);
+
+        String sortField = sortBy != null ? sortBy.trim().toLowerCase() : "fullname";
+        String direction = sortDirection != null ? sortDirection.trim().toUpperCase() : "ASC";
+        boolean isAsc = !"DESC".equals(direction);
+
+        java.util.Comparator<ProjectMemberDto> comparator = (m1, m2) -> {
+            int comp = 0;
+            switch (sortField) {
+                case "role":
+                    comp = String.valueOf(m1.role()).compareToIgnoreCase(String.valueOf(m2.role()));
+                    break;
+                case "fullname":
+                default:
+                    comp = String.valueOf(m1.fullName()).compareToIgnoreCase(String.valueOf(m2.fullName()));
+                    break;
+            }
+            return isAsc ? comp : -comp;
+        };
 
         // Apply filters in-memory for Stage 1
         List<Map<String, Object>> filtered = allMembers.stream()
                 .filter(m -> role == null || role.isBlank() || role.equalsIgnoreCase(m.role()))
                 .filter(m -> searchTerm == null || searchTerm.isBlank() || 
                         (m.fullName() != null && m.fullName().toLowerCase().contains(searchTerm.toLowerCase())))
-                .map(m -> Map.<String, Object>of(
-                        "memberId", m.memberId(),
-                        "fullName", m.fullName(),
-                        "role", m.role(),
-                        "skills", m.skills() != null ? m.skills() : ""
-                ))
+                .sorted(comparator)
+                .map(m -> {
+                    Map<String, Object> map = new LinkedHashMap<>();
+                    map.put("memberId", m.memberId());
+                    map.put("fullName", m.fullName());
+                    map.put("role", m.role());
+                    map.put("skills", m.skills() != null ? m.skills() : "");
+                    return map;
+                })
                 .limit(limit != null ? Math.max(1, Math.min(limit, 20)) : 10)
                 .collect(Collectors.toList());
 
@@ -750,19 +813,23 @@ public class TaskPilotAiTools {
             Integer difficultyLevel,
             Long assigneeId,
             String assigneeName,
-            String dueDate) {
+            String dueDate,
+            String description) {
     }
 
-    @Tool("Search and query tasks in a project. Supports filters: assigneeId, status (TODO, IN_PROGRESS, DONE), isOverdue, dueToday, unassignedOnly.")
+    @Tool("Search, query, and filter tasks in a project. All filters except projectId are optional (can be null/empty). Supports keyword search and sorting.")
     public Object queryTasks(
             @P("The ID of the project") String projectId,
-            @P("Optional. Filter by assignee ID") String assigneeId,
-            @P("Optional. Filter by status (TODO, IN_PROGRESS, DONE)") String status,
-            @P("Optional. Set to true to find overdue tasks (dueDate < today)") Boolean isOverdue,
-            @P("Optional. Set to true to find tasks with dueDate = today") Boolean dueToday,
-            @P("Optional. Set to true to find tasks that have NO assignee") Boolean unassignedOnly,
-            @P("Optional. Maximum number of results to return. Default 10.") Integer limit) {
-        log.info("[AiTool] queryTasks called for project {}", projectId);
+            @P("Optional. Filter by assignee ID. Can be null/empty.") String assigneeId,
+            @P("Optional. Filter by status (TODO, IN_PROGRESS, REVIEW, DONE). Can be null/empty.") String status,
+            @P("Optional. Set to true to find overdue tasks (dueDate < today). Can be null/empty.") Boolean isOverdue,
+            @P("Optional. Set to true to find tasks with dueDate = today. Can be null/empty.") Boolean dueToday,
+            @P("Optional. Set to true to find tasks that have NO assignee. Can be null/empty.") Boolean unassignedOnly,
+            @P("Optional. Search keyword for task title or description. Can be null/empty.") String searchTerm,
+            @P("Optional. Field to sort by: 'title', 'dueDate', 'priority', 'difficultyLevel' (default 'title')") String sortBy,
+            @P("Optional. Sort direction: 'ASC' or 'DESC' (default 'ASC')") String sortDirection,
+            @P("Optional. Maximum number of results to return (default 10, max 50).") Integer limit) {
+        log.info("[AiTool] queryTasks called for project {} status={} assignee={} search={} sortBy={} sortDir={}", projectId, status, assigneeId, searchTerm, sortBy, sortDirection);
         Long userId = ToolExecutionContext.requireUserId();
 
         java.util.List<?> rawTasks;
@@ -773,19 +840,50 @@ public class TaskPilotAiTools {
         }
 
         java.time.LocalDate today = java.time.LocalDate.now();
+        String sortField = sortBy != null ? sortBy.trim().toLowerCase() : "title";
+        String direction = sortDirection != null ? sortDirection.trim().toUpperCase() : "ASC";
+        boolean isAsc = !"DESC".equals(direction);
+
+        java.util.Comparator<AiQueryTaskDto> comparator = (t1, t2) -> {
+            int comp = 0;
+            switch (sortField) {
+                case "duedate":
+                    if (t1.dueDate() == null && t2.dueDate() == null) comp = 0;
+                    else if (t1.dueDate() == null) comp = 1; // null due dates go last
+                    else if (t2.dueDate() == null) comp = -1;
+                    else comp = t1.dueDate().compareTo(t2.dueDate());
+                    break;
+                case "priority":
+                    comp = String.valueOf(t1.priority()).compareToIgnoreCase(String.valueOf(t2.priority()));
+                    break;
+                case "difficultylevel":
+                    int d1 = t1.difficultyLevel() != null ? t1.difficultyLevel() : 0;
+                    int d2 = t2.difficultyLevel() != null ? t2.difficultyLevel() : 0;
+                    comp = Integer.compare(d1, d2);
+                    break;
+                case "title":
+                default:
+                    comp = String.valueOf(t1.title()).compareToIgnoreCase(String.valueOf(t2.title()));
+                    break;
+            }
+            return isAsc ? comp : -comp;
+        };
 
         return rawTasks.stream().map(task -> {
             if (task instanceof com.taskpilot.contracts.aiquery.dto.TaskDetailDto d) {
-                return new AiQueryTaskDto(d.id(), d.projectId(), d.title(), d.status(), d.priority(), d.difficultyLevel(), d.assigneeId(), d.assigneeName(), d.dueDate());
+                return new AiQueryTaskDto(d.id(), d.projectId(), d.title(), d.status(), d.priority(), d.difficultyLevel(), d.assigneeId(), d.assigneeName(), d.dueDate(), d.description());
             } else if (task instanceof com.taskpilot.contracts.aiquery.dto.TaskSummaryDto s) {
-                return new AiQueryTaskDto(s.id(), s.projectId(), s.title(), s.status(), s.priority(), s.difficultyLevel(), s.assigneeId(), s.assigneeName(), s.dueDate());
+                return new AiQueryTaskDto(s.id(), s.projectId(), s.title(), s.status(), s.priority(), s.difficultyLevel(), s.assigneeId(), s.assigneeName(), s.dueDate(), "");
             }
             return null;
         })
         .filter(dto -> dto != null)
         .filter(dto -> !Boolean.TRUE.equals(unassignedOnly) || dto.assigneeId() == null)
-        .filter(dto -> assigneeId == null || assigneeId.equals(String.valueOf(dto.assigneeId())))
-        .filter(dto -> status == null || status.equalsIgnoreCase(dto.status()))
+        .filter(dto -> assigneeId == null || assigneeId.isBlank() || assigneeId.equals(String.valueOf(dto.assigneeId())))
+        .filter(dto -> status == null || status.isBlank() || status.equalsIgnoreCase(dto.status()))
+        .filter(dto -> searchTerm == null || searchTerm.isBlank() ||
+                (dto.title() != null && dto.title().toLowerCase().contains(searchTerm.toLowerCase())) ||
+                (dto.description() != null && dto.description().toLowerCase().contains(searchTerm.toLowerCase())))
         .filter(dto -> {
             if (dto.dueDate() == null || dto.dueDate().isBlank()) {
                 return !Boolean.TRUE.equals(isOverdue) && !Boolean.TRUE.equals(dueToday);
@@ -798,8 +896,44 @@ public class TaskPilotAiTools {
             } catch (Exception e) { return false; }
             return true;
         })
-        .limit(limit != null ? limit : 10)
+        .sorted(comparator)
+        .limit(limit != null ? Math.max(1, Math.min(limit, 50)) : 10)
         .toList();
+    }
+
+    @Tool("Execute a read-only raw SQL SELECT query to retrieve complex, joined, or aggregated database information directly. " +
+          "Use table names: 'projects', 'project_members', 'tasks', 'users', 'sprints', 'comments', 'labels', 'skills', 'user_skills', 'notifications'. " +
+          "Only SELECT statement is allowed. Useful for fetching multiple tables' data in one step.")
+    public Object executeQuerySql(@P("The SELECT SQL query statement to run") String sql) {
+        log.info("[AiTool] executeQuerySql called with SQL: {}", sql);
+        if (jdbcTemplate == null) {
+            log.warn("[AiTool] jdbcTemplate is null, executeQuerySql is disabled in current context.");
+            return Map.of("error", "Database query tool is not initialized in this environment.");
+        }
+        if (sql == null || sql.isBlank()) {
+            throw new IllegalArgumentException("SQL query cannot be null or empty.");
+        }
+        
+        String cleanSql = sql.trim().toUpperCase();
+        if (!cleanSql.startsWith("SELECT") && !cleanSql.startsWith("WITH")) {
+            throw new IllegalArgumentException("Only read-only SELECT queries are allowed for security reasons.");
+        }
+        
+        // Prevent simple SQL write attempts in comments or subqueries (naive check)
+        List<String> forbidden = List.of("INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "TRUNCATE", "REPLACE");
+        for (String word : forbidden) {
+            if (cleanSql.contains(" " + word + " ") || cleanSql.contains("\n" + word + " ") || cleanSql.contains("\t" + word + " ")) {
+                throw new IllegalArgumentException("Forbidden keyword '" + word + "' detected in SQL statement.");
+            }
+        }
+
+        try {
+            List<Map<String, Object>> results = jdbcTemplate.queryForList(sql);
+            return Map.of("results", results, "totalMatched", results.size());
+        } catch (Exception e) {
+            log.error("[AiTool] executeQuerySql failed", e);
+            return Map.of("error", e.getMessage());
+        }
     }
 
     @Tool("Fetch subtasks belonging to a specific parent task ID.")
@@ -1735,4 +1869,45 @@ public class TaskPilotAiTools {
         throw new IllegalArgumentException("Invalid patch data type: " + patchData.getClass().getSimpleName());
     }
 
+    @Tool("Execute multiple query chains in parallel. Each chain is a sequence of dependent queries. " +
+          "Chains run simultaneously on separate threads for maximum speed. " +
+          "Entities: projects, tasks, members, sprints, comments, workload, notifications. " +
+          "Use 'ref' within a chain to reference previous step results by key name. " +
+          "Use 'aggregate' for special project selection: $latest, $mostMembers, $mostTasks.")
+    public Object smartQuery(
+        @P("List of query chains. Each chain is a list of sequential query steps. " +
+           "Example: " +
+           "[{\"steps\": [{\"key\":\"p\", \"entity\":\"projects\", \"aggregate\":\"$latest\"}, " +
+           "{\"key\":\"t\", \"entity\":\"tasks\", \"ref\":{\"projectId\":\"p\"}, \"filters\":{\"dueToday\":\"true\"}}]}, " +
+           "{\"steps\": [{\"key\":\"all\", \"entity\":\"projects\"}, " +
+           "{\"key\":\"w\", \"entity\":\"workload\", \"ref\":{\"projectId\":\"all\"}, \"sort\":\"activeWorkloadScore DESC\", \"limit\":1}]}]") 
+        List<SmartQueryRequestDto.QueryChain> chains
+    ) {
+        Long userId = ToolExecutionContext.requireUserId();
+        log.info("[AiTool] smartQuery called by user {} with chains: {}", userId, chains);
+        
+        SmartQueryRequestDto request = new SmartQueryRequestDto(chains);
+        validateRequest(request);
+        return smartQueryService.execute(request, userId);
+    }
+    
+    private void validateRequest(SmartQueryRequestDto request) {
+        if (request == null || request.chains() == null) {
+            throw new IllegalArgumentException("Request chains cannot be null");
+        }
+        if (request.chains().size() > 4) {
+            throw new IllegalArgumentException("Maximum of 4 parallel chains is allowed");
+        }
+        int totalSteps = 0;
+        for (var chain : request.chains()) {
+            if (chain == null || chain.steps() == null) continue;
+            if (chain.steps().size() > 5) {
+                throw new IllegalArgumentException("Maximum of 5 steps per chain is allowed");
+            }
+            totalSteps += chain.steps().size();
+        }
+        if (totalSteps > 15) {
+            throw new IllegalArgumentException("Maximum of 15 total steps across all chains is allowed");
+        }
+    }
 }

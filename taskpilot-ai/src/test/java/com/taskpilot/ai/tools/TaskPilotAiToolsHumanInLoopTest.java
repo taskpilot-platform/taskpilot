@@ -27,6 +27,7 @@ import com.taskpilot.ai.dto.CandidateScore;
 import com.taskpilot.ai.dto.ConfirmationRequiredDto;
 import com.taskpilot.ai.service.AutoAssignmentService;
 import com.taskpilot.ai.service.PendingAiActionService;
+import com.taskpilot.ai.service.SmartQueryService;
 import com.taskpilot.contracts.assignment.port.out.ProjectMemberPort;
 import com.taskpilot.contracts.aiquery.dto.SprintSummaryDto;
 import com.taskpilot.contracts.aiquery.dto.ProjectMemberDto;
@@ -74,6 +75,9 @@ class TaskPilotAiToolsHumanInLoopTest {
     @Mock
     private UserNotificationQueryPort userNotificationQueryPort;
 
+    @Mock
+    private SmartQueryService smartQueryService;
+
     private TaskPilotAiTools tools;
 
     @BeforeEach
@@ -88,7 +92,8 @@ class TaskPilotAiToolsHumanInLoopTest {
                 sprintQueryPort,
                 skillPort,
                 userNotificationQueryPort,
-                new PendingAiActionService());
+                new PendingAiActionService(),
+                smartQueryService);
         ToolExecutionContext.set(new ToolExecutionContext.Context(USER_ID, SESSION_ID, "initial request"));
     }
 
