@@ -139,7 +139,7 @@ public class SmartRoutingService {
     @Value("${ai.routing.token-threshold:8000}")
     private int tokenThreshold;
 
-    @Value("${ai.routing.tool-keywords:project,task,sprint,comment,member,role,status,project status,workload,assign,candidates,task list,project progress,my projects,project list,unassigned,not assigned,notification,unread,confirm,confirm_action,apply,xac nhan,dong y,thuc hien,du an,liet ke project,liet ke du an,chua phan cong,chua duoc phan cong,task chua gan,giao viec,tinh trang,tien do,danh sach task,cong viec,ung vien,giao task,gan task,chia viec,tao task,tao cong viec,bình luận,binh luan,comment cua toi,thong bao,thông báo,chua doc,chưa đọc}")
+    @Value("${ai.routing.tool-keywords:project,task,sprint,comment,member,role,status,project status,workload,assign,candidates,task list,project progress,my projects,project list,unassigned,not assigned,notification,unread,confirm,confirm_action,apply,xac nhan,dong y,thuc hien,du an,liet ke project,liet ke du an,chua phan cong,chua duoc phan cong,task chua gan,giao viec,tinh trang,tien do,danh sach task,cong viec,ung vien,giao task,gan task,chia viec,tao task,tao cong viec,bình luận,binh luan,comment cua toi,thong bao,thông báo,chua doc,chưa đọc,skill,ky nang,kỹ năng}")
     private String toolKeywordsRaw;
 
     @Value("${ai.routing.ahp-fallback-keywords:phan cong,giao viec,chia viec,chon ai,chon nguoi,tim nguoi,ai ranh,ung vien,assign,candidate,workload,chia task}")
@@ -219,7 +219,7 @@ public class SmartRoutingService {
         String normalized = normalize(userMessage);
         String normalizedContext = normalize(contextHistory);
         boolean directAssignmentExecution = isDirectAssignmentExecution(normalized, normalizedContext);
-        boolean pendingActionConfirmation = isPendingActionConfirmation(normalized);
+        boolean pendingActionConfirmation = isPendingActionConfirmation(userMessage, normalized);
         boolean requiresAHP = directAssignmentExecution || pendingActionConfirmation ? false : resolveRequiresAHP(userMessage);
 
         int estimatedTokens = tokenEstimationUtil.estimateTotal(userMessage, contextHistory);
@@ -314,14 +314,14 @@ public class SmartRoutingService {
         return hasAssignmentIntent && (hasExecutionIntent || hasConcreteTask || hasSpecificTarget);
     }
 
-    private boolean isPendingActionConfirmation(String normalized) {
-        if (normalized == null || normalized.isBlank()) {
+    private boolean isPendingActionConfirmation(String userMessage, String normalized) {
+        if (userMessage == null || userMessage.isBlank()) {
             return false;
         }
+        boolean hasUuid = userMessage.matches(".*\\b[a-f0-9-]{24,}\\b.*");
         return normalized.contains("confirm_action")
-                || (normalized.matches(".*\\b[a-f0-9-]{24,}\\b.*")
-                        && containsAny(normalized, List.of(
-                                "confirm", "confirmed", "xac nhan", "dong y", "thuc hien", "apply")));
+                || (hasUuid && containsAny(normalized, List.of(
+                        "confirm", "confirmed", "xac nhan", "dong y", "thuc hien", "apply")));
     }
 
     /**
@@ -330,55 +330,10 @@ public class SmartRoutingService {
      */
     public StreamingChatModel getNextGeminiFallback(StreamingChatModel currentModel) {
         if (currentModel == geminiPrimaryModel) {
-            if (maxGeminiAttempts() <= 1) {
-                return externalFallbackAfter("primary");
-            }
-            log.info("[SmartRouting] Gemini waterfall: {} -> {}", geminiModelName, geminiFallback1ModelName);
-            return geminiFallback1Model;
+            log.info("[SmartRouting] Gemini primary failed -> Switch directly to OpenRouter fallback");
+            return externalFallbackAfter("primary");
         }
-        if (currentModel == geminiFallback1Model) {
-            if (maxGeminiAttempts() <= 2) {
-                return externalFallbackAfter(geminiFallback1ModelName);
-            }
-            log.info("[SmartRouting] Gemini waterfall: {} -> {}", geminiFallback1ModelName, geminiFallback2ModelName);
-            return geminiFallback2Model;
-        }
-        if (currentModel == geminiFallback2Model) {
-            if (maxGeminiAttempts() <= 3) {
-                return externalFallbackAfter(geminiFallback2ModelName);
-            }
-            log.info("[SmartRouting] Gemini waterfall: {} -> {}", geminiFallback2ModelName, geminiFallback3ModelName);
-            return geminiFallback3Model;
-        }
-        if (currentModel == geminiFallback3Model) {
-            if (maxGeminiAttempts() <= 4) {
-                return externalFallbackAfter(geminiFallback3ModelName);
-            }
-            log.info("[SmartRouting] Gemini waterfall: {} -> {}", geminiFallback3ModelName, geminiFallback4ModelName);
-            return geminiFallback4Model;
-        }
-        if (currentModel == geminiFallback4Model) {
-            if (maxGeminiAttempts() <= 5) {
-                return externalFallbackAfter(geminiFallback4ModelName);
-            }
-            log.info("[SmartRouting] Gemini waterfall: {} -> {}", geminiFallback4ModelName, geminiFallback5ModelName);
-            return geminiFallback5Model;
-        }
-        if (currentModel == geminiFallback5Model) {
-            if (maxGeminiAttempts() <= 6) {
-                return externalFallbackAfter(geminiFallback5ModelName);
-            }
-            log.info("[SmartRouting] Gemini waterfall: {} -> {}", geminiFallback5ModelName, geminiFallback6ModelName);
-            return geminiFallback6Model;
-        }
-        if (currentModel == geminiFallback6Model) {
-            if (maxGeminiAttempts() <= 7) {
-                return externalFallbackAfter(geminiFallback6ModelName);
-            }
-            log.info("[SmartRouting] Gemini waterfall: {} -> {}", geminiFallback6ModelName, geminiFallback7ModelName);
-            return geminiFallback7Model;
-        }
-        return externalFallbackAfter(geminiFallback7ModelName);
+        return externalFallbackAfter(getModelName(currentModel));
     }
 
     private int maxGeminiAttempts() {
@@ -413,22 +368,22 @@ public class SmartRoutingService {
             return getNextOpenRouterReasoningFallback(currentModel);
         }
         if (currentModel == groqOssReasoningModel) {
-            return firstAvailable(groqOssReasoningFallback1Model, deepSeekReasoningModel);
+            return groqOssReasoningModel;
         }
         if (currentModel == groqOssReasoningFallback1Model) {
-            return deepSeekReasoningModel;
+            return currentModel;
         }
         if (currentModel == groqOssReasoningTextModel) {
-            return firstAvailable(groqOssReasoningFallback1TextModel, deepSeekReasoningTextModel);
+            return groqOssReasoningTextModel;
         }
         if (currentModel == groqOssReasoningFallback1TextModel) {
-            return deepSeekReasoningTextModel;
+            return currentModel;
         }
         if (currentModel == deepSeekReasoningModel) {
-            return gpt4oFallbackModel;
+            return currentModel;
         }
         if (currentModel == deepSeekReasoningTextModel) {
-            return gpt4oFallbackTextModel;
+            return currentModel;
         }
         return currentModel;
     }
@@ -452,7 +407,7 @@ public class SmartRoutingService {
         if (currentModel == openRouterReasoningFallback8Model) return firstAvailable(openRouterReasoningFallback9Model, currentModel);
         if (currentModel == openRouterReasoningFallback9Model) return firstAvailable(openRouterReasoningFallback10Model, currentModel);
         if (currentModel == openRouterReasoningFallback10Model) {
-            return deepSeekReasoningModel != null ? deepSeekReasoningModel : gpt4oFallbackModel;
+            return currentModel;
         }
         return currentModel;
     }
@@ -520,36 +475,18 @@ public class SmartRoutingService {
         if (groqEnabled && groqOssReasoningModel != null) {
             return groqOssReasoningModel;
         }
-        return gpt4oFallbackModel;
+        return geminiPrimaryModel;
     }
 
     public StreamingChatModel getPrimaryModel() {
-        if (openRouterEnabled && openRouterReasoningModel != null) {
-            return openRouterReasoningModel;
-        }
-        if (groqEnabled && groqOssReasoningModel != null) {
-            return groqOssReasoningModel;
-        }
         return geminiPrimaryModel;
     }
 
     public StreamingChatModel getReasoningModel() {
-        if (openRouterEnabled && openRouterReasoningModel != null) {
-            return openRouterReasoningModel;
-        }
-        if (groqEnabled && groqOssReasoningModel != null) {
-            return groqOssReasoningModel;
-        }
         return geminiPrimaryModel;
     }
 
     public StreamingChatModel getReasoningTextModel() {
-        if (openRouterEnabled && openRouterReasoningModel != null) {
-            return openRouterReasoningModel;
-        }
-        if (groqEnabled && groqOssReasoningTextModel != null) {
-            return groqOssReasoningTextModel;
-        }
         return geminiPrimaryModel;
     }
 
@@ -560,7 +497,7 @@ public class SmartRoutingService {
         if (groqEnabled && groqOssReasoningTextModel != null) {
             return groqOssReasoningTextModel;
         }
-        return gpt4oFallbackTextModel;
+        return geminiPrimaryModel;
     }
 
     public StreamingChatModel getTextModel(String modelName) {
@@ -655,10 +592,53 @@ public class SmartRoutingService {
                 .replace('\u0111', 'd')
                 .replace('\u0110', 'd');
         String temp = Normalizer.normalize(lower, Normalizer.Form.NFD);
-        return temp.replaceAll("\\p{M}", "")
+        String normalized = temp.replaceAll("\\p{M}", "")
                    .replaceAll("[^a-z0-9\\s]", " ")
                    .replaceAll("\\s+", " ")
                    .trim();
+        return normalized.replace("gan nhat", "gannhat")
+                         .replace("gan day", "ganday");
+    }
+
+    public boolean isWriteIntent(String normalizedMsg) {
+        if (normalizedMsg == null || normalizedMsg.isBlank()) {
+            return false;
+        }
+        List<String> writeKeywords = List.of(
+            "tao moi", "tao du an", "tao task", "tao sprint", "tao comment", "tao binh luan",
+            "tao project", "create project", "tao nhan", "them nhan", "xoa nhan", "tao cong viec",
+            "tao gium", "tao giup", "tao ho", "tao cho", "tao 1", "tao mot", "tao cai", "tao luon", "tao ra",
+            "them moi", "them du an", "them task", "them sprint", "them comment", "them binh luan", "them ky nang", "them skill", "them member", "them thanh vien", "them vao",
+            "create", "add", "post", "viet comment", "viet binh luan", "viet mo ta",
+            "cap nhat", "chinh sua", "sua task", "sua du an", "sua sprint", "sua comment", "sua binh luan", "sua skill", "sua ky nang", "sua lai",
+            "doi ten", "doi mo ta", "doi han", "doi deadline", "doi level", "doi vai tro", "doi trang thai", "thay doi deadline", "thay doi han", "thay doi trang thai",
+            "update", "patch", "change",
+            "xoa task", "xoa du an", "xoa sprint", "xoa comment", "xoa binh luan", "xoa ky nang", "xoa skill", "xoa member", "xoa thanh vien", "xoa bo", "delete", "remove", "archive", "restore",
+            "gan cho", "gan luon", "gan task", "gan toi", "gan member", "gan vao", "assign", "reassign",
+            "gan admin", "gan user", "gan nhan vien", "gan nguoi", "gan ban", "gan minh", "gan tui", "gan cau",
+            "giao cho", "giao task", "giao viec", "giao luon", "giao du an", "giao sprint", "giao nguoi", "giao admin", "giao user", "giao member", "giao thanh vien", "giao tui", "giao minh", "giao ban", "giao ho", "giao gium", "giao giup", "phan cong",
+            "complete", "start", "close", "move", "chuyen sang", "chuyen task", "chuyen trang thai", "bat dau", "hoan thanh",
+            "dua vao sprint", "dua task", "dua project", "dua sprint", "dua member", "dua thanh vien", "dua comment", "dua binh luan",
+            "chuyen cot", "chuyen du an", "chuyen vao",
+            "danh dau doc", "doc het thong bao", "doc tat ca thong bao", "mark read", "mark as read", "read all",
+            "confirm", "xac nhan", "huy bo", "cancel"
+        );
+        for (String kw : writeKeywords) {
+            if (normalizedMsg.contains(kw)) {
+                return true;
+            }
+        }
+        
+        List<String> singleWriteWords = List.of(
+            "tao", "them", "xoa", "sua", "giao", "chuyen", "huy",
+            "confirm", "cancel", "delete", "remove", "create", "add", "patch", "update"
+        );
+        for (String word : singleWriteWords) {
+            if (normalizedMsg.matches(".*\\b" + word + "\\b.*")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean containsAny(String text, List<String> keywords) {
