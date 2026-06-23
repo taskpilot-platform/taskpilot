@@ -2596,13 +2596,19 @@ public class AiStreamingService {
             return cleaned;
         }
 
-        // Now, merge consecutive messages of the same type
+        // Now, alternate roles instead of merging USER messages directly to prevent context confusion
         List<ChatMessage> alternated = new ArrayList<>();
         ChatMessage current = body.get(0);
         for (int i = 1; i < body.size(); i++) {
             ChatMessage next = body.get(i);
             if (sameRole(current, next)) {
-                current = mergeMessages(current, next);
+                if (current instanceof UserMessage) {
+                    alternated.add(current);
+                    alternated.add(AiMessage.from("Đã xảy ra lỗi hệ thống hoặc timeout ở yêu cầu trước."));
+                    current = next;
+                } else {
+                    current = mergeMessages(current, next);
+                }
             } else {
                 alternated.add(current);
                 current = next;

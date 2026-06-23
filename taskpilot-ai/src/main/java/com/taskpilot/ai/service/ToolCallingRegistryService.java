@@ -151,6 +151,14 @@ public class ToolCallingRegistryService {
                 || normalizedMsg.contains(" voi ");
         final boolean disableSmartQueryForComment = containsComment && !hasParallelConjunction;
 
+        boolean containsNotification = normalizedMsg.contains("thong bao") || normalizedMsg.contains("tb") || normalizedMsg.contains("notification");
+        boolean containsSkill = normalizedMsg.contains("skill") || normalizedMsg.contains("ky nang") || normalizedMsg.contains("profile");
+        boolean containsTaskOrProject = normalizedMsg.contains("task") || normalizedMsg.contains("cong viec") || normalizedMsg.contains("cv")
+                || normalizedMsg.contains("project") || normalizedMsg.contains("du an") || normalizedMsg.contains("da")
+                || normalizedMsg.contains("sprint") || normalizedMsg.contains("chu ky");
+        final boolean disableSmartQueryForNotification = containsNotification && !containsTaskOrProject;
+        final boolean disableSmartQueryForSkill = containsSkill && !containsTaskOrProject;
+
         // Detect parallel read queries for multiple entities to force smartQuery
         int entityTypesCount = 0;
         if (normalizedMsg.contains("task") || normalizedMsg.contains("cong viec") || normalizedMsg.contains("cv")) entityTypesCount++;
@@ -211,6 +219,12 @@ public class ToolCallingRegistryService {
                     return !isReadOnlyTool(name);
                 }
                 if (disableSmartQueryForComment && "smartQuery".equals(name)) {
+                    return false;
+                }
+                if (disableSmartQueryForNotification && "smartQuery".equals(name)) {
+                    return false;
+                }
+                if (disableSmartQueryForSkill && "smartQuery".equals(name)) {
                     return false;
                 }
                 return true;
