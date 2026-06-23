@@ -447,7 +447,7 @@ public class AiModelConfig {
                                         .modelName(modelName)
                                         .temperature(0.4)
                                         .parallelToolCalls(true)
-                                        .timeout(Duration.ofSeconds(timeoutSeconds * 2))
+                                        .timeout(Duration.ofSeconds(25))
                                         .build();
                 }
                 return OpenAiOfficialStreamingChatModel.builder()
@@ -455,7 +455,7 @@ public class AiModelConfig {
                                 .baseUrl(openRouterBaseUrl)
                                 .modelName(modelName)
                                 .temperature(0.4)
-                                .timeout(Duration.ofSeconds(timeoutSeconds * 2))
+                                .timeout(Duration.ofSeconds(25))
                                 .build();
         }
 

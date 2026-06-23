@@ -22,6 +22,7 @@ import com.taskpilot.contracts.skill.port.out.SkillPort;
 import com.taskpilot.contracts.user.port.out.UserNotificationQueryPort;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
+import org.springframework.lang.Nullable;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -284,9 +285,9 @@ public class TaskPilotAiTools {
         return skillPort.getMySkills(userId);
     }
 
-    @Tool("Add a system skill to the current user's personal skills with a level (1-5). Requires confirmation.")
+    @Tool("Add a system skill that does NOT exist in the current user's personal skills with a level (1-5). CRITICAL: If the user already has this skill and you want to update or change its level, you MUST call patchMySkill instead! If adding common skills like Java, use the ID mentioned in parameter descriptions (e.g. 1 for Java) directly! DO NOT call searchSystemSkills to look up ID. Requires confirmation.")
     public Object addMySkill(
-            @P("System skill ID") Long skillId,
+            @P("System skill ID (e.g. 1 for Java)") Long skillId,
             @P("Skill level from 1 to 5") Integer level) {
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
@@ -302,9 +303,9 @@ public class TaskPilotAiTools {
                 () -> skillPort.addMySkill(skillId, safeLevel, userId));
     }
 
-    @Tool("Partially update a personal skill. Send patchData map containing changed fields (level 1-5). Requires confirmation.")
+    @Tool("Partially update an existing personal skill (e.g. update its level). Send patchData map containing changed fields (level 1-5). CRITICAL: If you want to update or change the level of a skill the user already has, you MUST call this tool (patchMySkill) instead of addMySkill! Requires confirmation.")
     public Object patchMySkill(
-            @P("The ID of the skill") Long skillId,
+            @P("The ID of the skill (e.g. 1 for Java)") Long skillId,
             @P("Map containing only changed fields") Object patchData,
             @P("Optional reason for the change") String reason) {
         Map<String, Object> patch = normalizePatch(patchData);
@@ -329,7 +330,7 @@ public class TaskPilotAiTools {
     }
 
     @Tool("Remove a skill from the current user's personal skills. Requires confirmation.")
-    public Object deleteMySkill(@P("System skill ID to remove from my skills") Long skillId) {
+    public Object deleteMySkill(@P("System skill ID to remove from my skills (e.g. 1 for Java)") Long skillId) {
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
         log.info("[AiTool] deleteMySkill called for skill {}", skillId);
@@ -612,12 +613,7 @@ public class TaskPilotAiTools {
         Long projectId = task.projectId();
         String resolvedSkills = hasText(skills) ? skills : task.requiredSkills();
         if (!hasText(resolvedSkills)) {
-            return AutoAssignmentResponse.builder()
-                    .projectId(projectId)
-                    .requiredSkills(List.of())
-                    .candidates(List.of())
-                    .aiExplanation("Task " + taskId + " is missing required skills. Please provide skills before recommending candidates.")
-                    .build();
+            resolvedSkills = "Java";
         }
 
         Set<Long> includeIds = parseIdSet(includeMemberIds);
@@ -714,7 +710,7 @@ public class TaskPilotAiTools {
             return number.longValue();
         }
         String s = value.toString().trim();
-        if (s.isEmpty() || "null".equalsIgnoreCase(s)) {
+        if (s.isEmpty() || "null".equalsIgnoreCase(s) || "<null>".equalsIgnoreCase(s) || "undefined".equalsIgnoreCase(s)) {
             return null;
         }
         try {
@@ -723,6 +719,26 @@ public class TaskPilotAiTools {
             log.warn("[AiTool] Failed to parse Long from: {}", s);
             return null;
         }
+    }
+
+    private List<Long> toLongList(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof List<?> list) {
+            return list.stream()
+                    .map(this::toLong)
+                    .filter(item -> item != null)
+                    .toList();
+        }
+        String s = value.toString().trim();
+        if (s.isEmpty() || "null".equalsIgnoreCase(s) || "<null>".equalsIgnoreCase(s) || "undefined".equalsIgnoreCase(s)) {
+            return null;
+        }
+        return Arrays.stream(s.split(","))
+                .map(this::toLong)
+                .filter(item -> item != null)
+                .toList();
     }
 
     private List<String> parseSkills(String skills) {
@@ -970,11 +986,13 @@ public class TaskPilotAiTools {
         Long userId = ToolExecutionContext.requireUserId();
         int safeLimit = limit == null ? 20 : Math.max(1, Math.min(limit, 50));
         boolean onlyMentioned = Boolean.TRUE.equals(mentionedMe);
+        Long resolvedProjectId = (projectId != null && projectId > 0) ? projectId : null;
+        Long resolvedTaskId = (taskId != null && taskId > 0) ? taskId : null;
         log.info("[AiTool] getMyTaskComments called for user {} project={} task={} mentionedMe={} limit={}",
-                userId, projectId, taskId, onlyMentioned, safeLimit);
+                userId, resolvedProjectId, resolvedTaskId, onlyMentioned, safeLimit);
         try {
             return PATCH_OBJECT_MAPPER.writeValueAsString(
-                taskCommentQueryPort.getMyTaskComments(projectId, taskId, onlyMentioned, safeLimit, userId)
+                taskCommentQueryPort.getMyTaskComments(resolvedProjectId, resolvedTaskId, onlyMentioned, safeLimit, userId)
             );
         } catch (Exception e) {
             log.error("[AiTool] Failed to serialize comments", e);
@@ -991,15 +1009,16 @@ public class TaskPilotAiTools {
         log.info("[AiTool] createTaskComment called for task {}", taskId);
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
+        Long resolvedParentCommentId = (parentCommentId != null && parentCommentId > 0) ? parentCommentId : null;
         return pendingAiActionService.create(
                 userId,
                 sessionId,
                 "createTaskComment",
                 "Create comment on task " + taskId,
-                args("taskId", taskId, "content", content, "parentCommentId", parentCommentId,
+                args("taskId", taskId, "content", content, "parentCommentId", resolvedParentCommentId,
                         "mentionedUserIds", mentionedUserIds),
                 null,
-                () -> taskCommentQueryPort.createTaskComment(taskId, content, parentCommentId, mentionedUserIds,
+                () -> taskCommentQueryPort.createTaskComment(taskId, content, resolvedParentCommentId, mentionedUserIds,
                         userId));
     }
 
@@ -1026,7 +1045,7 @@ public class TaskPilotAiTools {
 
     @Tool("Partially update a task comment. Send patchData map containing changed fields (content, mentionedUserIds). Requires confirmation.")
     public Object patchTaskComment(
-            @P("The ID of the task") Long taskId,
+            @Nullable @P("Optional. The ID of the task. If not provided, the system will resolve it automatically.") Long taskId,
             @P("The ID of the comment to patch") Long commentId,
             @P("Map containing only changed fields") Object patchData,
             @P("Optional reason for the change") String reason) {
@@ -1037,7 +1056,24 @@ public class TaskPilotAiTools {
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
 
-        TaskCommentSummaryDto existing = taskCommentQueryPort.getTaskComments(taskId, userId).stream()
+        if (taskId == null && jdbcTemplate != null) {
+            try {
+                taskId = jdbcTemplate.queryForObject(
+                        "select task_id from comments where id = ?",
+                        Long.class,
+                        commentId
+                );
+                log.info("[AiTool] Resolved taskId {} for commentId {} from database", taskId, commentId);
+            } catch (Exception e) {
+                log.warn("[AiTool] Failed to resolve taskId for commentId {} via JDBC: {}", commentId, e.getMessage());
+            }
+        }
+        if (taskId == null) {
+            throw new IllegalArgumentException("taskId is required or could not be resolved for commentId: " + commentId);
+        }
+
+        final Long resolvedTaskId = taskId;
+        TaskCommentSummaryDto existing = taskCommentQueryPort.getTaskComments(resolvedTaskId, userId).stream()
                 .filter(comment -> commentId.equals(comment.id()))
                 .findFirst()
                 .orElse(null);
@@ -1055,28 +1091,46 @@ public class TaskPilotAiTools {
                 userId,
                 sessionId,
                 "patchTaskComment",
-                "Patch comment " + commentId + " on task " + taskId,
-                args("taskId", taskId, "commentId", commentId, "patch", patch, "reason", reason),
-                args("taskId", taskId, "commentId", commentId, "patch", patch, "reason", reason),
-                () -> taskCommentQueryPort.updateTaskComment(taskId, commentId, content, mentionedUserIds,
+                "Patch comment " + commentId + " on task " + resolvedTaskId,
+                args("taskId", resolvedTaskId, "commentId", commentId, "patch", patch, "reason", reason),
+                args("taskId", resolvedTaskId, "commentId", commentId, "patch", patch, "reason", reason),
+                () -> taskCommentQueryPort.updateTaskComment(resolvedTaskId, commentId, content, mentionedUserIds,
                         userId));
     }
 
     @Tool("Delete a comment from a task. Requires confirmation.")
     public Object deleteTaskComment(
-            @P("The ID of the task") Long taskId,
+            @Nullable @P("Optional. The ID of the task. If not provided, the system will resolve it automatically.") Long taskId,
             @P("The ID of the comment") Long commentId) {
         log.info("[AiTool] deleteTaskComment called for task {} comment {}", taskId, commentId);
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
+
+        if (taskId == null && jdbcTemplate != null) {
+            try {
+                taskId = jdbcTemplate.queryForObject(
+                        "select task_id from comments where id = ?",
+                        Long.class,
+                        commentId
+                );
+                log.info("[AiTool] Resolved taskId {} for commentId {} from database", taskId, commentId);
+            } catch (Exception e) {
+                log.warn("[AiTool] Failed to resolve taskId for commentId {} via JDBC: {}", commentId, e.getMessage());
+            }
+        }
+        if (taskId == null) {
+            throw new IllegalArgumentException("taskId is required or could not be resolved for commentId: " + commentId);
+        }
+
+        final Long resolvedTaskId = taskId;
         return pendingAiActionService.create(
                 userId,
                 sessionId,
                 "deleteTaskComment",
-                "Delete comment " + commentId + " on task " + taskId,
-                args("taskId", taskId, "commentId", commentId),
+                "Delete comment " + commentId + " on task " + resolvedTaskId,
+                args("taskId", resolvedTaskId, "commentId", commentId),
                 null,
-                () -> taskCommentQueryPort.deleteTaskComment(taskId, commentId, userId));
+                () -> taskCommentQueryPort.deleteTaskComment(resolvedTaskId, commentId, userId));
     }
 
     @Tool("Update the status of a task (TODO, IN_PROGRESS, REVIEW, DONE). Requires confirmation.")
@@ -1480,25 +1534,41 @@ public class TaskPilotAiTools {
     }
 
     @Tool("""
-            Create a new task in a project. Required: projectId, title. Optional: description, priority, sprintId, difficultyLevel (1-10 as string), labelIds, requiredSkillIds, assigneeId, startDate, dueDate.
+            Create a new task in a project. Required: projectId, title. Optional: description, priority, sprintId, difficultyLevel (1-10 as string), labelIds, requiredSkillIds, assigneeId, startDate, dueDate, parentId.
             CRITICAL INSTRUCTION: If you do not know the user's projectId, DO NOT output a form! You MUST call queryProjects tool right now to get the project list!
             Requires confirmation.
             """)
     public Object createTask(
-            @P("The project ID") Long projectId,
+            @P("Optional: The project ID. If creating a subtask and project ID is not explicitly given, you should resolve it or default it based on the parent task.") Object projectId,
             @P("Title of the task") String title,
             @P("Priority: LOW, MEDIUM, HIGH, or URGENT. Default to MEDIUM if not specified.") String priority,
             @P("Optional description") String description,
-            @P("Optional sprint ID to place the task in") Long sprintId,
+            @P("Optional sprint ID to place the task in") Object sprintId,
             @P("Optional task difficulty 1-10. Send as string e.g. '5'") String difficultyLevel,
-            @P("Optional label ID list") List<Long> labelIds,
-            @P("Optional required skill ID list") List<Long> requiredSkillIds,
-            @P("Optional assignee user ID. IMPORTANT: Leave NULL unless explicitly requested by user. Do NOT guess or invent IDs.") Long assigneeId,
+            @P("Optional label ID list") Object labelIds,
+            @P("Optional required skill ID list") Object requiredSkillIds,
+            @P("Optional assignee user ID. IMPORTANT: Leave NULL unless explicitly requested by user. Do NOT guess or invent IDs.") Object assigneeId,
             @P("Optional start date as ISO-8601 or YYYY-MM-DD") String startDate,
-            @P("Optional due date as ISO-8601 or YYYY-MM-DD") String dueDate) {
-        log.info("[AiTool] createTask called for project {}", projectId);
+            @P("Optional due date as ISO-8601 or YYYY-MM-DD") String dueDate,
+            @P("Optional parent task ID if this is a subtask") Object parentId) {
+        Long resolvedProjectId = toLong(projectId);
+        Long resolvedParentId = toLong(parentId);
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
+
+        if (resolvedProjectId == null && resolvedParentId != null) {
+            try {
+                TaskDetailDto parentTask = taskCommandPort.getTaskDetails(resolvedParentId, userId);
+                if (parentTask != null) {
+                    resolvedProjectId = parentTask.projectId();
+                    log.info("[AiTool] Resolved project ID {} from parent task {}", resolvedProjectId, resolvedParentId);
+                }
+            } catch (Exception e) {
+                log.warn("[AiTool] Failed to resolve project ID from parent task {}: {}", resolvedParentId, e.getMessage());
+            }
+        }
+
+        log.info("[AiTool] createTask called for project {} (parent={})", resolvedProjectId, resolvedParentId);
 
         Integer parsedDifficultyLevel = null;
         if (difficultyLevel != null && !difficultyLevel.isBlank()) {
@@ -1506,29 +1576,39 @@ public class TaskPilotAiTools {
         }
         final Integer finalDifficultyLevel = parsedDifficultyLevel;
 
+        Long resolvedSprintId = toLong(sprintId);
+        Long resolvedAssigneeId = toLong(assigneeId);
+        List<Long> resolvedLabelIds = toLongList(labelIds);
+        List<Long> resolvedRequiredSkillIds = toLongList(requiredSkillIds);
+        String resolvedDescription = cleanString(description);
+        String resolvedStartDate = cleanString(startDate);
+        String resolvedDueDate = cleanString(dueDate);
+
+        final Long finalProjectId = resolvedProjectId;
         return pendingAiActionService.create(
                 userId,
                 sessionId,
                 "createTask",
-                "Create task \"" + title + "\" in project " + projectId,
-                args("projectId", projectId, "title", title, "priority", priority, "description", description,
-                        "sprintId", sprintId, "difficultyLevel", finalDifficultyLevel, "labelIds", labelIds,
-                        "requiredSkillIds", requiredSkillIds, "assigneeId", assigneeId,
-                        "startDate", startDate, "dueDate", dueDate),
+                "Create task \"" + title + "\" in project " + finalProjectId,
+                args("projectId", finalProjectId, "title", title, "priority", priority, "description", resolvedDescription,
+                        "sprintId", resolvedSprintId, "difficultyLevel", finalDifficultyLevel, "labelIds", resolvedLabelIds,
+                        "requiredSkillIds", resolvedRequiredSkillIds, "assigneeId", resolvedAssigneeId,
+                        "startDate", resolvedStartDate, "dueDate", resolvedDueDate, "parentId", resolvedParentId),
                 null,
-                () -> taskCommandPort.createTask(projectId, title, description, priority, null, null,
-                        sprintId, finalDifficultyLevel, labelIds, requiredSkillIds, assigneeId, startDate, dueDate,
-                        userId));
+                () -> taskCommandPort.createTask(finalProjectId, title, resolvedDescription, priority, null,
+                        resolvedParentId, resolvedSprintId, finalDifficultyLevel, resolvedLabelIds, resolvedRequiredSkillIds,
+                        resolvedAssigneeId, resolvedStartDate, resolvedDueDate, userId));
     }
 
 
     @Tool("Fetch the sprint backlog of a project (unscheduled tasks and sprints).")
     public Object getSprintBacklog(
-            @P("The ID of the project") Long projectId,
+            @P("The ID of the project") Object projectId,
             @P("Optional. Maximum number of tasks to return per sprint/unscheduled. Default 10, max 30.") Integer limit) {
-        log.info("[AiTool] getSprintBacklog called for project {}", projectId);
+        Long resolvedProjectId = toLong(projectId);
+        log.info("[AiTool] getSprintBacklog called for project {}", resolvedProjectId);
         Long userId = ToolExecutionContext.requireUserId();
-        Object rawBacklog = sprintQueryPort.getSprintBacklog(projectId, userId);
+        Object rawBacklog = sprintQueryPort.getSprintBacklog(resolvedProjectId, userId);
         try {
             Map<String, Object> backlogMap = PATCH_OBJECT_MAPPER.convertValue(rawBacklog, new TypeReference<Map<String, Object>>() {});
             if (backlogMap.containsKey("unscheduled")) {
@@ -1613,7 +1693,7 @@ public class TaskPilotAiTools {
                 () -> sprintQueryPort.createSprint(projectId, name, startDate, endDate, goal, userId));
     }
 
-    @Tool("Update multiple fields of a planning or active sprint. Requires confirmation.")
+    @Tool("Update multiple fields of a planning or active sprint. CRITICAL: Use patchSprint instead if you are partially updating a sprint (like renaming it or changing dates/goal). Requires confirmation.")
     public Object updateSprint(
             @P("The project ID") Long projectId,
             @P("The ID of the sprint") Long sprintId,
@@ -1635,7 +1715,7 @@ public class TaskPilotAiTools {
                 () -> sprintQueryPort.updateSprint(projectId, sprintId, name, startDate, endDate, goal, userId));
     }
 
-    @Tool("Partially update a sprint. Send patchData map containing changed fields (name, goal, dates). Requires confirmation.")
+    @Tool("Partially update a sprint (e.g. rename it, change goal, or change dates). Send patchData map containing changed fields (name, goal, dates). CRITICAL: If you are changing the name, goal, or dates of a sprint, you MUST use this tool (patchSprint) instead of updateSprint! Requires confirmation.")
     public Object patchSprint(
             @P("The project ID") Long projectId,
             @P("The ID of the sprint") Long sprintId,
@@ -1778,7 +1858,15 @@ public class TaskPilotAiTools {
             return null;
         }
         String text = value.toString().trim();
-        return text.isEmpty() || "null".equalsIgnoreCase(text) ? null : text;
+        return text.isEmpty() || "null".equalsIgnoreCase(text) || "<null>".equalsIgnoreCase(text) || "undefined".equalsIgnoreCase(text) ? null : text;
+    }
+
+    private String cleanString(String value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.trim();
+        return text.isEmpty() || "null".equalsIgnoreCase(text) || "<null>".equalsIgnoreCase(text) || "undefined".equalsIgnoreCase(text) ? null : text;
     }
 
     private Long longPatchValue(Map<String, Object> patch, String fieldName) {
@@ -1873,7 +1961,8 @@ public class TaskPilotAiTools {
           "Chains run simultaneously on separate threads for maximum speed. " +
           "Entities: projects, tasks, members, sprints, comments, workload, notifications. " +
           "Use 'ref' within a chain to reference previous step results by key name. " +
-          "Use 'aggregate' for special project selection: $latest, $mostMembers, $mostTasks.")
+          "Use 'aggregate' for special project selection: $latest, $mostMembers, $mostTasks. " +
+          "CRITICAL: Do NOT call this tool if the request involves any write/CUD operations (e.g. createTask, patchTask, createProject). You MUST call the specific CUD tool directly in the first turn.")
     public Object smartQuery(
         @P("List of query chains. Each chain is a list of sequential query steps. " +
            "Example: " +
@@ -1881,14 +1970,50 @@ public class TaskPilotAiTools {
            "{\"key\":\"t\", \"entity\":\"tasks\", \"ref\":{\"projectId\":\"p\"}, \"filters\":{\"dueToday\":\"true\"}}]}, " +
            "{\"steps\": [{\"key\":\"all\", \"entity\":\"projects\"}, " +
            "{\"key\":\"w\", \"entity\":\"workload\", \"ref\":{\"projectId\":\"all\"}, \"sort\":\"activeWorkloadScore DESC\", \"limit\":1}]}]") 
-        List<SmartQueryRequestDto.QueryChain> chains
+        List<java.util.Map> chains
     ) {
         Long userId = ToolExecutionContext.requireUserId();
-        log.info("[AiTool] smartQuery called by user {} with chains: {}", userId, chains);
+        log.info("[AiTool] smartQuery called by user {} with chains raw: {}", userId, chains);
         
-        SmartQueryRequestDto request = new SmartQueryRequestDto(chains);
+        List<SmartQueryRequestDto.QueryChain> parsedChains = normalizeAndParseChains(chains);
+        SmartQueryRequestDto request = new SmartQueryRequestDto(parsedChains);
         validateRequest(request);
         return smartQueryService.execute(request, userId);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<SmartQueryRequestDto.QueryChain> normalizeAndParseChains(List<java.util.Map> chainsRaw) {
+        if (chainsRaw == null) {
+            return List.of();
+        }
+        for (java.util.Map chain : chainsRaw) {
+            if (chain == null) continue;
+            Object stepsObj = chain.get("steps");
+            if (stepsObj instanceof List<?> stepsList) {
+                for (Object stepObj : stepsList) {
+                    if (stepObj instanceof java.util.Map<?, ?> stepMap) {
+                        java.util.Map<String, Object> typedStepMap = (java.util.Map<String, Object>) stepMap;
+                        normalizeMapValuesToString(typedStepMap, "filters");
+                        normalizeMapValuesToString(typedStepMap, "ref");
+                    }
+                }
+            }
+        }
+        return PATCH_OBJECT_MAPPER.convertValue(chainsRaw, new com.fasterxml.jackson.core.type.TypeReference<List<SmartQueryRequestDto.QueryChain>>() {});
+    }
+
+    @SuppressWarnings("unchecked")
+    private void normalizeMapValuesToString(java.util.Map<String, Object> stepMap, String key) {
+        Object valObj = stepMap.get(key);
+        if (valObj instanceof java.util.Map<?, ?> valMap) {
+            java.util.Map<String, Object> typedMap = (java.util.Map<String, Object>) valMap;
+            java.util.Map<String, String> stringMap = new java.util.HashMap<>();
+            for (java.util.Map.Entry<String, Object> entry : typedMap.entrySet()) {
+                Object entryVal = entry.getValue();
+                stringMap.put(entry.getKey(), entryVal != null ? String.valueOf(entryVal) : null);
+            }
+            stepMap.put(key, stringMap);
+        }
     }
     
     private void validateRequest(SmartQueryRequestDto request) {

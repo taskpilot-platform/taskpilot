@@ -283,7 +283,7 @@ public class SmartRoutingService {
         if (containsAny(normalized, List.of("task", "cong viec", "cong việc", "tao task", "tao cong viec", "status", "nhiem vu"))) scopes.add(ToolScope.TASK);
         if (containsAny(normalized, List.of("sprint", "chu ky"))) scopes.add(ToolScope.SPRINT);
         if (containsAny(normalized, List.of("project", "du an"))) scopes.add(ToolScope.PROJECT);
-        if (containsAny(normalized, List.of("giao", "assign", "phan cong", "phu hop", "ai lam", "member", "thanh vien", "recommend", "goi y"))) {
+        if (containsAny(normalized, List.of("giao", "assign", "phan cong", "phu hop", "ai lam", "member", "thanh vien", "recommend", "goi y", "skill", "ky nang", "kỹ năng", "level", "profile", "ho so"))) {
             scopes.add(ToolScope.ASSIGNMENT);
             scopes.add(ToolScope.AHP);
             scopes.add(ToolScope.MEMBER);
@@ -604,11 +604,23 @@ public class SmartRoutingService {
         if (normalizedMsg == null || normalizedMsg.isBlank()) {
             return false;
         }
+
+        // Exclude read-only queries with unassigned context from being classified as write intent
+        if (normalizedMsg.contains("chua duoc giao") || normalizedMsg.contains("chua giao")
+                || normalizedMsg.contains("chua duoc phan cong") || normalizedMsg.contains("chua phan cong")
+                || normalizedMsg.contains("chua duoc gan") || normalizedMsg.contains("chua gan")
+                || normalizedMsg.contains("ai chua") || normalizedMsg.contains("chua ai")
+                || normalizedMsg.contains("khong duoc giao") || normalizedMsg.contains("khong giao")) {
+            return false;
+        }
+
         List<String> writeKeywords = List.of(
             "tao moi", "tao du an", "tao task", "tao sprint", "tao comment", "tao binh luan",
             "tao project", "create project", "tao nhan", "them nhan", "xoa nhan", "tao cong viec",
             "tao gium", "tao giup", "tao ho", "tao cho", "tao 1", "tao mot", "tao cai", "tao luon", "tao ra",
+            "tao ky nang", "tao skill", "tao he thong", "tao them", "tao con", "tao subtask",
             "them moi", "them du an", "them task", "them sprint", "them comment", "them binh luan", "them ky nang", "them skill", "them member", "them thanh vien", "them vao",
+            "them mot", "them con", "them subtask",
             "create", "add", "post", "viet comment", "viet binh luan", "viet mo ta",
             "cap nhat", "chinh sua", "sua task", "sua du an", "sua sprint", "sua comment", "sua binh luan", "sua skill", "sua ky nang", "sua lai",
             "doi ten", "doi mo ta", "doi han", "doi deadline", "doi level", "doi vai tro", "doi trang thai", "thay doi deadline", "thay doi han", "thay doi trang thai",
@@ -620,7 +632,8 @@ public class SmartRoutingService {
             "complete", "start", "close", "move", "chuyen sang", "chuyen task", "chuyen trang thai", "bat dau", "hoan thanh",
             "dua vao sprint", "dua task", "dua project", "dua sprint", "dua member", "dua thanh vien", "dua comment", "dua binh luan",
             "chuyen cot", "chuyen du an", "chuyen vao",
-            "danh dau doc", "doc het thong bao", "doc tat ca thong bao", "mark read", "mark as read", "read all",
+            "danh dau doc", "doc het thong bao", "doc tat ca thong bao", "doc het", "doc tat ca", "mark read", "mark as read", "read all",
+            "tang level", "tang skill", "tang ky nang", "tang cap", "tang len", "giam level", "giam skill", "giam ky nang", "giam cap", "giam di", "giam xuong", "nang level", "nang skill", "nang ky nang", "nang cap", "nang len", "ha level", "ha skill", "ha ky nang", "ha cap", "ha xuong",
             "confirm", "xac nhan", "huy bo", "cancel"
         );
         for (String kw : writeKeywords) {
@@ -630,7 +643,6 @@ public class SmartRoutingService {
         }
         
         List<String> singleWriteWords = List.of(
-            "tao", "them", "xoa", "sua", "giao", "chuyen", "huy",
             "confirm", "cancel", "delete", "remove", "create", "add", "patch", "update"
         );
         for (String word : singleWriteWords) {

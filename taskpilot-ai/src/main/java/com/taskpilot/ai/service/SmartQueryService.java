@@ -5,6 +5,7 @@ import com.taskpilot.ai.tools.ToolExecutionContext;
 import com.taskpilot.contracts.aiquery.dto.*;
 import com.taskpilot.contracts.aiquery.port.out.*;
 import com.taskpilot.contracts.skill.port.out.SkillPort;
+import com.taskpilot.contracts.skill.dto.SkillDto;
 import com.taskpilot.contracts.user.port.out.UserNotificationQueryPort;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
@@ -97,6 +98,10 @@ public class SmartQueryService {
         int completed = 0;
 
         for (SmartQueryRequestDto.QueryStep step : steps) {
+            String stepKey = step.key();
+            if (stepKey == null || stepKey.isBlank()) {
+                stepKey = "step_" + (completed + 1);
+            }
             try {
                 // 1. Giải quyết các tham chiếu chéo (ref resolution)
                 ResolvedRefs refs = resolveRefs(step.ref(), chainResults);
@@ -109,11 +114,11 @@ public class SmartQueryService {
                     result = applySortAndLimit((List<?>) result, step.sort(), step.limit());
                 }
 
-                chainResults.put(step.key(), result != null ? result : List.of());
+                chainResults.put(stepKey, result != null ? result : List.of());
                 completed++;
             } catch (Exception e) {
-                log.error("Error executing step key={} in chain {}: {}", step.key(), chainIndex, e.getMessage(), e);
-                chainErrors.put(step.key(), e.getMessage());
+                log.error("Error executing step key={} in chain {}: {}", stepKey, chainIndex, e.getMessage(), e);
+                chainErrors.put(stepKey, e.getMessage());
                 // Fail-fast: Nếu một bước trong chuỗi bị lỗi, dừng ngay chuỗi đó
                 break;
             }
@@ -135,6 +140,7 @@ public class SmartQueryService {
             case "comments"      -> resolveComments(step, refs.taskId(), userId);
             case "workload"      -> resolveWorkload(step, refs.projectId(), userId);
             case "notifications" -> resolveNotifications(step, userId);
+            case "skills"        -> resolveSkills(step, userId);
             default -> throw new IllegalArgumentException("Unknown entity: " + step.entity());
         };
     }
@@ -224,6 +230,23 @@ public class SmartQueryService {
     private List<TaskSummaryDto> resolveTasks(SmartQueryRequestDto.QueryStep step, Long projectId, Long sprintId, Long userId) {
         // Lấy projectId từ ref hoặc filters
         Long targetProjectId = projectId;
+
+        if (targetProjectId == null && step.filters() != null) {
+            String taskIdStr = step.filters().get("taskId");
+            if (taskIdStr == null || taskIdStr.isBlank()) {
+                taskIdStr = step.filters().get("id");
+            }
+            if (taskIdStr != null && !taskIdStr.isBlank()) {
+                try {
+                    Long taskId = Long.parseLong(taskIdStr.trim());
+                    com.taskpilot.contracts.aiquery.dto.TaskDetailDto task = taskCommandPort.getTaskDetails(taskId, userId);
+                    if (task != null) {
+                        targetProjectId = task.projectId();
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+
         if (targetProjectId == null && step.filters() != null) {
             String pIdStr = step.filters().get("projectId");
             if (pIdStr != null && !pIdStr.isBlank()) {
@@ -232,6 +255,13 @@ public class SmartQueryService {
                 } catch (NumberFormatException e) {
                     // ignore
                 }
+            }
+        }
+
+        if (targetProjectId == null) {
+            List<ProjectOverviewDto> userProjects = projectInsightsPort.getMyProjects(userId);
+            if (userProjects != null && !userProjects.isEmpty()) {
+                targetProjectId = userProjects.get(0).projectId();
             }
         }
 
@@ -322,6 +352,13 @@ public class SmartQueryService {
         }
 
         if (targetProjectId == null) {
+            List<ProjectOverviewDto> userProjects = projectInsightsPort.getMyProjects(userId);
+            if (userProjects != null && !userProjects.isEmpty()) {
+                targetProjectId = userProjects.get(0).projectId();
+            }
+        }
+
+        if (targetProjectId == null) {
             throw new IllegalArgumentException("projectId is required to query members");
         }
 
@@ -356,6 +393,13 @@ public class SmartQueryService {
         }
 
         if (targetProjectId == null) {
+            List<ProjectOverviewDto> userProjects = projectInsightsPort.getMyProjects(userId);
+            if (userProjects != null && !userProjects.isEmpty()) {
+                targetProjectId = userProjects.get(0).projectId();
+            }
+        }
+
+        if (targetProjectId == null) {
             throw new IllegalArgumentException("projectId is required to query sprints");
         }
 
@@ -373,7 +417,7 @@ public class SmartQueryService {
         return all;
     }
 
-    private List<TaskCommentSummaryDto> resolveComments(SmartQueryRequestDto.QueryStep step, Long taskId, Long userId) {
+    private List<?> resolveComments(SmartQueryRequestDto.QueryStep step, Long taskId, Long userId) {
         Long targetTaskId = taskId;
         if (targetTaskId == null && step.filters() != null) {
             String tIdStr = step.filters().get("taskId");
@@ -387,7 +431,7 @@ public class SmartQueryService {
         }
 
         if (targetTaskId == null) {
-            throw new IllegalArgumentException("taskId is required to query comments");
+            return taskCommentQueryPort.getMyTaskComments(null, null, false, 20, userId);
         }
         return taskCommentQueryPort.getTaskComments(targetTaskId, userId);
     }
@@ -402,6 +446,13 @@ public class SmartQueryService {
                 } catch (NumberFormatException e) {
                     // ignore
                 }
+            }
+        }
+
+        if (targetProjectId == null) {
+            List<ProjectOverviewDto> userProjects = projectInsightsPort.getMyProjects(userId);
+            if (userProjects != null && !userProjects.isEmpty()) {
+                targetProjectId = userProjects.get(0).projectId();
             }
         }
 
@@ -435,6 +486,17 @@ public class SmartQueryService {
         }
 
         return userNotificationQueryPort.getMyNotifications(userId, unreadOnly, limit);
+    }
+
+    private List<SkillDto> resolveSkills(SmartQueryRequestDto.QueryStep step, Long userId) {
+        String keyword = "";
+        if (step.filters() != null) {
+            String kw = step.filters().get("keyword");
+            if (kw != null) {
+                keyword = kw;
+            }
+        }
+        return skillPort.search(keyword);
     }
 
     // --- Core helper: Ref Resolution ---

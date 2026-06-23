@@ -7,6 +7,7 @@ import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.TokenCountEstimator;
 import dev.langchain4j.store.memory.chat.ChatMemoryStore;
@@ -70,6 +71,26 @@ public class SessionChatMemoryService {
         String sanitized = sanitizeAssistantMessage(responseText);
         if (sanitized.isBlank() && responseText != null) {
             sanitized = responseText;
+        }
+        memory.add(AiMessage.from(sanitized));
+    }
+
+    public void appendBenchmarkToolExecution(Long sessionId, AiMessage aiMessage, List<ToolExecutionResultMessage> toolResults, String mockResponse, String systemPrompt) {
+        MessageWindowChatMemory memory = memoryForSession(sessionId);
+        if (memory.messages().isEmpty()) {
+            memory.add(SystemMessage.from(systemPrompt));
+        }
+        if (aiMessage != null) {
+            memory.add(aiMessage);
+        }
+        if (toolResults != null) {
+            for (ToolExecutionResultMessage res : toolResults) {
+                memory.add(res);
+            }
+        }
+        String sanitized = sanitizeAssistantMessage(mockResponse);
+        if (sanitized.isBlank() && mockResponse != null) {
+            sanitized = mockResponse;
         }
         memory.add(AiMessage.from(sanitized));
     }

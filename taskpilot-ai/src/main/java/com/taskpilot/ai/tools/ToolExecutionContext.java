@@ -40,6 +40,9 @@ public final class ToolExecutionContext {
         return ctx == null ? "" : ctx.userInput();
     }
 
-    public record Context(Long userId, Long sessionId, String userInput) {
+    public record Context(Long userId, Long sessionId, String userInput, java.util.Collection<String> allowedTools) {
+        public Context(Long userId, Long sessionId, String userInput) {
+            this(userId, sessionId, userInput, java.util.Collections.emptySet());
+        }
     }
 }

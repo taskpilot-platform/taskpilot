@@ -124,7 +124,7 @@ ai:
     token-threshold: ${AI_TOKEN_THRESHOLD:15000}
     reasoning-keywords: ${AI_REASONING_KEYWORDS:analyze,reason,strategy,architecture,tradeoff,root cause,plan,optimize,design,deep dive,phan tich,chien luoc,so sanh,vi sao,giai thich,ly do,danh gia,lua chon,phan ra,boc tach,lo trinh,breakdown,roadmap,rui ro,tre han,be tac,nguyen nhan,giai phap,bottleneck,risk,qua tai,can bang,xung dot,kien truc,thiet ke he thong,database,toi uu,system design,refactor}
     tool-keywords: ${AI_TOOL_KEYWORDS:project,task,sprint,comment,member,role,status,project status,workload,assign,candidates,task list,project progress,my projects,project list,unassigned,not assigned,notification,unread,confirm,confirm_action,apply,xac nhan,dong y,thuc hien,du an,liet ke project,liet ke du an,chua phan cong,chua duoc phan cong,task chua gan,giao viec,tinh trang,tien do,danh sach task,cong viec,ung vien,giao task,gan task,chia viec,tao task,tao cong viec,bình luận,binh luan,comment cua toi,thong bao,thông báo,chua doc,chưa đọc,skill,ky nang,kỹ năng}
-    ahp-fallback-keywords: ${AI_AHP_FALLBACK_KEYWORDS:phan cong,giao viec,chia viec,chon ai,chon nguoi,tim nguoi,ai ranh,ung vien,assign,candidate,workload,chia task}
+    ahp-fallback-keywords: ${AI_AHP_FALLBACK_KEYWORDS:phan cong,giao viec,chia viec,chon ai,chon nguoi,tim nguoi,ai ranh,ung vien,assign,candidate,chia task}
 
   heuristic:
     cache-ttl-seconds: ${AI_HEURISTIC_CACHE_TTL:60}

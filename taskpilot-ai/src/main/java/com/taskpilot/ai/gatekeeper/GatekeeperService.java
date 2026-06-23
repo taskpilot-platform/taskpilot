@@ -40,7 +40,6 @@ public class GatekeeperService {
             "ứng viên",
             "assign",
             "candidate",
-            "workload",
             "chia task");
 
     private final ObjectProvider<dev.langchain4j.model.chat.ChatModel> gatekeeperModelProvider;
