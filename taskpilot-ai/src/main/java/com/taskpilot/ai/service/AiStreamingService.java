@@ -2847,11 +2847,11 @@ public class AiStreamingService {
                 keys.add(geminiApiKey.trim());
             }
 
-            int timeoutSeconds = 22;
+            int timeoutSeconds = 45;
             if (chatRequest.toolSpecifications() != null) {
                 for (var spec : chatRequest.toolSpecifications()) {
                     if ("smartQuery".equals(spec.name())) {
-                        timeoutSeconds = 35;
+                        timeoutSeconds = 50;
                         break;
                     }
                 }
@@ -2869,7 +2869,7 @@ public class AiStreamingService {
                 String activeKey = keys.get(currentKeyIndex);
                 try {
                     long elapsedMs = System.currentTimeMillis() - stepStartTime;
-                    long budgetRemainingMs = 57000 - elapsedMs;
+                    long budgetRemainingMs = 87000 - elapsedMs;
                     if (budgetRemainingMs < 5000) {
                         log.warn("[GeminiToolFix] Step time budget exceeded, stopping retries. Remaining budget: {}ms", budgetRemainingMs);
                         break;
