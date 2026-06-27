@@ -332,6 +332,10 @@ public class ToolCallingRegistryService {
         private record CacheValue(String val, Instant expiry) {}
         private final ConcurrentHashMap<CacheKey, CacheValue> map = new ConcurrentHashMap<>();
 
+        public Map<CacheKey, CacheValue> getAllEntries() {
+            return Map.copyOf(map);
+        }
+
         public void put(Long userId, Long sessionId, String toolName, String arguments, String val, long ttlSeconds) {
             CacheKey key = new CacheKey(userId, sessionId, toolName, arguments);
             map.put(key, new CacheValue(val, Instant.now().plusSeconds(ttlSeconds)));
@@ -567,6 +571,154 @@ public class ToolCallingRegistryService {
         } catch (Exception e) {
             log.warn("[AI Tools] Failed to clean smartQuery arguments: {}", e.getMessage());
             return argumentsJson;
+        }
+    }
+
+    @org.springframework.scheduling.annotation.Async
+    public void warmupCache(Long userId, Long sessionId) {
+        log.info("[Cache Warming] Starting cache warmup for user {} in session {}", userId, sessionId);
+        
+        // 1. Warm up queryProjects to get the user's projects
+        String projectsJson = null;
+        try {
+            ToolExecutionContext.set(new ToolExecutionContext.Context(userId, sessionId, ""));
+            ToolExecutionRequest req = ToolExecutionRequest.builder()
+                    .name("queryProjects")
+                    .arguments("{}")
+                    .build();
+            projectsJson = this.execute(req);
+        } catch (Exception e) {
+            log.warn("[Cache Warming] Failed to warmup queryProjects: {}", e.getMessage());
+        } finally {
+            ToolExecutionContext.clear();
+        }
+
+        // 2. Pre-warm getMyNotifications
+        try {
+            ToolExecutionContext.set(new ToolExecutionContext.Context(userId, sessionId, ""));
+            ToolExecutionRequest req = ToolExecutionRequest.builder()
+                    .name("getMyNotifications")
+                    .arguments("{}")
+                    .build();
+            this.execute(req);
+        } catch (Exception e) {
+            log.warn("[Cache Warming] Failed to warmup getMyNotifications: {}", e.getMessage());
+        } finally {
+            ToolExecutionContext.clear();
+        }
+
+        // 3. Pre-warm getMySkills
+        try {
+            ToolExecutionContext.set(new ToolExecutionContext.Context(userId, sessionId, ""));
+            ToolExecutionRequest req = ToolExecutionRequest.builder()
+                    .name("getMySkills")
+                    .arguments("{}")
+                    .build();
+            this.execute(req);
+        } catch (Exception e) {
+            log.warn("[Cache Warming] Failed to warmup getMySkills: {}", e.getMessage());
+        } finally {
+            ToolExecutionContext.clear();
+        }
+
+        // 4. Parse projectsJson and pre-warm queryTasks and getSprintsByProject for each project
+        if (projectsJson != null && !projectsJson.isBlank() && !projectsJson.contains("failed")) {
+            try {
+                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(projectsJson);
+                
+                // Inspect if it is an array or has a list structure
+                com.fasterxml.jackson.databind.JsonNode listNode = root.isArray() ? root : null;
+                if (listNode == null && root.has("data")) {
+                    listNode = root.get("data");
+                }
+                if (listNode == null && root.has("content")) {
+                    listNode = root.get("content");
+                }
+                
+                if (listNode != null && listNode.isArray()) {
+                    for (com.fasterxml.jackson.databind.JsonNode projNode : listNode) {
+                        if (projNode.has("id")) {
+                            long projectId = projNode.get("id").asLong();
+                            
+                            // Warm up queryTasks
+                            try {
+                                ToolExecutionContext.set(new ToolExecutionContext.Context(userId, sessionId, ""));
+                                ToolExecutionRequest req = ToolExecutionRequest.builder()
+                                        .name("queryTasks")
+                                        .arguments("{\"projectId\":" + projectId + "}")
+                                        .build();
+                                this.execute(req);
+                            } catch (Exception ignored) {}
+                            
+                            // Warm up getSprintsByProject
+                            try {
+                                ToolExecutionContext.set(new ToolExecutionContext.Context(userId, sessionId, ""));
+                                ToolExecutionRequest req = ToolExecutionRequest.builder()
+                                        .name("getSprintsByProject")
+                                        .arguments("{\"projectId\":" + projectId + "}")
+                                        .build();
+                                this.execute(req);
+                            } catch (Exception ignored) {}
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[Cache Warming] Failed to parse queryProjects response for nested warmup: {}", e.getMessage());
+            } finally {
+                ToolExecutionContext.clear();
+            }
+        }
+        log.info("[Cache Warming] Cache warmup completed for user {} in session {}", userId, sessionId);
+    }
+
+    @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
+    public void warmupGlobalCache() {
+        log.info("[Cache Warming] Startup: loading global skills directory into cache...");
+        try {
+            ToolExecutionContext.set(new ToolExecutionContext.Context(-1L, -1L, ""));
+            ToolExecutionRequest req = ToolExecutionRequest.builder()
+                    .name("searchSystemSkills")
+                    .arguments("{\"keyword\":\"\"}")
+                    .build();
+            this.execute(req);
+            log.info("[Cache Warming] Global skills directory pre-cached successfully.");
+        } catch (Exception e) {
+            log.warn("[Cache Warming] Failed to pre-cache global skills: {}", e.getMessage());
+        } finally {
+            ToolExecutionContext.clear();
+        }
+    }
+
+    @org.springframework.scheduling.annotation.Scheduled(fixedRate = 60000)
+    public void refreshActiveCache() {
+        log.debug("[Cache Warming] Checking for active cache entries to refresh...");
+        Instant threshold = Instant.now().plusSeconds(25); // Refresh if expiring in 25 seconds
+        
+        for (Map.Entry<LocalCache.CacheKey, LocalCache.CacheValue> entry : localCache.getAllEntries().entrySet()) {
+            LocalCache.CacheKey key = entry.getKey();
+            LocalCache.CacheValue val = entry.getValue();
+            
+            // Do not refresh global dummy caches (-1L)
+            if (key.userId() == -1L || key.sessionId() == -1L) {
+                continue;
+            }
+            
+            if (Instant.now().isBefore(val.expiry()) && val.expiry().isBefore(threshold)) {
+                log.info("[Cache Warming] Proactively refreshing cache key: {} for user {} in session {}", key.toolName(), key.userId(), key.sessionId());
+                try {
+                    ToolExecutionContext.set(new ToolExecutionContext.Context(key.userId(), key.sessionId(), ""));
+                    ToolExecutionRequest req = ToolExecutionRequest.builder()
+                            .name(key.toolName())
+                            .arguments(key.arguments())
+                            .build();
+                    this.execute(req);
+                } catch (Exception e) {
+                    log.warn("[Cache Warming] Failed to refresh cache key {}: {}", key.toolName(), e.getMessage());
+                } finally {
+                    ToolExecutionContext.clear();
+                }
+            }
         }
     }
 }

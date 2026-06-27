@@ -41,6 +41,7 @@ public class AiChatController {
     private final AiLogService aiLogService;
     private final AutoAssignmentService autoAssignmentService;
     private final UserIdentityPort userIdentityPort;
+    private final ToolCallingRegistryService toolCallingRegistryService;
 
     @Value("${ai.chat.max-user-input-chars:1500}")
     private int maxUserInputChars;
@@ -101,6 +102,15 @@ public class AiChatController {
         Long userId = resolveUserId(authentication);
         sessionService.deleteSession(sessionId, userId);
         return ApiResponse.success(204, "Session deleted", null);
+    }
+
+    @Operation(summary = "Warm up cache for a specific session")
+    @PostMapping("/sessions/{sessionId}/warmup")
+    public ApiResponse<Void> warmupCache(@PathVariable Long sessionId,
+            Authentication authentication) {
+        Long userId = resolveUserId(authentication);
+        toolCallingRegistryService.warmupCache(userId, sessionId);
+        return ApiResponse.success(200, "Warmup started", null);
     }
 
     @Operation(summary = "Stream AI chat response via SSE")
