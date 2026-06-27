@@ -1210,6 +1210,16 @@ public class AiStreamingService {
                                 }
                             });
                         } else {
+                            dev.langchain4j.model.chat.StreamingChatModel nextRoundModel = model;
+                            String nextRoundModelName = modelName;
+                            if (toolRound + 1 >= 1) {
+                                log.info("[AiChat] Switching to final round model llama-3.3-70b-versatile (Groq) for toolRound={}", toolRound + 1);
+                                dev.langchain4j.model.chat.StreamingChatModel groqModel = routingService.getModelByProviderAndName("GROQ", "llama-3.3-70b-versatile", "text");
+                                if (groqModel != null) {
+                                    nextRoundModel = groqModel;
+                                    nextRoundModelName = "llama-3.3-70b-versatile";
+                                }
+                            }
                             streamRound(
                                     emitter,
                                     emitterCompleted,
@@ -1219,8 +1229,8 @@ public class AiStreamingService {
                                     userInput,
                                     history,
                                     systemPrompt,
-                                    model,
-                                    modelName,
+                                    nextRoundModel,
+                                    nextRoundModelName,
                                     startTime,
                                     isFallbackAttempt,
                                     clientMessageId,
@@ -1248,22 +1258,26 @@ public class AiStreamingService {
                 }
 
                 if (requiresTools && !routingService.isGeminiModel(model)) {
-                    log.info("[Multi-Agent] Chặng 3: Executor finished. Forwarding result to Communicator (Gemma) for streaming...");
+                    log.info("[Multi-Agent] Chặng 3: Executor finished. Forwarding result to Communicator (llama-3.3-70b-versatile) for streaming...");
                     try {
                         emitter.send(SseEmitter.event().id(clientMessageId).name("status").data("🟢 Hoàn tất truy xuất! Đang tổng hợp kết quả..."));
                     } catch (Exception ignored) {}
                     
                     safeSend(emitter, "token", java.util.Map.of("token", "\n\n"), org.springframework.http.MediaType.APPLICATION_JSON);
                     
-                    String promptForGemma = "Đây là kết quả hệ thống vừa truy xuất từ Database. Hãy trả lời trực tiếp cho người dùng dựa trên thông tin này một cách thân thiện, ngắn gọn và chính xác. TUYỆT ĐỐI KHÔNG sinh ra thẻ <think> hay bất kỳ quá trình suy nghĩ nào khác. Trả lời trực tiếp vào nội dung câu hỏi: \n" + rawResponseText;
+                    String promptForCommunicator = "Đây là kết quả hệ thống vừa truy xuất từ Database. Hãy trả lời trực tiếp cho người dùng dựa trên thông tin này một cách thân thiện, ngắn gọn và chính xác. TUYỆT ĐỐI KHÔNG sinh ra thẻ <think> hay bất kỳ quá trình suy nghĩ nào khác. Trả lời trực tiếp vào nội dung câu hỏi: \n" + rawResponseText;
                     
+                    dev.langchain4j.model.chat.StreamingChatModel groqModel = routingService.getModelByProviderAndName("GROQ", "llama-3.3-70b-versatile", "text");
+                    dev.langchain4j.model.chat.StreamingChatModel finalModel = groqModel != null ? groqModel : routingService.getReasoningTextModel();
+                    String finalModelName = routingService.getModelName(finalModel);
+
                     forceTextOnlyResponse(
                             emitter, emitterCompleted, session, sessionId, userId, userInput,
-                            history, systemPrompt, routingService.getReasoningTextModel(), routingService.getModelName(routingService.getReasoningTextModel()), startTime,
+                            history, systemPrompt, finalModel, finalModelName, startTime,
                             isFallbackAttempt, clientMessageId, fullResponse,
                             clientDisconnected, generatingMarked, requiresAHP,
                             toolCallSummaries, toolNames,
-                            promptForGemma);
+                            promptForCommunicator);
                     return;
                 }
 

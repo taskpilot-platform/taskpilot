@@ -125,6 +125,70 @@ public class AiModelConfig {
         @Value("${ai.gemini.timeout-seconds:90}")
         private int geminiTimeoutSeconds;
 
+        private final java.util.Map<String, StreamingChatModel> dynamicModelCache = new java.util.concurrent.ConcurrentHashMap<>();
+        private final java.util.Map<StreamingChatModel, String> modelNames = new java.util.concurrent.ConcurrentHashMap<>();
+
+        private StreamingChatModel register(StreamingChatModel model, String name) {
+                if (model != null && name != null) {
+                        modelNames.put(model, name);
+                }
+                return model;
+        }
+
+        public String getModelName(StreamingChatModel model) {
+                if (model == null) return "Unknown";
+                return modelNames.getOrDefault(model, model.getClass().getSimpleName());
+        }
+
+        public StreamingChatModel getOrCreateDynamicModel(String provider, String modelName, String type) {
+                if (modelName == null || modelName.isBlank()) {
+                        return null;
+                }
+                String cacheKey = provider.toUpperCase(java.util.Locale.ROOT) + ":" + modelName + ":" + type;
+                return dynamicModelCache.computeIfAbsent(cacheKey, k -> {
+                        boolean isText = "text".equalsIgnoreCase(type) || type.endsWith("text");
+                        if ("GEMINI".equals(provider)) {
+                                return geminiStreamingModel(modelName);
+                        }
+                        if ("GROQ".equals(provider)) {
+                                List<String> apiKeys = groqApiKeyPool();
+                                if (apiKeys.isEmpty()) {
+                                        return register(getDummyStreamingModel("Groq"), modelName);
+                                }
+                                List<GroqMultiKeyStreamingChatModel.KeyedModel> keyedModels = apiKeys.stream()
+                                                .map(apiKey -> new GroqMultiKeyStreamingChatModel.KeyedModel(
+                                                                maskGroqKey(apiKey),
+                                                                singleGroqStreamingModel(apiKey, modelName)))
+                                                .toList();
+                                return register(new GroqMultiKeyStreamingChatModel(modelName, keyedModels), modelName);
+                        }
+                        if ("OPENROUTER".equals(provider)) {
+                                List<String> apiKeys = openRouterApiKeyPool();
+                                if (apiKeys.isEmpty()) {
+                                        return register(getDummyStreamingModel("OpenRouter"), modelName);
+                                }
+                                boolean parallelToolCalls = !isText;
+                                List<OpenRouterMultiKeyStreamingChatModel.KeyedModel> keyedModels = apiKeys.stream()
+                                                .map(apiKey -> new OpenRouterMultiKeyStreamingChatModel.KeyedModel(
+                                                                maskOpenRouterKey(apiKey),
+                                                                singleOpenRouterModel(apiKey, modelName, parallelToolCalls)))
+                                                .toList();
+                                return register(new OpenRouterMultiKeyStreamingChatModel(modelName, keyedModels), modelName);
+                        }
+                        if ("GITHUB".equals(provider)) {
+                                StreamingChatModel model = OpenAiOfficialStreamingChatModel.builder()
+                                                .apiKey(githubToken)
+                                                .modelName(modelName)
+                                                .isGitHubModels(true)
+                                                .temperature(0.3)
+                                                .timeout(Duration.ofSeconds(timeoutSeconds))
+                                                .build();
+                                return register(model, modelName);
+                        }
+                        return null;
+                });
+        }
+
         @Primary
         @Bean("geminiFlashModel")
         public StreamingChatModel geminiFlashModel() {
@@ -188,13 +252,14 @@ public class AiModelConfig {
 
         private StreamingChatModel geminiStreamingModel(String modelName) {
                 log.info("[AI Config] Using OpenAI-compatible streaming endpoint for Gemini model: {}", modelName);
-                return OpenAiOfficialStreamingChatModel.builder()
+                StreamingChatModel model = OpenAiOfficialStreamingChatModel.builder()
                                 .apiKey(geminiApiKey)
                                 .baseUrl("https://generativelanguage.googleapis.com/v1beta/openai/v1")
                                 .modelName(modelName)
                                 .temperature(0.3)
                                 .timeout(Duration.ofSeconds(geminiTimeoutSeconds))
                                 .build();
+                return register(model, modelName);
         }
 
         @Bean("gpt4oFallbackModel")
@@ -249,18 +314,14 @@ public class AiModelConfig {
                                 .build();
         }
 
-        private List<String> getRequiredGroqApiKeys() {
-                List<String> apiKeys = groqApiKeyPool();
-                if (apiKeys.isEmpty()) {
-                        throw new IllegalStateException("ai.groq.enabled=true but no Groq API keys are configured");
-                }
-                return apiKeys;
-        }
-
         @Bean("groqOssReasoningModel")
         @ConditionalOnProperty(value = "ai.groq.enabled", havingValue = "true")
         public StreamingChatModel groqOssReasoningModel() {
-                List<String> apiKeys = getRequiredGroqApiKeys();
+                List<String> apiKeys = groqApiKeyPool();
+                if (apiKeys.isEmpty()) {
+                        log.warn("[AI Config] Groq is enabled but no API keys are configured. Using dummy fallback model.");
+                        return getDummyStreamingModel("Groq");
+                }
                 log.info("[AI Config] Initializing OSS REASONING model: {} with {} API key(s) (Groq OpenAI-compatible API)",
                                 groqReasoningModelName, apiKeys.size());
                 List<GroqMultiKeyStreamingChatModel.KeyedModel> keyedModels = apiKeys.stream()
@@ -274,7 +335,11 @@ public class AiModelConfig {
         @Bean("groqOssReasoningTextModel")
         @ConditionalOnProperty(value = "ai.groq.enabled", havingValue = "true")
         public StreamingChatModel groqOssReasoningTextModel() {
-                List<String> apiKeys = getRequiredGroqApiKeys();
+                List<String> apiKeys = groqApiKeyPool();
+                if (apiKeys.isEmpty()) {
+                        log.warn("[AI Config] Groq is enabled but no API keys are configured. Using dummy fallback model.");
+                        return getDummyStreamingModel("Groq");
+                }
                 log.info("[AI Config] Initializing OSS REASONING TEXT model: {} with {} API key(s) (Groq OpenAI-compatible API)",
                                 groqReasoningModelName, apiKeys.size());
                 List<GroqMultiKeyStreamingChatModel.KeyedModel> keyedModels = apiKeys.stream()
@@ -298,7 +363,11 @@ public class AiModelConfig {
         @Bean("groqGatekeeperModel")
         @ConditionalOnProperty(value = "ai.groq.enabled", havingValue = "true")
         public ChatModel groqGatekeeperModel() {
-                List<String> apiKeys = getRequiredGroqApiKeys();
+                List<String> apiKeys = groqApiKeyPool();
+                if (apiKeys.isEmpty()) {
+                        log.warn("[AI Config] Groq is enabled but no API keys are configured. Using dummy fallback model.");
+                        return getDummyChatModel("Groq");
+                }
                 log.info("[AI Config] Initializing GATEKEEPER model: {} with {} API key(s) (Groq OpenAI-compatible API)",
                                 groqGatekeeperModelName, apiKeys.size());
                 List<GroqMultiKeyChatModel.KeyedModel> keyedModels = apiKeys.stream()
@@ -323,7 +392,11 @@ public class AiModelConfig {
         @ConditionalOnProperty(value = "ai.groq.enabled", havingValue = "true")
         @ConditionalOnExpression("'${ai.groq.reasoning-fallback1-model:}'.trim().length() > 0")
         public StreamingChatModel groqOssReasoningFallback1Model() {
-                List<String> apiKeys = getRequiredGroqApiKeys();
+                List<String> apiKeys = groqApiKeyPool();
+                if (apiKeys.isEmpty()) {
+                        log.warn("[AI Config] Groq is enabled but no API keys are configured. Using dummy fallback model.");
+                        return getDummyStreamingModel("Groq");
+                }
                 log.info("[AI Config] Initializing OSS REASONING fallback-1 model: {} with {} API key(s) (Groq OpenAI-compatible API)",
                                 groqReasoningFallback1ModelName, apiKeys.size());
                 List<GroqMultiKeyStreamingChatModel.KeyedModel> keyedModels = apiKeys.stream()
@@ -338,7 +411,11 @@ public class AiModelConfig {
         @ConditionalOnProperty(value = "ai.groq.enabled", havingValue = "true")
         @ConditionalOnExpression("'${ai.groq.reasoning-fallback1-model:}'.trim().length() > 0")
         public StreamingChatModel groqOssReasoningFallback1TextModel() {
-                List<String> apiKeys = getRequiredGroqApiKeys();
+                List<String> apiKeys = groqApiKeyPool();
+                if (apiKeys.isEmpty()) {
+                        log.warn("[AI Config] Groq is enabled but no API keys are configured. Using dummy fallback model.");
+                        return getDummyStreamingModel("Groq");
+                }
                 log.info("[AI Config] Initializing OSS REASONING fallback-1 text model: {} with {} API key(s) (Groq OpenAI-compatible API)",
                                 groqReasoningFallback1ModelName, apiKeys.size());
                 List<GroqMultiKeyStreamingChatModel.KeyedModel> keyedModels = apiKeys.stream()
@@ -427,7 +504,8 @@ public class AiModelConfig {
         private StreamingChatModel openRouterReasoningModel(String modelName, boolean parallelToolCalls) {
                 List<String> apiKeys = openRouterApiKeyPool();
                 if (apiKeys.isEmpty()) {
-                        throw new IllegalStateException("ai.openrouter.enabled=true but no OpenRouter API keys are configured");
+                        log.warn("[AI Config] OpenRouter is enabled but no API keys are configured. Using dummy fallback model.");
+                        return register(getDummyStreamingModel("OpenRouter"), modelName);
                 }
 
                 log.info("[AI Config] Initializing OpenRouter model: {} with {} API key(s)", modelName, apiKeys.size());
@@ -436,7 +514,8 @@ public class AiModelConfig {
                                                 maskOpenRouterKey(apiKey),
                                                 singleOpenRouterModel(apiKey, modelName, parallelToolCalls)))
                                 .toList();
-                return new OpenRouterMultiKeyStreamingChatModel(modelName, keyedModels);
+                StreamingChatModel model = new OpenRouterMultiKeyStreamingChatModel(modelName, keyedModels);
+                return register(model, modelName);
         }
 
         private StreamingChatModel singleOpenRouterModel(String apiKey, String modelName, boolean parallelToolCalls) {
@@ -493,5 +572,23 @@ public class AiModelConfig {
                         return "<redacted>";
                 }
                 return apiKey.substring(0, 8) + "..." + apiKey.substring(apiKey.length() - 4);
+        }
+
+        private StreamingChatModel getDummyStreamingModel(String provider) {
+                return new StreamingChatModel() {
+                        @Override
+                        public void chat(dev.langchain4j.model.chat.request.ChatRequest request, dev.langchain4j.model.chat.response.StreamingChatResponseHandler handler) {
+                                handler.onError(new IllegalStateException("Provider " + provider + " is enabled but no API keys are configured in .env"));
+                        }
+                };
+        }
+
+        private ChatModel getDummyChatModel(String provider) {
+                return new ChatModel() {
+                        @Override
+                        public dev.langchain4j.model.chat.response.ChatResponse chat(dev.langchain4j.model.chat.request.ChatRequest request) {
+                                throw new IllegalStateException("Provider " + provider + " is enabled but no API keys are configured in .env");
+                        }
+                };
         }
 }
