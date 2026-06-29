@@ -636,8 +636,15 @@ public class SmartQueryService {
         for (var future : futures) {
             try {
                 ChainResult cr = future.join();
-                results.putAll(cr.results());
-                errors.putAll(cr.errors());
+                int idx = cr.chainIndex();
+                cr.results().forEach((k, v) -> {
+                    String finalKey = results.containsKey(k) ? "chain_" + idx + "_" + k : k;
+                    results.put(finalKey, v);
+                });
+                cr.errors().forEach((k, v) -> {
+                    String finalKey = errors.containsKey(k) ? "chain_" + idx + "_" + k : k;
+                    errors.put(finalKey, v);
+                });
                 statuses.add(new SmartQueryResponseDto.ChainStatus(
                         cr.chainIndex(),
                         cr.totalSteps(),

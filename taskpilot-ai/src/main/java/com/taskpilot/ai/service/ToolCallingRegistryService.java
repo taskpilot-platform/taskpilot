@@ -141,8 +141,14 @@ public class ToolCallingRegistryService {
         String normalizedMsg = smartRoutingService.normalize(message);
         
         boolean isWriteIntent = smartRoutingService.isWriteIntent(normalizedMsg);
-
-        final boolean filterComplexRead = isWriteIntent;
+        
+        boolean isHybridPrompt = isWriteIntent && (
+            normalizedMsg.contains("thong bao") || normalizedMsg.contains("tb") || normalizedMsg.contains("notification")
+            || normalizedMsg.contains("chua doc") || normalizedMsg.contains("unread")
+            || normalizedMsg.contains("gan day") || normalizedMsg.contains("gan nhat")
+            || normalizedMsg.contains("gan day nhat") || normalizedMsg.contains("recent") || normalizedMsg.contains("latest")
+        );
+        final boolean filterComplexRead = isWriteIntent && !isHybridPrompt;
         final boolean finalIsWriteIntent = isWriteIntent;
 
         boolean containsComment = normalizedMsg.contains("comment") || normalizedMsg.contains("binh luan");
@@ -212,10 +218,8 @@ public class ToolCallingRegistryService {
                         return false;
                     }
                 }
+
                 if (filterComplexRead) {
-                    if ("smartQuery".equals(name) || "executeQuerySql".equals(name)) {
-                        return false;
-                    }
                     return !isReadOnlyTool(name);
                 }
                 if (disableSmartQueryForComment && "smartQuery".equals(name)) {

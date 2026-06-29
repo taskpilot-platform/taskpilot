@@ -176,7 +176,15 @@ public class AiStreamingService {
             - If a request asks to perform both a write action (CUD) and a read action, you MUST ONLY call the CUD write tool in the first turn. Do not call the read tool or smartQuery in the same turn, because the write tool will return confirmationRequired=true and must be confirmed first.
             - IF A TOOL RETURNS "Pending action not found or expired", DO NOT call confirmPendingAction again! Inform the user that the action expired.
             - TO FETCH DATA: You MUST call the appropriate read tools. NEVER assume you have the data or that the user has no data. Even if you saw the data in previous turns of the session, you MUST call the specific read tool (e.g. getMySkills, queryTasks) again if the user explicitly asks to fetch it in the current turn.
-            - When you need additional structured information from the user, include a fenced `taskpilot-form` JSON block so the frontend can render an interactive form. Rules: 1. DO NOT tell the user to run tools. Call `queryProjects` to fetch their projects BEFORE responding with a form. 2. For ID fields, use `type: "number"`. 3. For lists of IDs, use `type: "multiselect"`. 4. Only ask for fields that are truly missing. 5. For `createTask`, ONLY `projectId` and `title` are required.
+            - FORMS FOR CUD OPERATIONS: If you need to create a task, project, or sprint, but some information is missing (e.g. you don't know the title or name), you MUST call the write tool (e.g. createTask, createProject, createSprint) directly with null/empty values for the missing fields. DO NOT manually write a taskpilot-form block yourself. The tool itself will automatically detect the missing fields and return a form schema, which will be rendered for you.
+            - When you need additional structured information from the user for other tools, include a fenced `taskpilot-form` JSON block so the frontend can render an interactive form. Rules: 1. DO NOT tell the user to run tools. Call `queryProjects` to fetch their projects BEFORE responding with a form. 2. For ID fields, use `type: "number"`. 3. For lists of IDs, use `type: "multiselect"`. 4. Only ask for fields that are truly missing. 5. For `createTask`, you MUST ALWAYS include ALL the following fields in the fields list: 'title' (type: "text", required: true, label: "Tiêu đề task"), 'description' (type: "textarea", label: "Mô tả"), 'priority' (type: "select", options: ["LOW", "MEDIUM", "HIGH", "URGENT"], label: "Độ ưu tiên"), 'assigneeId' (type: "number", label: "Người thực hiện"), 'startDate' (type: "date", label: "Ngày bắt đầu"), 'dueDate' (type: "date", label: "Hạn chót"), 'sprintId' (type: "number", label: "Sprint"), 'difficultyLevel' (type: "number", label: "Độ khó (1-10)", min: 1, max: 10), 'labelIds' (type: "multiselect", label: "Nhãn"), 'requiredSkillIds' (type: "multiselect", label: "Kỹ năng yêu cầu").
+            - REFERENCING LINK FORMAT: Always use relative markdown links when referencing resources in your response, which will automatically be resolved to local/deployment domain by frontend:
+              * Project overview: [/projects/<projectId>/overview]
+              * Task detail: [/projects/<projectId>/tasks/<taskId>]
+              * Task comment: [/projects/<projectId>/tasks/<taskId>?commentId=<commentId>]
+              * Notifications: [/notifications]
+              * Comments: [/comments]
+              * DO NOT use absolute URLs like http://localhost:5173 or https://taskpilot-platform.netlify.app.
 
             - SMART QUERY (PARALLEL CHAINS): When the user requests data of 2+ different entities returned together (e.g. projects AND tasks, members AND workload) or asks complex nested questions, you MUST use `smartQuery` with parallel chains (ONLY if `smartQuery` is available in the 'tools' list of the current request. If it is NOT available, you MUST use the individual query/get tools provided instead). You are STRICTLY FORBIDDEN from calling individual read tools in parallel to fetch multiple entities when `smartQuery` is available.
               CRITICAL 1: Note that fetching a single entity with a filter of another entity (e.g., querying comments on a task, or tasks in a project/sprint) is a single-entity query. You MUST use the specific individual query tool (e.g. getMyTaskComments, queryTasks, getMyNotifications, getMemberWorkload) instead of smartQuery. NEVER use smartQuery if the specific tool is available. However, if the specific individual query tool is NOT available in the 'tools' list of the current request, you MUST use smartQuery to query that entity.
@@ -638,7 +646,7 @@ public class AiStreamingService {
             LinkedHashSet<String> toolNames,
             int retryCount,
             int modelKeyAttempts) {
-        final boolean isGemma = modelName != null && (modelName.contains("gemma-") || modelName.contains("gemma4")) && routingService.isGeminiModel(model);
+        final boolean isGemma = modelName != null && (modelName.contains("gemma-") || modelName.contains("gemma4")) && (routingService.isGeminiModel(model) || !modelName.contains("/"));
         final boolean isGemmaModel = modelName != null && (modelName.contains("gemma-") || modelName.contains("gemma4") || modelName.toLowerCase().contains("gemma"));
         final String resolvedUserInput = userInput;
         final java.util.Collection<String> currentAllowedTools = new java.util.ArrayList<>();
@@ -647,28 +655,13 @@ public class AiStreamingService {
                 compactHistoryForRequest(
                         sanitizeHistoryForTools(history),
                         "tool-round-" + toolRound),
-                routingService.isGeminiModel(model));
+                routingService.isGeminiModel(model) || (modelName != null && !modelName.contains("/")));
 
         if (!sanitizedHistory.isEmpty() && sanitizedHistory.get(0) instanceof SystemMessage sysMsg) {
             String text = sysMsg.text();
             String modified = text;
-            if (toolRound == 0) {
-                boolean isWriteIntent = false;
-                if (userInput != null && !userInput.isBlank()) {
-                    String normalizedMsg = routingService.normalize(userInput);
-                    isWriteIntent = routingService.isWriteIntent(normalizedMsg);
-                }
-                if (isGemmaModel) {
-                    modified = buildCompactGemmaSystemPrompt(text, isWriteIntent);
-                } else {
-                    modified = text.replaceAll(
-                        "(?s)\\[REASONING\\s*OBJECTIVES\\s*&\\s*TRADE-OFFS\\].*?Explain\\s*the\\s*decision\\s*to\\s*call\\s*specific\\s*tools\\.",
-                        ""
-                    ).replaceAll(
-                        "(?s)2\\.\\s*ALWAYS\\s*write\\s*your\\s*step-by-step\\s*thinking\\s*process.*?Never\\s*write\\s*your\\s*thoughts\\s*in\\s*English\\.",
-                        "2. DO NOT write any thinking process or explanation inside <think> or <thought> tags. Output ONLY the tool calls immediately in JSON function call format. Do not write text."
-                    );
-                }
+            if (requiresTools) {
+                modified = buildCompactSystemPrompt(text);
             } else {
                 modified = """
                     You are the Assistant of the TaskPilot system. Your purpose is to answer the user's question directly and concisely in Vietnamese based on the provided tool results in the conversation history.
@@ -709,11 +702,42 @@ public class AiStreamingService {
                         "Based on the tool data already provided in the context above, provide your final recommendation now. Do not call any tools.");
                 return;
             }
-        } else if (requiresTools && toolRound == 0) {
+        } else if (requiresTools && toolRound < MAX_TOOL_ROUNDS) {
             boolean expanded = (retryCount > 0);
-            int maxTools = isGemmaModel ? (expanded ? 10 : 6) : (expanded ? 40 : 30);
+            int maxTools = expanded ? 40 : 30;
             List<String> dynamicToolNames = new java.util.ArrayList<>(toolCallingRegistryService.selectToolNames(userInput, maxTools, expanded));
             
+            // Scan history from database to find proposed tool names or intents to ensure they are available
+            try {
+                List<com.taskpilot.ai.entity.ChatMessageEntity> dbMsgs = messageRepository.findLastNBySessionId(
+                        sessionId, org.springframework.data.domain.PageRequest.of(0, 5));
+                for (com.taskpilot.ai.entity.ChatMessageEntity dbMsg : dbMsgs) {
+                    if (dbMsg.getSender() == com.taskpilot.ai.entity.ChatMessageEntity.SenderType.ASSISTANT) {
+                        String content = dbMsg.getContent();
+                        if (content != null) {
+                            java.util.regex.Matcher mConfirm = java.util.regex.Pattern.compile("\"toolName\"\\s*:\\s*\"([^\"]+)\"").matcher(content);
+                            while (mConfirm.find()) {
+                                String tName = mConfirm.group(1);
+                                if (!dynamicToolNames.contains(tName)) {
+                                    dynamicToolNames.add(tName);
+                                    log.info("[streamRound] Multi-turn: injected pending tool {} from database history", tName);
+                                }
+                            }
+                            java.util.regex.Matcher mForm = java.util.regex.Pattern.compile("\"intent\"\\s*:\\s*\"([^\"]+)\"").matcher(content);
+                            while (mForm.find()) {
+                                String tName = mForm.group(1);
+                                if (!dynamicToolNames.contains(tName)) {
+                                    dynamicToolNames.add(tName);
+                                    log.info("[streamRound] Multi-turn: injected pending tool {} from database history form intent", tName);
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[streamRound] Failed to scan database history for pending tools: {}", e.getMessage());
+            }
+
             String normalizedInput = routingService.normalize(userInput);
             boolean isConfirmOrCancel = normalizedInput.contains("xac nhan") || normalizedInput.contains("confirm")
                     || normalizedInput.contains("dong y") || normalizedInput.contains("huy bo") || normalizedInput.contains("cancel")
@@ -729,7 +753,7 @@ public class AiStreamingService {
             currentAllowedTools.addAll(dynamicToolNames);
             
             toolSpecs = toolCallingRegistryService.toolSpecificationsByNames(dynamicToolNames);
-            log.info("[streamRound] Dynamic tools round={} expanded={} model={} (isGemmaModel={}) -> injecting {} tool specs", toolRound, expanded, modelName, isGemmaModel, toolSpecs.size());
+            log.info("[streamRound] Dynamic tools round={} expanded={} model={} (isGemmaModel={}) -> injecting {} tool specs: {}", toolRound, expanded, modelName, isGemmaModel, toolSpecs.size(), dynamicToolNames);
         } else {
             log.debug("[streamRound] requiresTools=false or toolRound > 0 -> skipping tool specs entirely");
         }
@@ -837,7 +861,7 @@ public class AiStreamingService {
                         firstModelSignalReceived.set(true);
                         fullResponse.append(partialResponse);
 
-                        boolean isExecutor = requiresTools && !routingService.isGeminiModel(model);
+                        boolean isExecutor = requiresTools;
 
                         boolean hasThinkOpen = partialResponse.contains("<think>") || partialResponse.contains("<thought>");
                         boolean hasThinkClose = partialResponse.contains("</think>") || partialResponse.contains("</thought>");
@@ -871,8 +895,7 @@ public class AiStreamingService {
                         if (!clientDisconnected.get()) {
                             boolean shouldStream = !isExecutor || insideThink.get() || hasThinkOpen || hasThinkClose;
                             if (shouldStream) {
-                                String clientToken = partialResponse.replace("<think>", "").replace("</think>", "")
-                                        .replace("<thought>", "").replace("</thought>", "");
+                                String clientToken = partialResponse;
                                 if (!clientToken.isEmpty()) {
                                     if (!safeSend(emitter, "token", Map.of("token", clientToken), MediaType.APPLICATION_JSON)) {
                                         clientDisconnected.set(true);
@@ -933,8 +956,9 @@ public class AiStreamingService {
                                 try {
                                     Map<String, Object> map = objectMapper.readValue(candidate, MAP_TYPE);
                                     if (map != null) {
-                                        if (map.containsKey("tool") && map.get("tool") instanceof String) {
-                                            String toolName = (String) map.get("tool");
+                                        String toolKey = map.containsKey("tool") ? "tool" : (map.containsKey("name") ? "name" : null);
+                                        if (toolKey != null && map.get(toolKey) instanceof String) {
+                                            String toolName = (String) map.get(toolKey);
                                             Object argumentsObj = map.get("arguments");
                                             String argumentsStr = "";
                                             if (argumentsObj != null) {
@@ -960,7 +984,7 @@ public class AiStreamingService {
                                     }
                                 } catch (Exception e) {
                                     log.debug("[AiChat] Failed to parse candidate JSON from text, trying manual regex fallback", e);
-                                    Matcher m = Pattern.compile("(?s)\"tool\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"arguments\"\\s*:\\s*(\\{.*?\\})").matcher(candidate);
+                                    Matcher m = Pattern.compile("(?s)\"(?:tool|name)\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"arguments\"\\s*:\\s*(\\{.*?\\})").matcher(candidate);
                                     if (m.find()) {
                                         extractedRequests.add(ToolExecutionRequest.builder()
                                             .id(UUID.randomUUID().toString())
@@ -1148,6 +1172,53 @@ public class AiStreamingService {
                             currentAllowedTools);
                     history.addAll(toolResults);
 
+                    boolean hasFormRequired = false;
+                    for (ToolExecutionResultMessage res : toolResults) {
+                        String text = res.text();
+                        if (text != null && text.contains("\"FORM_REQUIRED\"")) {
+                            hasFormRequired = true;
+                            try {
+                                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                                com.fasterxml.jackson.databind.JsonNode rootNode = mapper.readTree(text);
+                                if (rootNode.has("form")) {
+                                    String formJson = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(rootNode.get("form"));
+                                    String formMarkdown = "\n\n```taskpilot-form\n" + formJson + "\n```\n\n";
+                                    safeSend(emitter, "token", java.util.Map.of("token", formMarkdown), MediaType.APPLICATION_JSON);
+                                    fullResponse.append(formMarkdown);
+                                }
+                            } catch (Exception e) {
+                                log.error("Failed to parse and stream FORM_REQUIRED from tool result: {}", e.getMessage());
+                            }
+                        }
+                    }
+
+                    if (hasFormRequired) {
+                        log.info("[Form Interceptor] FORM_REQUIRED detected -> routing to forceTextOnlyResponse");
+                        String allToolResultsText = formatAllToolResults(history);
+                        String formCommunicatorPrompt = "Đây là thông tin và kết quả thực thi các công cụ hệ thống từ Database:\n" 
+                                + allToolResultsText 
+                                + "\nHãy tổng hợp lại câu trả lời đầy đủ cho người dùng. Yêu cầu:\n"
+                                + "1. Liệt kê đầy đủ và chi tiết tất cả các thông tin đã truy vấn được (ví dụ: chi tiết các thông báo chưa đọc, thông tin các thành viên trong dự án vừa tìm thấy...). Tuyệt đối không tóm tắt số lượng.\n"
+                                + "2. Giải thích rõ ràng kế hoạch (plan) mà hệ thống chuẩn bị thực hiện tiếp theo (ví dụ: đổi mô tả dự án thành 'abc', tạo công việc mới) và hướng dẫn người dùng sử dụng biểu mẫu (form) hoặc xác nhận hành động được hiển thị ở trên.\n"
+                                + "3. Đối với các thông báo chưa đọc, KHÔNG tạo liên kết (link) cụ thể cho từng thông báo riêng lẻ. Chỉ cung cấp duy nhất một đường dẫn tương đối để xem tất cả thông báo: [Xem tất cả thông báo](/notifications).\n"
+                                + "4. Luôn sử dụng cú pháp markdown liên kết tương đối chuẩn [Tên hiển thị](đường_dẫn_tương_đối) để người dùng có thể nhấn vào được:\n"
+                                + "   - Xem chi tiết dự án: [Xem chi tiết dự án](/projects/<projectId>/overview)\n"
+                                + "   - Xem chi tiết công việc (task): [Xem chi tiết công việc](/projects/<projectId>/tasks/<taskId>)\n"
+                                + "   - Xem chi tiết bình luận: [Xem chi tiết bình luận](/projects/<projectId>/tasks/<taskId>?commentId=<commentId>)\n"
+                                + "   - Xem tất cả thông báo: [Xem thông báo](/notifications)\n"
+                                + "   - Xem tất cả bình luận: [Xem bình luận](/comments)\n"
+                                + "   Tuyệt đối KHÔNG dùng các URL tuyệt đối chứa http://localhost:5173 hay taskpilot-platform.netlify.app.\n"
+                                + "5. Sử dụng tiếng Việt thân thiện, tự nhiên. Tuyệt đối không sinh ra thẻ <think> hay bất kỳ quá trình suy nghĩ nào khác. Viết trực tiếp câu trả lời của bạn. Tuyệt đối KHÔNG tự sinh lại bất kỳ thẻ ```taskpilot-form nào trong phản hồi này.";
+                        forceTextOnlyResponse(
+                                emitter, emitterCompleted, session, sessionId, userId, userInput,
+                                history, systemPrompt, model, modelName, startTime,
+                                isFallbackAttempt, clientMessageId, fullResponse,
+                                clientDisconnected, generatingMarked, requiresAHP,
+                                toolCallSummaries, toolNames,
+                                formCommunicatorPrompt);
+                        return;
+                    }
+
                     chatStreamStatusService.updatePhase(sessionId, clientMessageId,
                             Phase.THINKING, modelName, null, null);
                     safeSend(emitter, "phase", Phase.THINKING.name(), null);
@@ -1209,17 +1280,40 @@ public class AiStreamingService {
                                     log.error("[BenchmarkOptimization] Error saving mock response: {}", e.getMessage());
                                 }
                             });
+                        } else if (toolRound == 0 && requiresTools) {
+                            dev.langchain4j.model.chat.StreamingChatModel nextRoundModel = model;
+                            String nextRoundModelName = modelName;
+                            String toolResultsText = formatToolResultsForLlama(toolResults);
+                            streamIntermediateResponseAndContinue(
+                                    emitter,
+                                    emitterCompleted,
+                                    session,
+                                    sessionId,
+                                    userId,
+                                    userInput,
+                                    history,
+                                    systemPrompt,
+                                    nextRoundModel,
+                                    nextRoundModelName,
+                                    startTime,
+                                    isFallbackAttempt,
+                                    clientMessageId,
+                                    fullResponse,
+                                    clientDisconnected,
+                                    generatingMarked,
+                                    toolRound + 1,
+                                    requiresAHP,
+                                    requiresTools,
+                                    nextToolState.toolName(),
+                                    nextToolState.consecutiveCount(),
+                                    toolCallSummaries,
+                                    toolNames,
+                                    retryCount,
+                                    modelKeyAttempts,
+                                    toolResultsText);
                         } else {
                             dev.langchain4j.model.chat.StreamingChatModel nextRoundModel = model;
                             String nextRoundModelName = modelName;
-                            if (toolRound + 1 >= 1) {
-                                log.info("[AiChat] Switching to final round model llama-3.3-70b-versatile (Groq) for toolRound={}", toolRound + 1);
-                                dev.langchain4j.model.chat.StreamingChatModel groqModel = routingService.getModelByProviderAndName("GROQ", "llama-3.3-70b-versatile", "text");
-                                if (groqModel != null) {
-                                    nextRoundModel = groqModel;
-                                    nextRoundModelName = "llama-3.3-70b-versatile";
-                                }
-                            }
                             streamRound(
                                     emitter,
                                     emitterCompleted,
@@ -1257,15 +1351,34 @@ public class AiStreamingService {
                     rawResponseText = aiMessage.text();
                 }
 
-                if (requiresTools && !routingService.isGeminiModel(model)) {
+                if (requiresTools) {
                     log.info("[Multi-Agent] Chặng 3: Executor finished. Forwarding result to Communicator (llama-3.3-70b-versatile) for streaming...");
+                    if (session.getTitle() == null || session.getTitle().isBlank()) {
+                        generateSessionTitleViaGemmaAsync(session, userInput, rawResponseText);
+                    }
                     try {
                         emitter.send(SseEmitter.event().id(clientMessageId).name("status").data("🟢 Hoàn tất truy xuất! Đang tổng hợp kết quả..."));
                     } catch (Exception ignored) {}
                     
                     safeSend(emitter, "token", java.util.Map.of("token", "\n\n"), org.springframework.http.MediaType.APPLICATION_JSON);
                     
-                    String promptForCommunicator = "Đây là kết quả hệ thống vừa truy xuất từ Database. Hãy trả lời trực tiếp cho người dùng dựa trên thông tin này một cách thân thiện, ngắn gọn và chính xác. TUYỆT ĐỐI KHÔNG sinh ra thẻ <think> hay bất kỳ quá trình suy nghĩ nào khác. Trả lời trực tiếp vào nội dung câu hỏi: \n" + rawResponseText;
+                    String allToolResultsText = formatAllToolResults(history);
+                    String promptForCommunicator = "Đây là thông tin và kết quả thực thi các công cụ hệ thống từ Database:\n" 
+                            + allToolResultsText 
+                            + "\nĐây là kế hoạch hành động ghi/cập nhật dữ liệu (plan) và biểu mẫu (forms) được đề xuất từ hệ thống:\n"
+                            + rawResponseText
+                            + "\nHãy tổng hợp lại câu trả lời đầy đủ cho người dùng. Yêu cầu:\n"
+                            + "1. Liệt kê đầy đủ và chi tiết tất cả các thông tin đã truy vấn được (ví dụ: chi tiết các thông báo chưa đọc, thông tin các thành viên trong dự án vừa tìm thấy...). Tuyệt đối không tóm tắt số lượng.\n"
+                            + "2. Giải thích rõ ràng kế hoạch (plan) mà hệ thống chuẩn bị thực hiện tiếp theo (ví dụ: đổi mô tả dự án thành 'abc', tạo công việc mới) và hướng dẫn người dùng sử dụng biểu mẫu (form) hoặc xác nhận hành động ở dưới.\n"
+                            + "3. Đối với các thông báo chưa đọc, KHÔNG tạo liên kết (link) cụ thể cho từng thông báo riêng lẻ. Chỉ cung cấp duy nhất một đường dẫn tương đối để xem tất cả thông báo: [Xem tất cả thông báo](/notifications).\n"
+                            + "4. Luôn sử dụng cú pháp markdown liên kết tương đối chuẩn [Tên hiển thị](đường_dẫn_tương_đối) để người dùng có thể nhấn vào được:\n"
+                            + "   - Xem chi tiết dự án: [Xem chi tiết dự án](/projects/<projectId>/overview)\n"
+                            + "   - Xem chi tiết công việc (task): [Xem chi tiết công việc](/projects/<projectId>/tasks/<taskId>)\n"
+                            + "   - Xem chi tiết bình luận: [Xem chi tiết bình luận](/projects/<projectId>/tasks/<taskId>?commentId=<commentId>)\n"
+                            + "   - Xem tất cả thông báo: [Xem thông báo](/notifications)\n"
+                            + "   - Xem tất cả bình luận: [Xem bình luận](/comments)\n"
+                            + "   Tuyệt đối KHÔNG dùng các URL tuyệt đối chứa http://localhost:5173 hay taskpilot-platform.netlify.app.\n"
+                            + "5. Sử dụng tiếng Việt thân thiện, tự nhiên. Tuyệt đối không sinh ra thẻ <think> hay bất kỳ quá trình suy nghĩ nào khác. Viết trực tiếp câu trả lời của bạn.";
                     
                     dev.langchain4j.model.chat.StreamingChatModel groqModel = routingService.getModelByProviderAndName("GROQ", "llama-3.3-70b-versatile", "text");
                     dev.langchain4j.model.chat.StreamingChatModel finalModel = groqModel != null ? groqModel : routingService.getReasoningTextModel();
@@ -1311,13 +1424,10 @@ public class AiStreamingService {
 
                         session.setUpdatedAt(Instant.now());
                         if (session.getTitle() == null || session.getTitle().isBlank()) {
-                            String titleSource = stripThinkBlocks(finalResponseText);
-                            String autoTitle = titleSource.length() > 60
-                                    ? titleSource.substring(0, 60) + "..."
-                                    : titleSource;
-                            session.setTitle(autoTitle);
+                            generateSessionTitleViaGemmaAsync(session, userInput, finalResponseText);
+                        } else {
+                            sessionRepository.save(session);
                         }
-                        sessionRepository.save(session);
 
                         Object toolOutput = toolCallSummaries.isEmpty() ? null : toolCallSummaries;
                         String actionTaken = toolNames.isEmpty() ? null : String.join(",", toolNames);
@@ -1411,7 +1521,7 @@ public class AiStreamingService {
             log.info("[GeminiToolFix] Using custom HTTP client for Gemini model to bypass OpenAI official adapter: {}", modelName);
             executor.submit(() -> {
                 try {
-                    ChatResponse response = callGemmaDirectly(request, modelName, toolRound);
+                    ChatResponse response = callGemmaDirectly(request, modelName, toolRound, requiresTools);
                     if (response.aiMessage() != null && response.aiMessage().text() != null) {
                         handler.onPartialResponse(response.aiMessage().text());
                     }
@@ -1689,12 +1799,12 @@ public class AiStreamingService {
             }
         };
 
-        boolean isGemma = textModelName != null && (textModelName.contains("gemma-") || textModelName.contains("gemma4")) && routingService.isGeminiModel(textModel);
+        boolean isGemma = textModelName != null && (textModelName.contains("gemma-") || textModelName.contains("gemma4")) && (routingService.isGeminiModel(textModel) || !textModelName.contains("/"));
         if (isGemma) {
             log.info("[GeminiToolFix] Using custom HTTP client for Gemini model to bypass OpenAI official adapter in forceTextOnly: {}", textModelName);
             executor.submit(() -> {
                 try {
-                    ChatResponse response = callGemmaDirectly(request, textModelName, 1);
+                    ChatResponse response = callGemmaDirectly(request, textModelName, 1, false);
                     if (response.aiMessage() != null && response.aiMessage().text() != null) {
                         handler.onPartialResponse(response.aiMessage().text());
                     }
@@ -1758,13 +1868,10 @@ public class AiStreamingService {
 
                 session.setUpdatedAt(Instant.now());
                 if (session.getTitle() == null || session.getTitle().isBlank()) {
-                    String titleSource = stripThinkBlocks(finalResponseText);
-                    String autoTitle = titleSource.length() > 60
-                            ? titleSource.substring(0, 60) + "..."
-                            : titleSource;
-                    session.setTitle(autoTitle);
+                    generateSessionTitleViaGemmaAsync(session, userInput, finalResponseText);
+                } else {
+                    sessionRepository.save(session);
                 }
-                sessionRepository.save(session);
 
                 Object toolOutput = toolCallSummaries.isEmpty() ? null : toolCallSummaries;
                 String actionTaken = toolNames.isEmpty() ? null : String.join(",", toolNames);
@@ -1890,8 +1997,21 @@ public class AiStreamingService {
             eventPayload.put("arguments", request.arguments());
             eventPayload.put("result", truncate(output, 1500));
             parseConfirmationPayload(output).ifPresent(confirmation -> eventPayload.put("confirmation", confirmation));
-            buildMissingAssignmentForm(request.name(), request.arguments(), output)
-                    .ifPresent(form -> eventPayload.put("form", form));
+            if (output != null && output.contains("\"FORM_REQUIRED\"")) {
+                try {
+                    com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                    com.fasterxml.jackson.databind.JsonNode rootNode = mapper.readTree(output);
+                    if (rootNode.has("form")) {
+                        Map<String, Object> formMap = mapper.convertValue(rootNode.get("form"), Map.class);
+                        eventPayload.put("form", formMap);
+                    }
+                } catch (Exception e) {
+                    log.error("Failed to parse FORM_REQUIRED in executeTools: {}", e.getMessage());
+                }
+            } else {
+                buildMissingAssignmentForm(request.name(), request.arguments(), output)
+                        .ifPresent(form -> eventPayload.put("form", form));
+            }
             safeSend(emitter, "tool", eventPayload, MediaType.APPLICATION_JSON);
 
             toolNames.add(request.name());
@@ -2595,12 +2715,7 @@ public class AiStreamingService {
         for (int i = startIndex; i < messages.size(); i++) {
             ChatMessage msg = messages.get(i);
             if (msg instanceof SystemMessage sys) {
-                if (isGemini) {
-                    // Gemini does not allow SystemMessage in the middle of history
-                    body.add(UserMessage.from(sys.text()));
-                } else {
-                    body.add(msg);
-                }
+                body.add(UserMessage.from(sys.text()));
             } else {
                 body.add(msg);
             }
@@ -2616,13 +2731,7 @@ public class AiStreamingService {
         for (int i = 1; i < body.size(); i++) {
             ChatMessage next = body.get(i);
             if (sameRole(current, next)) {
-                if (current instanceof UserMessage) {
-                    alternated.add(current);
-                    alternated.add(AiMessage.from("Đã xảy ra lỗi hệ thống hoặc timeout ở yêu cầu trước."));
-                    current = next;
-                } else {
                     current = mergeMessages(current, next);
-                }
             } else {
                 alternated.add(current);
                 current = next;
@@ -2630,10 +2739,8 @@ public class AiStreamingService {
         }
         alternated.add(current);
 
-        // For Gemini, we must ensure it alternates starting with User, then AI, then User...
-        // Gemini: User -> Model -> User -> Model...
-        // If there's an initial SystemMessage, it's passed as system instruction, so the remaining list must alternate.
-        if (isGemini && !alternated.isEmpty() && alternated.get(0) instanceof AiMessage) {
+        // All models: ensure strict alternation starting with User, then AI...
+        if (!alternated.isEmpty() && alternated.get(0) instanceof AiMessage) {
             List<ChatMessage> temp = new ArrayList<>();
             temp.add(UserMessage.from("[System: Continued conversation]"));
             temp.addAll(alternated);
@@ -2688,59 +2795,26 @@ public class AiStreamingService {
         return "";
     }
 
-    private String buildCompactGemmaSystemPrompt(String originalPrompt, boolean isWriteIntent) {
+    private String buildCompactSystemPrompt(String originalPrompt) {
         if (originalPrompt == null) {
             return "";
         }
         String contextSection = "";
         int contextStart = originalPrompt.indexOf("[CURRENT SYSTEM CONTEXT]");
         int contextEnd = originalPrompt.indexOf("[TASKPILOT TOOL WORKFLOW RULES]");
-        log.info("[GeminiToolFix] buildCompactGemmaSystemPrompt: isWriteIntent={}, contextStart={}, contextEnd={}", isWriteIntent, contextStart, contextEnd);
+        log.info("[AI Config] buildCompactSystemPrompt: contextStart={}, contextEnd={}", contextStart, contextEnd);
         if (contextStart != -1 && contextEnd != -1) {
             contextSection = originalPrompt.substring(contextStart, contextEnd).trim();
         } else {
             contextSection = """
                 [CURRENT SYSTEM CONTEXT]
-                - Today's Date: 2026-06-19
+                - Today's Date: 2026-06-28
                 - Current User: FuTie Neith (ID: 18)
                 """;
         }
 
-        if (isWriteIntent) {
-            log.info("[GeminiToolFix] buildCompactGemmaSystemPrompt returning minimal WRITE prompt");
-            return """
-                You are the Backend Executor Agent of the TaskPilot system. Your SOLE purpose is to execute system instructions by calling the appropriate tools.
-                YOU MUST NOT answer the user's question directly with text. YOU MUST ONLY call tools to fetch data or perform actions.
-                EXCEPTION: If the user asks to perform an action or query but the required tool is not available, you MUST output exactly: MISSING_TOOL: <short reason>
-                Do NOT generate any conversational or explanatory text.
-
-                """ + contextSection + """
-
-                [CRITICAL WORKFLOW RULES]
-                - WRITE ACTION ONLY: The user request contains a write intent (create, patch, delete, update, assign, etc.).
-                - You MUST ONLY call the appropriate write tool (e.g. createTask, createProject, patchTask, deleteProject, addMySkill, assignTaskToMember, updateTaskRequiredSkills, etc.) in this turn.
-                - DO NOT call smartQuery or any read/query tools (e.g. getMySkills, queryTasks) in this turn. Any read/query operations (like list members, query tasks) MUST be postponed.
-                - If the request contains both a write action and a read/query action, you MUST ONLY call the write tool. DO NOT output 'MISSING_TOOL' for the read/query action, simply ignore or postpone it. Only output 'MISSING_TOOL' if the write action itself cannot be performed due to a missing tool.
-                - The write tool will return confirmationRequired=true and must be confirmed first in the next turn.
-                - When moving a task to another status/column (e.g., TODO, IN_PROGRESS, DONE) without an explicit position, you MUST call updateTaskStatus. Only call moveTaskKanban if the user explicitly specifies a target position/order (e.g., 'vị trí số 2').
-                - For entity updates where only some fields change, prefer the matching patch tool (e.g. patchProject, patchTask).
-                - When assigning or delegating a task to a member (including yourself or 'me'), you MUST call assignTaskToMemberByName instead of patchTask. DO NOT use patchTask to update assigneeId.
-                - To ADD a new personal skill (e.g. user says "thêm", "add"), you MUST call addMySkill. DO NOT call patchMySkill. Check the description of addMySkill for system skill ID (e.g. 1 for Java) and use it directly. DO NOT call searchSystemSkills.
-                - To UPDATE or CHANGE the level of a skill the user ALREADY HAS (e.g. user says "tăng", "sửa", "cập nhật", "đổi", "update"), you MUST call patchMySkill directly. DO NOT call addMySkill.
-                - When updating or renaming a sprint, you MUST call patchSprint directly. DO NOT call updateSprint.
-                - To CREATE a system skill, you MUST call createSystemSkill.
-                - To UPDATE or PATCH a system skill, you MUST call patchSystemSkill.
-                - To DELETE or REMOVE a system skill, you MUST call deleteSystemSkill. DO NOT call deleteMySkill.
-                - To DELETE or REMOVE a personal skill from the user's profile, you MUST call deleteMySkill. DO NOT call deleteSystemSkill.
-
-                [STRICT OUTPUT RULES]
-                1. Respond in Vietnamese by default.
-                2. Output ONLY the tool calls immediately in JSON function call format. DO NOT write any thinking process, analysis, or explanation in <think> or <thought> tags. Do not write text.
-                3. Keep your internal thinking process (reasoning) extremely brief (less than 20 words or 1-2 short sentences). Your thought/reasoning section MUST be extremely short (less than 100 characters) to ensure speed. Output tool calls as fast as possible.
-                """;
-        }
-
         return """
+
             You are the Backend Executor Agent of the TaskPilot system. Your SOLE purpose is to execute system instructions by calling the appropriate tools.
             YOU MUST NOT answer the user's question directly with text. YOU MUST ONLY call tools to fetch data or perform actions.
             EXCEPTION: If the user asks to perform an action or query but the required tool is not available, you MUST output exactly: MISSING_TOOL: <short reason>
@@ -2750,9 +2824,11 @@ public class AiStreamingService {
 
             [CRITICAL WORKFLOW RULES]
             - You MUST ONLY call tools that are explicitly defined in the 'tools' list of the current request. DO NOT call any other tools (e.g. 'smartQuery') if they are not in the 'tools' list of the current turn, even if you saw them in the conversation history.
-            - RECOMMENDATION RULE: If the user asks to recommend candidates, suggest assignees, or reassign (e.g., 'đề xuất', 'gợi ý', 'recommend', 'rcm'), you MUST call recommendTaskAssignmentCandidates or recommendAndAssignTask directly. DO NOT call getTaskDetails, queryTasks, or queryProjects first to get details. Those recommendation tools automatically load task details and skills internally. Calling getTaskDetails or queryTasks will cause a CRITICAL SYSTEM ERROR because they are not available in the current context. You MUST call recommendTaskAssignmentCandidates directly using the taskId.
+            - PARALLEL & MULTI-TURN DAG EXECUTION:
+              * You can and should call multiple independent tools in parallel (e.g., query projects and list notifications in the same turn).
+              * DEPENDENCY RESOLUTION: If a write action (e.g., createTask, patchProject) depends on an ID (e.g., projectId) that you must query first (e.g., get the latest project the user participated in), you MUST call the query tool (e.g., smartQuery) first in Turn 1, and POSTPONE the write action to the next turn after you receive the query result. Do NOT guess or invent IDs.
             - smartQuery is STRICTLY for READ-only operations. It CANNOT perform CUD operations. If combined with a write action, call the write tool directly.
-            - If querying 2+ different entities returned together (e.g. projects AND tasks, members AND workload), you MUST use `smartQuery` (ONLY if `smartQuery` is available in the 'tools' list of the current request). Note that fetching a single entity with a filter of another entity (e.g., comments on a task, or tasks in a sprint) is a single-entity query. You MUST use the specific tool (e.g. getMyTaskComments, queryTasks) instead of smartQuery. NEVER use smartQuery if the specific tool is available. However, if the specific tool is NOT available in the 'tools' list of the current request, you MUST use smartQuery to query that entity.
+            - If querying 2+ different entities returned together (e.g. projects AND tasks, members AND workload), you MUST use `smartQuery` (ONLY if `smartQuery` is available in the 'tools' list of the current request). Note that fetching a single entity with a filter of another entity (e.g., querying comments on a task, or tasks in a sprint) is a single-entity query. You MUST use the specific tool (e.g. getMyTaskComments, queryTasks) instead of smartQuery. NEVER use smartQuery if the specific tool is available. However, if the specific tool is NOT available in the 'tools' list of the current request, you MUST use smartQuery to query that entity.
             - smartQuery rules:
               * To get all projects of current user, set `aggregate` to `""` (empty string).
               * Steps in the SAME chain run sequentially. Multiple chains run in PARALLEL.
@@ -2766,12 +2842,27 @@ public class AiStreamingService {
                   {"key":"m","entity":"members","filters":{},"ref":{"projectId":"p"},"aggregate":"","sort":"","limit":50},
                   {"key":"t","entity":"tasks","filters":{"assigneeId":"me","dueToday":"true"},"ref":{"projectId":"p"},"aggregate":"","sort":"","limit":50}
                 ]}]
-              - TO FETCH DATA: You MUST call the appropriate read tools. Even if you saw the data in previous turns of the session, you MUST call the specific read tool (e.g. getMySkills, queryTasks) again if the user explicitly asks to fetch it in the current turn.
+            - CUD (WRITE) SPECIFIC RULES:
+              * When moving a task to another status/column (e.g., TODO, IN_PROGRESS, DONE) without an explicit position, you MUST call updateTaskStatus. Only call moveTaskKanban if the user explicitly specifies a target position/order (e.g., 'vị trí số 2').
+              * For entity updates where only some fields change, prefer the matching patch tool (e.g. patchProject, patchTask).
+              * When assigning or delegating a task to a member (including yourself or 'me'), you MUST call assignTaskToMemberByName instead of patchTask. DO NOT use patchTask to update assigneeId.
+              * To ADD a new personal skill (e.g. user says "thêm", "add"), you MUST call addMySkill. DO NOT call patchMySkill. Check the description of addMySkill for system skill ID (e.g. 1 for Java) and use it directly. DO NOT call searchSystemSkills.
+              * To UPDATE or CHANGE the level of a skill the user ALREADY HAS (e.g. user says "tăng", "sửa", "cập nhật", "đổi", "update"), you MUST call patchMySkill directly. DO NOT call addMySkill.
+              * To DELETE or REMOVE a personal skill from the user's profile, you MUST call deleteMySkill. DO NOT call deleteSystemSkill.
+             - FORMS FOR CUD OPERATIONS: If you need to create a task, project, or sprint, but some information is missing (e.g. you don't know the title or name), you MUST call the write tool (e.g. createTask, createProject, createSprint) directly with null/empty values for the missing fields. DO NOT manually write a taskpilot-form block yourself. The tool itself will automatically detect the missing fields and return a form schema, which will be rendered for you.
+            - REFERENCING LINK FORMAT: Always use relative markdown links when referencing resources in your response, which will automatically be resolved to local/deployment domain by frontend:
+              * Project overview: [/projects/<projectId>/overview]
+              * Task detail: [/projects/<projectId>/tasks/<taskId>]
+              * Task comment: [/projects/<projectId>/tasks/<taskId>?commentId=<commentId>]
+              * Notifications: [/notifications]
+              * Comments: [/comments]
+              * DO NOT use absolute URLs like http://localhost:5173 or https://taskpilot-platform.netlify.app.
+
 
             [STRICT OUTPUT RULES]
             1. Respond in Vietnamese by default.
-            2. Output ONLY the tool calls immediately in JSON function call format. DO NOT write any thinking process, analysis, or explanation in <think> or <thought> tags. Do not write text.
-            3. Keep your internal thinking process (reasoning) extremely brief (less than 15 words). Your thought/reasoning section MUST be extremely short to ensure speed. Output tool calls as fast as possible.
+            2. Output ONLY the tool calls immediately in JSON function call format or fenced `taskpilot-form` block. DO NOT write any thinking process, analysis, or explanation in <think> or <thought> tags. Do not write text.
+            3. Keep your internal thinking process (reasoning) extremely brief (less than 15 words). Output tool calls as fast as possible.
             """;
     }
 
@@ -2791,12 +2882,12 @@ public class AiStreamingService {
         }
     }
 
-    private ChatResponse callGemmaDirectly(ChatRequest chatRequest, String modelName, int toolRound) {
+    private ChatResponse callGemmaDirectly(ChatRequest chatRequest, String modelName, int toolRound, boolean requiresTools) {
         try {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("model", modelName);
             body.put("temperature", 0.1);
-            if (toolRound == 0) {
+            if (requiresTools) {
                 body.put("max_tokens", 3500);
             } else {
                 body.put("max_tokens", 1000);
@@ -2825,7 +2916,7 @@ public class AiStreamingService {
                     if (msg instanceof SystemMessage sysMsg) {
                         String text = sysMsg.text();
                         String modified = text;
-                        if (toolRound > 0) {
+                        if (!requiresTools) {
                             // Round 1+: Model must answer the user, but keep thinking extremely short/disabled for speed
                             modified = """
                                 You are the Assistant of the TaskPilot system. Your purpose is to answer the user's question directly and concisely in Vietnamese based on the provided tool results in the conversation history.
@@ -2867,11 +2958,11 @@ public class AiStreamingService {
                 keys.add(geminiApiKey.trim());
             }
 
-            int timeoutSeconds = 45;
+            int timeoutSeconds = 95;
             if (chatRequest.toolSpecifications() != null) {
                 for (var spec : chatRequest.toolSpecifications()) {
                     if ("smartQuery".equals(spec.name())) {
-                        timeoutSeconds = 50;
+                        timeoutSeconds = 105;
                         break;
                     }
                 }
@@ -2889,7 +2980,7 @@ public class AiStreamingService {
                 String activeKey = keys.get(currentKeyIndex);
                 try {
                     long elapsedMs = System.currentTimeMillis() - stepStartTime;
-                    long budgetRemainingMs = 87000 - elapsedMs;
+                    long budgetRemainingMs = 200000 - elapsedMs;
                     if (budgetRemainingMs < 5000) {
                         log.warn("[GeminiToolFix] Step time budget exceeded, stopping retries. Remaining budget: {}ms", budgetRemainingMs);
                         break;
@@ -3173,6 +3264,256 @@ public class AiStreamingService {
             }
         }
         return sb.toString().trim();
+    }
+
+    private String formatAllToolResults(List<ChatMessage> history) {
+        if (history == null || history.isEmpty()) {
+            return "No prior tool execution history.";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (var msg : history) {
+            if (msg instanceof dev.langchain4j.data.message.ToolExecutionResultMessage toolMsg) {
+                sb.append("Tool executed: ").append(toolMsg.toolName()).append("\n")
+                  .append("Result: ").append(toolMsg.text()).append("\n\n");
+            }
+        }
+        return sb.toString().trim();
+    }
+
+    private String formatToolResultsForLlama(List<ToolExecutionResultMessage> toolResults) {
+        if (toolResults == null || toolResults.isEmpty()) {
+            return "No tool results available.";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (var res : toolResults) {
+            sb.append("Tool: ").append(res.toolName()).append("\n")
+              .append("Result: ").append(res.text()).append("\n\n");
+        }
+        return sb.toString();
+    }
+
+    private void streamIntermediateResponseAndContinue(SseEmitter emitter,
+            AtomicBoolean emitterCompleted,
+            ChatSessionEntity session,
+            Long sessionId,
+            Long userId,
+            String userInput,
+            List<ChatMessage> history,
+            String systemPrompt,
+            StreamingChatModel model,
+            String modelName,
+            long startTime,
+            boolean isFallbackAttempt,
+            String clientMessageId,
+            StringBuilder fullResponse,
+            AtomicBoolean clientDisconnected,
+            AtomicBoolean generatingMarked,
+            int nextRound,
+            boolean requiresAHP,
+            boolean requiresTools,
+            String nextToolName,
+            int consecutiveToolExecutions,
+            List<Map<String, Object>> toolCallSummaries,
+            LinkedHashSet<String> toolNames,
+            int retryCount,
+            int modelKeyAttempts,
+            String toolResultsText) {
+
+        log.info("[Multi-Agent] Round 0 complete. Streaming intermediate response via Llama 3.3 before proceeding to Round {}...", nextRound);
+        try {
+            emitter.send(SseEmitter.event().id(clientMessageId).name("status").data("🟢 Đang tóm tắt kết quả đợt 1..."));
+        } catch (Exception ignored) {}
+
+        if (generatingMarked.compareAndSet(false, true)) {
+            safeSend(emitter, "token", Map.of("token", "</think>\n\n"), MediaType.APPLICATION_JSON);
+            safeSend(emitter, "phase", Phase.GENERATING.name(), null);
+        }
+
+        String promptForCommunicator = "Đây là thông tin hệ thống vừa truy vấn được từ Database cho yêu cầu đầu tiên của người dùng. "
+                + "Hãy báo cáo đầy đủ, thân thiện các thông tin này (như danh sách thông báo chưa đọc, dự án gần nhất, thành viên dự án...) cho người dùng bằng tiếng Việt. "
+                + "Sau đó, báo cho người dùng biết là bạn đang chuẩn bị thực hiện bước tiếp theo của yêu cầu (như tạo công việc hoặc chỉnh sửa thông tin). "
+                + "TUYỆT ĐỐI KHÔNG sinh ra thẻ <think> hay bất kỳ quá trình suy nghĩ nào khác. Trả lời trực tiếp vào nội dung: \n" + toolResultsText;
+
+        List<ChatMessage> textOnlyHistory = new ArrayList<>(sanitizeHistoryForTools(history));
+        if (!textOnlyHistory.isEmpty() && textOnlyHistory.get(0) instanceof SystemMessage) {
+            textOnlyHistory.set(0, SystemMessage.from("You are the Assistant of the TaskPilot system. Your purpose is to report findings from Database directly and concisely in Vietnamese. DO NOT write any thinking process or call tools."));
+        }
+        textOnlyHistory.add(SystemMessage.from(promptForCommunicator));
+        textOnlyHistory = new ArrayList<>(cleanAndAlternateRoles(
+                compactHistoryForRequest(textOnlyHistory, "intermediate-text"),
+                true));
+
+        StreamingChatModel llamaModel = routingService.getModelByProviderAndName("GROQ", "llama-3.3-70b-versatile", "text");
+        StreamingChatModel finalLlama = llamaModel != null ? llamaModel : routingService.getReasoningTextModel();
+        String finalLlamaName = routingService.getModelName(finalLlama);
+
+        ChatRequest request = ChatRequest.builder()
+                .messages(textOnlyHistory)
+                .maxOutputTokens(800)
+                .build();
+
+        StringBuilder intermediateResponse = new StringBuilder();
+        
+        final AtomicBoolean roundFinished = new AtomicBoolean(false);
+        final ScheduledFuture<?> timeoutFuture = timeoutScheduler.schedule(() -> {
+            if (roundFinished.compareAndSet(false, true)) {
+                log.warn("[Intermediate] Timeout occurred during intermediate Llama streaming. Continuing to next round.");
+                generatingMarked.set(false);
+                safeSend(emitter, "token", Map.of("token", "\n\n<think>\nTiếp tục thực hiện bước tiếp theo...\n</think>\n\n"), MediaType.APPLICATION_JSON);
+                safeSend(emitter, "phase", Phase.THINKING.name(), null);
+                
+                streamRound(emitter, emitterCompleted, session, sessionId, userId, userInput, history, systemPrompt,
+                        model, modelName, startTime, isFallbackAttempt, clientMessageId, fullResponse,
+                        clientDisconnected, generatingMarked, nextRound, requiresAHP, requiresTools,
+                        nextToolName, consecutiveToolExecutions, toolCallSummaries, toolNames, retryCount, modelKeyAttempts);
+            }
+        }, 30, TimeUnit.SECONDS);
+
+        final AtomicBoolean insideLlmThink = new AtomicBoolean(false);
+        final StringBuilder filterBuffer = new StringBuilder();
+
+        finalLlama.chat(request, new StreamingChatResponseHandler() {
+            @Override
+            public void onPartialResponse(String token) {
+                if (roundFinished.get()) return;
+                intermediateResponse.append(token);
+                fullResponse.append(token);
+
+                filterBuffer.append(token);
+                String content = filterBuffer.toString();
+                filterBuffer.setLength(0);
+
+                while (!content.isEmpty()) {
+                    if (insideLlmThink.get()) {
+                        int closeIdx = content.indexOf("</think>");
+                        if (closeIdx != -1) {
+                            insideLlmThink.set(false);
+                            content = content.substring(closeIdx + 8);
+                        } else {
+                            int potentialIdx = getPotentialPrefixIndex(content, "</think>");
+                            if (potentialIdx != -1) {
+                                filterBuffer.append(content.substring(potentialIdx));
+                            }
+                            break;
+                        }
+                    } else {
+                        int openIdx = content.indexOf("<think>");
+                        if (openIdx != -1) {
+                            String before = content.substring(0, openIdx);
+                            if (!before.isEmpty()) {
+                                sendTokenToClient(emitter, before, clientDisconnected, generatingMarked, sessionId, clientMessageId, finalLlamaName);
+                            }
+                            insideLlmThink.set(true);
+                            content = content.substring(openIdx + 7);
+                        } else {
+                            int potentialOpen = getPotentialPrefixIndex(content, "<think>");
+                            int potentialClose = getPotentialPrefixIndex(content, "</think>");
+                            int potentialIdx = Math.max(potentialOpen, potentialClose);
+
+                            if (potentialIdx != -1) {
+                                String before = content.substring(0, potentialIdx);
+                                if (!before.isEmpty()) {
+                                    sendTokenToClient(emitter, before, clientDisconnected, generatingMarked, sessionId, clientMessageId, finalLlamaName);
+                                }
+                                filterBuffer.append(content.substring(potentialIdx));
+                            } else {
+                                sendTokenToClient(emitter, content, clientDisconnected, generatingMarked, sessionId, clientMessageId, finalLlamaName);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
+            @Override
+            public void onCompleteResponse(ChatResponse response) {
+                if (!roundFinished.compareAndSet(false, true)) return;
+                timeoutFuture.cancel(false);
+
+                String cleanText = sessionChatMemoryService.sanitizeAssistantMessage(intermediateResponse.toString());
+                sessionChatMemoryService.appendAssistantMessage(sessionId, cleanText, systemPrompt);
+
+                generatingMarked.set(false);
+                safeSend(emitter, "token", Map.of("token", "\n\n<think>\nĐang tiến hành bước tiếp theo...\n</think>\n\n"), MediaType.APPLICATION_JSON);
+                chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.THINKING, modelName, null, null);
+                safeSend(emitter, "phase", Phase.THINKING.name(), null);
+
+                streamRound(emitter, emitterCompleted, session, sessionId, userId, userInput, history, systemPrompt,
+                        model, modelName, startTime, isFallbackAttempt, clientMessageId, fullResponse,
+                        clientDisconnected, generatingMarked, nextRound, requiresAHP, requiresTools,
+                        nextToolName, consecutiveToolExecutions, toolCallSummaries, toolNames, retryCount, modelKeyAttempts);
+            }
+
+            @Override
+            public void onError(Throwable error) {
+                if (!roundFinished.compareAndSet(false, true)) return;
+                timeoutFuture.cancel(false);
+                log.error("[Intermediate] Error during intermediate Llama streaming: {}", error.getMessage());
+
+                generatingMarked.set(false);
+                safeSend(emitter, "token", Map.of("token", "\n\n<think>\nĐang tiến hành bước tiếp theo...\n</think>\n\n"), MediaType.APPLICATION_JSON);
+                safeSend(emitter, "phase", Phase.THINKING.name(), null);
+
+                streamRound(emitter, emitterCompleted, session, sessionId, userId, userInput, history, systemPrompt,
+                        model, modelName, startTime, isFallbackAttempt, clientMessageId, fullResponse,
+                        clientDisconnected, generatingMarked, nextRound, requiresAHP, requiresTools,
+                        nextToolName, consecutiveToolExecutions, toolCallSummaries, toolNames, retryCount, modelKeyAttempts);
+            }
+        });
+    }
+
+    private void generateSessionTitleViaGemmaAsync(ChatSessionEntity session, String userInput, String toolResults) {
+        if (session == null || userInput == null || userInput.isBlank()) {
+            return;
+        }
+        executor.submit(() -> {
+            try {
+                ChatSessionEntity currentSession = sessionRepository.findById(session.getId()).orElse(session);
+                if (currentSession.getTitle() != null && !currentSession.getTitle().isBlank()) {
+                    return;
+                }
+
+                String titlePrompt = "Hãy đặt một tiêu đề ngắn gọn, tự nhiên cho đoạn hội thoại này bằng tiếng Việt dựa trên câu hỏi của người dùng và kết quả thực thi này. Chỉ trả về duy nhất chuỗi tên hội thoại, không giải thích hay dẫn dắt gì thêm.\n"
+                        + "User prompt: " + userInput + "\n"
+                        + "System Context: " + toolResults;
+
+                ChatRequest request = ChatRequest.builder()
+                        .messages(List.of(UserMessage.from(titlePrompt)))
+                        .build();
+
+                log.info("[AutoTitle] Calling gemma-4-31b-it asynchronously to generate title for session {}...", session.getId());
+                ChatResponse response = callGemmaDirectly(request, "gemma-4-31b-it", 1, false);
+
+                if (response != null && response.aiMessage() != null && response.aiMessage().text() != null) {
+                    String title = response.aiMessage().text();
+                    if (title != null) {
+                        title = title.replaceAll("(?s)<think>.*?</think>", "");
+                        title = title.replaceAll("(?s)<thought>.*?</thought>", "");
+                        title = title.replace("<think>", "")
+                                     .replace("</think>", "")
+                                     .replace("<thought>", "")
+                                     .replace("</thought>", "")
+                                     .replace("\"", "")
+                                     .replace("'", "")
+                                     .trim();
+                    }
+                    if (title != null && title.contains("\n")) {
+                        title = title.substring(title.lastIndexOf("\n") + 1).trim();
+                    }
+                    if (title.length() > 60) {
+                        title = title.substring(0, 57) + "...";
+                    }
+                    if (!title.isEmpty()) {
+                        currentSession.setTitle(title);
+                        sessionRepository.save(currentSession);
+                        session.setTitle(title);
+                        log.info("[AutoTitle] Successfully set session {} title to: '{}'", session.getId(), title);
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[AutoTitle] Failed to generate session title via Gemma: {}", e.getMessage());
+            }
+        });
     }
 
     private record ToolLoopState(String toolName, int consecutiveCount) {

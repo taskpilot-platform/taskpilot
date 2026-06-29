@@ -182,6 +182,7 @@ public class AiModelConfig {
                                                 .isGitHubModels(true)
                                                 .temperature(0.3)
                                                 .timeout(Duration.ofSeconds(timeoutSeconds))
+                                                .parallelToolCalls(true)
                                                 .build();
                                 return register(model, modelName);
                         }
@@ -258,6 +259,7 @@ public class AiModelConfig {
                                 .modelName(modelName)
                                 .temperature(0.3)
                                 .timeout(Duration.ofSeconds(geminiTimeoutSeconds))
+                                .parallelToolCalls(true)
                                 .build();
                 return register(model, modelName);
         }
@@ -272,6 +274,7 @@ public class AiModelConfig {
                                 .isGitHubModels(true)
                                 .temperature(0.3)
                                 .timeout(Duration.ofSeconds(timeoutSeconds))
+                                .parallelToolCalls(true)
                                 .build();
         }
 
@@ -298,6 +301,7 @@ public class AiModelConfig {
                                 .isGitHubModels(true)
                                 .temperature(0.5)
                                 .timeout(Duration.ofSeconds(timeoutSeconds * 2))
+                                .parallelToolCalls(true)
                                 .build();
         }
 
@@ -357,6 +361,7 @@ public class AiModelConfig {
                                 .modelName(modelName)
                                 .temperature(0.4)
                                 .timeout(Duration.ofSeconds(timeoutSeconds * 2))
+                                .parallelToolCalls(true)
                                 .build();
         }
 

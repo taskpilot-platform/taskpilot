@@ -1323,11 +1323,24 @@ public class TaskPilotAiTools {
 
     @Tool("Create a new project. Supports optional description, startDate, endDate. Requires confirmation.")
     public Object createProject(
-            @P("Name of the project") String projectName,
+            @P("Name of the project. If missing or not specified, you MUST still call this tool with a null/empty name; it will automatically return the form.") String projectName,
             @P("Optional description of the project") String description,
             @P("Optional start date in YYYY-MM-DD format") String startDate,
             @P("Optional end date in YYYY-MM-DD format") String endDate) {
         log.info("[AiTool] createProject called with name={}", projectName);
+        if (projectName == null || projectName.isBlank()) {
+            return java.util.Map.of(
+                "status", "FORM_REQUIRED",
+                "form", java.util.Map.of(
+                    "title", "Tạo dự án mới",
+                    "intent", "createProject",
+                    "fields", java.util.List.of(
+                        java.util.Map.of("name", "projectName", "label", "Tên dự án", "type", "text", "required", true),
+                        java.util.Map.of("name", "description", "label", "Mô tả", "type", "textarea")
+                    )
+                )
+            );
+        }
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
 
@@ -1540,7 +1553,7 @@ public class TaskPilotAiTools {
             """)
     public Object createTask(
             @P("Optional: The project ID. If creating a subtask and project ID is not explicitly given, you should resolve it or default it based on the parent task.") Object projectId,
-            @P("Title of the task") String title,
+            @P("Title of the task. If missing or not specified, you MUST still call this tool with a null/empty title; it will automatically return the form.") String title,
             @P("Priority: LOW, MEDIUM, HIGH, or URGENT. Default to MEDIUM if not specified.") String priority,
             @P("Optional description") String description,
             @P("Optional sprint ID to place the task in") Object sprintId,
@@ -1555,6 +1568,33 @@ public class TaskPilotAiTools {
         Long resolvedParentId = toLong(parentId);
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
+
+        if (title == null || title.isBlank()) {
+            java.util.List<java.util.Map<String, Object>> fields = new java.util.ArrayList<>();
+            if (resolvedProjectId == null && resolvedParentId == null) {
+                fields.add(java.util.Map.of("name", "projectId", "label", "Dự án", "type", "number", "required", true));
+            }
+            fields.addAll(java.util.List.of(
+                java.util.Map.of("name", "title", "label", "Tiêu đề task", "type", "text", "required", true),
+                java.util.Map.of("name", "description", "label", "Mô tả", "type", "textarea"),
+                java.util.Map.of("name", "priority", "label", "Độ ưu tiên", "type", "select", "options", java.util.List.of("LOW", "MEDIUM", "HIGH", "URGENT"), "required", true),
+                java.util.Map.of("name", "assigneeId", "label", "Người thực hiện", "type", "number"),
+                java.util.Map.of("name", "startDate", "label", "Ngày bắt đầu", "type", "date"),
+                java.util.Map.of("name", "dueDate", "label", "Hạn chót", "type", "date"),
+                java.util.Map.of("name", "sprintId", "label", "Sprint", "type", "number"),
+                java.util.Map.of("name", "difficultyLevel", "label", "Độ khó (1-10)", "type", "number", "min", 1, "max", 10),
+                java.util.Map.of("name", "labelIds", "label", "Nhãn", "type", "multiselect"),
+                java.util.Map.of("name", "requiredSkillIds", "label", "Kỹ năng yêu cầu", "type", "multiselect")
+            ));
+            return java.util.Map.of(
+                "status", "FORM_REQUIRED",
+                "form", java.util.Map.of(
+                    "title", "Tạo task mới",
+                    "intent", "createTask",
+                    "fields", fields
+                )
+            );
+        }
 
         if (resolvedProjectId == null && resolvedParentId != null) {
             try {
@@ -1674,12 +1714,32 @@ public class TaskPilotAiTools {
 
     @Tool("Plan and create a new sprint in a project. Requires confirmation.")
     public Object createSprint(
-            @P("The project ID") Long projectId,
-            @P("Name of the sprint, e.g. 'Sprint 3'") String name,
+            @P("The project ID. If missing or not specified, you MUST still call this tool with a null/empty projectId; it will automatically return the form.") Long projectId,
+            @P("Name of the sprint, e.g. 'Sprint 3'. If missing or not specified, you MUST still call this tool with a null/empty name; it will automatically return the form.") String name,
             @P("Optional start date in YYYY-MM-DD format") String startDate,
             @P("Optional end date in YYYY-MM-DD format") String endDate,
             @P("Optional goal or objective of the sprint") String goal) {
         log.info("[AiTool] createSprint called for project {}", projectId);
+        if (projectId == null || name == null || name.isBlank()) {
+            java.util.List<java.util.Map<String, Object>> fields = new java.util.ArrayList<>();
+            if (projectId == null) {
+                fields.add(java.util.Map.of("name", "projectId", "label", "Dự án", "type", "number", "required", true));
+            }
+            fields.addAll(java.util.List.of(
+                java.util.Map.of("name", "name", "label", "Tên sprint", "type", "text", "required", true),
+                java.util.Map.of("name", "startDate", "label", "Ngày bắt đầu", "type", "date"),
+                java.util.Map.of("name", "endDate", "label", "Hạn chót", "type", "date"),
+                java.util.Map.of("name", "goal", "label", "Mục tiêu", "type", "textarea")
+            ));
+            return java.util.Map.of(
+                "status", "FORM_REQUIRED",
+                "form", java.util.Map.of(
+                    "title", "Tạo sprint mới",
+                    "intent", "createSprint",
+                    "fields", fields
+                )
+            );
+        }
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
 
