@@ -20,7 +20,7 @@
     <description>AI-powered Task Allocation Agent System</description>
 
     <properties>
-        <java.version>26</java.version>
+        <java.version>25</java.version>
         <taskpilot.version>${project.version}</taskpilot.version>
         <langchain4j.core.version>1.0.0</langchain4j.core.version>
         <langchain4j.version>1.0.0-beta5</langchain4j.version>
@@ -150,9 +150,6 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
-                    <compilerArgs>
-                        <arg>--enable-preview</arg>
-                    </compilerArgs>
                     <annotationProcessorPaths>
                         <path>
                             <groupId>org.projectlombok</groupId>
@@ -162,6 +159,7 @@
                 </configuration>
             </plugin>
         </plugins>
+
 
         <pluginManagement>
             <plugins>
