@@ -111,12 +111,26 @@ public class GroqMultiKeyStreamingChatModel implements StreamingChatModel {
         return -1;
     }
 
+    private static final long MIN_COOLDOWN_MS = 60_000L;     // 1 min for transient errors
+    private static final long RATE_LIMIT_COOLDOWN_MS = 120_000L; // 2 min for 429
+    private static final long MAX_COOLDOWN_MS = 600_000L;     // 10 min max
+
     private void markKeyTemporarilyExhausted(int keyIndex, String keyLabel, Throwable error) {
-        TRANSIENT_EXHAUSTED_UNTIL_BY_MODEL_AND_KEY.put(
-                transientExhaustionKey(modelName, keyLabel),
-                System.currentTimeMillis() + COOLDOWN_MS);
-        log.warn("[Groq] Key {} hit 429 for streaming model {}. Cooling down for {}s and trying next key. Cause: {}",
-                keyLabel, modelName, COOLDOWN_MS / 1000, error.getMessage());
+        long baseCooldown = is429Error(error) ? RATE_LIMIT_COOLDOWN_MS : MIN_COOLDOWN_MS;
+        String tKey = transientExhaustionKey(modelName, keyLabel);
+        
+        Long existingCooldownEnd = TRANSIENT_EXHAUSTED_UNTIL_BY_MODEL_AND_KEY.get(tKey);
+        long now = System.currentTimeMillis();
+        long cooldown = baseCooldown;
+        
+        if (existingCooldownEnd != null && existingCooldownEnd > now) {
+            long remaining = existingCooldownEnd - now;
+            cooldown = Math.min(remaining * 2, MAX_COOLDOWN_MS);
+        }
+        
+        TRANSIENT_EXHAUSTED_UNTIL_BY_MODEL_AND_KEY.put(tKey, now + cooldown);
+        log.warn("[Groq] Key {} hit error for streaming model {}. Cooling down for {}s and trying next key. Cause: {}",
+                keyLabel, modelName, cooldown / 1000, error.getMessage());
     }
 
     private String transientExhaustionKey(String modelName, String keyLabel) {
@@ -124,6 +138,29 @@ public class GroqMultiKeyStreamingChatModel implements StreamingChatModel {
     }
 
     private boolean isRetryableGroq429(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            String message = current.getMessage();
+            if (message != null) {
+                String lower = message.toLowerCase();
+                if (lower.contains("429")           // Rate limit
+                    || lower.contains("404")         // Model not found / temp unavailable
+                    || lower.contains("403")         // Permission denied / Blocked
+                    || lower.contains("blocked")     // Model blocked
+                    || lower.contains("503")         // Service unavailable
+                    || lower.contains("502")         // Bad gateway
+                    || lower.contains("timeout")     // Request timeout
+                    || lower.contains("connection")  // Connection error
+                    || lower.contains("refused")) {  // Connection refused
+                    return true;
+                }
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+    
+    private boolean is429Error(Throwable error) {
         Throwable current = error;
         while (current != null) {
             String message = current.getMessage();
