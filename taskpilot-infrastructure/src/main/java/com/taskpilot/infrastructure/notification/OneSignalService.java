@@ -31,15 +31,15 @@ public class OneSignalService {
 
     private final RestTemplate restTemplate = new RestTemplate();
 
-    public boolean sendNotificationToUser(String targetUserId, String title, String message) {
-        return sendNotificationToUser(targetUserId, title, message, null);
+    public void sendNotificationToUser(String targetUserId, String title, String message) {
+        sendNotificationToUser(targetUserId, title, message, null);
     }
 
     @Async
-    public boolean sendNotificationToUser(String targetUserId, String title, String message, String linkAction) {
+    public void sendNotificationToUser(String targetUserId, String title, String message, String linkAction) {
         if (appId == null || appId.isBlank() || apiKey == null || apiKey.isBlank()) {
             log.warn("OneSignal config missing. Skip push send for userId={}", targetUserId);
-            return false;
+            return;
         }
 
         Map<String, Object> body = new HashMap<>();
@@ -60,10 +60,8 @@ public class OneSignalService {
         try {
             ResponseEntity<String> response = restTemplate.postForEntity(ONESIGNAL_URL, request, String.class);
             log.info("OneSignal push sent to userId={} response={}", targetUserId, response.getBody());
-            return response.getStatusCode().is2xxSuccessful();
         } catch (RestClientException ex) {
             log.error("OneSignal push failed for userId={}: {}", targetUserId, ex.getMessage());
-            return false;
         }
     }
 }
