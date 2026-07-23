@@ -16,6 +16,9 @@ import com.taskpilot.users.notifications.dto.NotificationResponse;
 import com.taskpilot.users.repository.NotificationRepository;
 import com.taskpilot.users.repository.UserRepository;
 
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
 import lombok.RequiredArgsConstructor;
 
 @Service
@@ -26,6 +29,8 @@ public class NotificationService {
     private final UserRepository userRepository;
     private final OneSignalService oneSignalService;
     private final NotificationRealtimeService notificationRealtimeService;
+
+    private final Map<String, Long> userIdCache = new ConcurrentHashMap<>();
 
     public Page<NotificationResponse> getMyNotifications(String email, Pageable pageable) {
         Long userId = getCurrentUserIdByEmail(email);
@@ -104,9 +109,9 @@ public class NotificationService {
     }
 
     private Long getCurrentUserIdByEmail(String email) {
-        return userRepository.findByEmail(email)
+        return userIdCache.computeIfAbsent(email, key -> userRepository.findByEmail(key)
                 .map(user -> user.getId())
-                .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"));
+                .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found")));
     }
 
     private NotificationEntity.NotificationType toEntityType(NotificationTypeDto type) {
