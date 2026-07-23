@@ -42,6 +42,8 @@ public class NotificationService {
         if (Boolean.FALSE.equals(notification.getIsRead())) {
             notification.setIsRead(true);
             notification = notificationRepository.save(notification);
+            long unreadCount = notificationRepository.countByUserIdAndIsReadFalse(userId);
+            notificationRealtimeService.publish(userId, "notification.unread-count", unreadCount);
         }
         return NotificationResponse.fromEntity(notification);
     }
@@ -53,13 +55,18 @@ public class NotificationService {
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Notification not found"));
 
         notification.setIsRead(true);
-        return NotificationResponse.fromEntity(notificationRepository.save(notification));
+        NotificationResponse response = NotificationResponse.fromEntity(notificationRepository.save(notification));
+        long unreadCount = notificationRepository.countByUserIdAndIsReadFalse(userId);
+        notificationRealtimeService.publish(userId, "notification.unread-count", unreadCount);
+        return response;
     }
 
     @Transactional
     public int markAllAsRead(String email) {
         Long userId = getCurrentUserIdByEmail(email);
-        return notificationRepository.markAllAsReadByUserId(userId);
+        int result = notificationRepository.markAllAsReadByUserId(userId);
+        notificationRealtimeService.publish(userId, "notification.unread-count", 0L);
+        return result;
     }
 
     public long getUnreadCount(String email) {

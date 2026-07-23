@@ -90,7 +90,7 @@ public class NotificationRealtimeService {
         publish(notification.userId(), "notification.unread-count", unreadCount);
     }
 
-    private void publish(Long userId, String eventName, Object payload) {
+    public void publish(Long userId, String eventName, Object payload) {
         List<EmitterRegistration> emitters =
                 emittersByUser.getOrDefault(userId, new CopyOnWriteArrayList<>());
         for (EmitterRegistration emitter : emitters) {
