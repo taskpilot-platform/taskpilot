@@ -34,6 +34,19 @@ public class NotificationService {
     }
 
     @Transactional
+    public NotificationResponse getNotificationById(Long notificationId, String email) {
+        Long userId = getCurrentUserIdByEmail(email);
+        NotificationEntity notification = notificationRepository.findByIdAndUserId(notificationId, userId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Notification not found"));
+
+        if (Boolean.FALSE.equals(notification.getIsRead())) {
+            notification.setIsRead(true);
+            notification = notificationRepository.save(notification);
+        }
+        return NotificationResponse.fromEntity(notification);
+    }
+
+    @Transactional
     public NotificationResponse markAsRead(Long notificationId, String email) {
         Long userId = getCurrentUserIdByEmail(email);
         NotificationEntity notification = notificationRepository.findByIdAndUserId(notificationId, userId)
@@ -79,7 +92,7 @@ public class NotificationService {
         NotificationResponse response = NotificationResponse.fromEntity(notificationRepository.save(notification));
         long unreadCount = notificationRepository.countByUserIdAndIsReadFalse(command.targetUserId());
         notificationRealtimeService.publishCreated(response, unreadCount);
-        oneSignalService.sendNotificationToUser(String.valueOf(command.targetUserId()), command.title(), command.message());
+        oneSignalService.sendNotificationToUser(String.valueOf(command.targetUserId()), command.title(), command.message(), command.linkAction());
         return response;
     }
 

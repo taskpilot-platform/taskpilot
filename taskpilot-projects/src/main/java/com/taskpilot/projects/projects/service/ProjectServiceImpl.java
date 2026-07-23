@@ -11,12 +11,13 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.taskpilot.contracts.assignment.port.out.UserPort;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
-import com.taskpilot.contracts.user.port.out.NotificationPort;
+import com.taskpilot.contracts.user.event.ProjectMemberEvent;
 import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
@@ -48,7 +49,7 @@ public class ProjectServiceImpl {
     private final ProjectMemberRepository projectMemberRepository;
     private final UserIdentityPort userIdentityPort;
     private final UserPort userPort;
-    private final NotificationPort notificationPort;
+    private final ApplicationEventPublisher eventPublisher;
     private final TaskRepository taskRepository;
     private final UserProfilePort userProfilePort;
 
@@ -207,7 +208,7 @@ public class ProjectServiceImpl {
 
         for (ProjectMemberEntity manager : managers) {
             if (!manager.getUserId().equals(userId)) {
-                notificationPort.sendSystemNotification(manager.getUserId(), title, message, linkAction);
+                eventPublisher.publishEvent(new ProjectMemberEvent(manager.getUserId(), title, message, linkAction));
             }
         }
 
@@ -253,7 +254,7 @@ public class ProjectServiceImpl {
 
         for (ProjectMemberEntity manager : managers) {
             if (!manager.getUserId().equals(userId)) {
-                notificationPort.sendSystemNotification(manager.getUserId(), title, message, linkAction);
+                eventPublisher.publishEvent(new ProjectMemberEvent(manager.getUserId(), title, message, linkAction));
             }
         }
     }

@@ -55,6 +55,17 @@ public class NotificationController {
         return notificationService.streamMyNotifications(authentication.getName());
     }
 
+    @Operation(summary = "Get notification detail by ID")
+    @GetMapping("/{notificationId}")
+    public ApiResponse<NotificationResponse> getNotificationById(
+            @PathVariable Long notificationId,
+            Authentication authentication) {
+        return ApiResponse.success(
+                HttpStatus.OK.value(),
+                "Notification retrieved successfully",
+                notificationService.getNotificationById(notificationId, authentication.getName()));
+    }
+
     @Operation(summary = "Mark one notification as read")
     @PutMapping("/{notificationId}/read")
     public ApiResponse<NotificationResponse> markAsRead(

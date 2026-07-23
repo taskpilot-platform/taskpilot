@@ -51,6 +51,9 @@ import com.taskpilot.projects.tasks.dto.UpdateTaskCommentRequest;
 
 import lombok.RequiredArgsConstructor;
 
+import org.springframework.context.ApplicationEventPublisher;
+import com.taskpilot.contracts.user.event.TaskCommentedEvent;
+
 @Service
 @RequiredArgsConstructor
 public class TaskCommentService implements TaskCommentQueryPort {
@@ -63,7 +66,7 @@ public class TaskCommentService implements TaskCommentQueryPort {
     private final UserIdentityPort userIdentityPort;
     private final UserPort userPort;
     private final UserProfilePort userProfilePort;
-    private final UserNotificationPort userNotificationPort;
+    private final ApplicationEventPublisher eventPublisher;
     private final TaskCommentRealtimeService realtimeService;
 
     @Transactional(readOnly = true)
@@ -525,7 +528,7 @@ public class TaskCommentService implements TaskCommentQueryPort {
         String linkAction = buildCommentLink(task.getId(), comment.id());
 
         for (Long targetUserId : mentionRecipients) {
-            userNotificationPort.createNotification(new SystemNotificationCommandDto(
+            eventPublisher.publishEvent(new TaskCommentedEvent(
                     targetUserId,
                     "You were mentioned in a task comment",
                     comment.author().fullName() + " mentioned you on task: " + task.getTitle(),
@@ -541,7 +544,7 @@ public class TaskCommentService implements TaskCommentQueryPort {
         replyRecipients.removeAll(mentionRecipients);
 
         for (Long targetUserId : replyRecipients) {
-            userNotificationPort.createNotification(new SystemNotificationCommandDto(
+            eventPublisher.publishEvent(new TaskCommentedEvent(
                     targetUserId,
                     "New reply to your task comment",
                     comment.author().fullName() + " replied on task: " + task.getTitle(),
@@ -562,7 +565,7 @@ public class TaskCommentService implements TaskCommentQueryPort {
         commentRecipients.removeAll(replyRecipients);
 
         for (Long targetUserId : commentRecipients) {
-            userNotificationPort.createNotification(new SystemNotificationCommandDto(
+            eventPublisher.publishEvent(new TaskCommentedEvent(
                     targetUserId,
                     "New comment on task",
                     comment.author().fullName() + " commented on task: " + task.getTitle(),
@@ -578,7 +581,7 @@ public class TaskCommentService implements TaskCommentQueryPort {
         newlyMentioned.remove(actorUserId);
 
         for (Long targetUserId : newlyMentioned) {
-            userNotificationPort.createNotification(new SystemNotificationCommandDto(
+            eventPublisher.publishEvent(new TaskCommentedEvent(
                     targetUserId,
                     "You were mentioned in a task comment",
                     comment.author().fullName() + " mentioned you on task: " + task.getTitle(),

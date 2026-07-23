@@ -15,6 +15,8 @@ import org.springframework.web.client.RestTemplate;
 
 import lombok.extern.slf4j.Slf4j;
 
+import org.springframework.scheduling.annotation.Async;
+
 @Service
 @Slf4j
 public class OneSignalService {
@@ -30,6 +32,11 @@ public class OneSignalService {
     private final RestTemplate restTemplate = new RestTemplate();
 
     public boolean sendNotificationToUser(String targetUserId, String title, String message) {
+        return sendNotificationToUser(targetUserId, title, message, null);
+    }
+
+    @Async
+    public boolean sendNotificationToUser(String targetUserId, String title, String message, String linkAction) {
         if (appId == null || appId.isBlank() || apiKey == null || apiKey.isBlank()) {
             log.warn("OneSignal config missing. Skip push send for userId={}", targetUserId);
             return false;
@@ -41,6 +48,9 @@ public class OneSignalService {
         body.put("include_aliases", Map.of("external_id", List.of(targetUserId)));
         body.put("headings", Map.of("en", title));
         body.put("contents", Map.of("en", message));
+        if (linkAction != null && !linkAction.isBlank()) {
+            body.put("url", linkAction);
+        }
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);

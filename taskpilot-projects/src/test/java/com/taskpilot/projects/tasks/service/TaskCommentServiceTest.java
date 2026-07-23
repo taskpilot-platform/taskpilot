@@ -29,13 +29,13 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 
 import com.taskpilot.contracts.user.dto.NotificationTypeDto;
-import com.taskpilot.contracts.user.dto.SystemNotificationCommandDto;
 import com.taskpilot.contracts.user.dto.UserIdentityDto;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
+import com.taskpilot.contracts.user.event.TaskCommentedEvent;
 import com.taskpilot.contracts.user.port.out.UserIdentityPort;
-import com.taskpilot.contracts.user.port.out.UserNotificationPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.contracts.assignment.port.out.UserPort;
+import org.springframework.context.ApplicationEventPublisher;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.CommentEntity;
 import com.taskpilot.projects.common.entity.CommentMentionEntity;
@@ -79,7 +79,7 @@ class TaskCommentServiceTest {
     @Mock
     private UserProfilePort userProfilePort;
     @Mock
-    private UserNotificationPort userNotificationPort;
+    private ApplicationEventPublisher eventPublisher;
     @Mock
     private TaskCommentRealtimeService realtimeService;
 
@@ -96,7 +96,7 @@ class TaskCommentServiceTest {
                 userIdentityPort,
                 userPort,
                 userProfilePort,
-                userNotificationPort,
+                eventPublisher,
                 realtimeService);
     }
 
@@ -136,18 +136,18 @@ class TaskCommentServiceTest {
 
         service.createComment(TASK_ID, new CreateTaskCommentRequest(" Please review ", null, Set.of(2L, 5L)), EMAIL);
 
-        ArgumentCaptor<SystemNotificationCommandDto> captor = ArgumentCaptor
-                .forClass(SystemNotificationCommandDto.class);
-        verify(userNotificationPort, org.mockito.Mockito.times(4)).createNotification(captor.capture());
+        ArgumentCaptor<TaskCommentedEvent> captor = ArgumentCaptor
+                .forClass(TaskCommentedEvent.class);
+        verify(eventPublisher, org.mockito.Mockito.times(4)).publishEvent(captor.capture());
 
-        List<SystemNotificationCommandDto> commands = captor.getAllValues();
-        assertTrue(hasNotification(commands, 2L, NotificationTypeDto.MENTION));
-        assertTrue(hasNotification(commands, 5L, NotificationTypeDto.MENTION));
-        assertTrue(hasNotification(commands, 3L, NotificationTypeDto.COMMENT));
-        assertTrue(hasNotification(commands, 4L, NotificationTypeDto.COMMENT));
-        assertTrue(commands.stream().allMatch(command -> command.linkAction()
+        List<TaskCommentedEvent> events = captor.getAllValues();
+        assertTrue(hasNotification(events, 2L, NotificationTypeDto.MENTION));
+        assertTrue(hasNotification(events, 5L, NotificationTypeDto.MENTION));
+        assertTrue(hasNotification(events, 3L, NotificationTypeDto.COMMENT));
+        assertTrue(hasNotification(events, 4L, NotificationTypeDto.COMMENT));
+        assertTrue(events.stream().allMatch(event -> event.linkAction()
                 .equals("/tasks?taskId=" + TASK_ID + "&commentId=" + COMMENT_ID)));
-        assertFalse(commands.stream().anyMatch(command -> command.targetUserId().equals(ACTOR_ID)));
+        assertFalse(events.stream().anyMatch(event -> event.targetUserId().equals(ACTOR_ID)));
         verify(realtimeService).publishCreated(any());
     }
 
@@ -177,14 +177,14 @@ class TaskCommentServiceTest {
 
         assertEquals(PARENT_COMMENT_ID, dto.parentCommentId());
 
-        ArgumentCaptor<SystemNotificationCommandDto> captor = ArgumentCaptor
-                .forClass(SystemNotificationCommandDto.class);
-        verify(userNotificationPort).createNotification(captor.capture());
+        ArgumentCaptor<TaskCommentedEvent> captor = ArgumentCaptor
+                .forClass(TaskCommentedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
 
-        SystemNotificationCommandDto command = captor.getValue();
-        assertEquals(2L, command.targetUserId());
-        assertEquals(NotificationTypeDto.REPLY, command.type());
-        assertEquals("/tasks?taskId=" + TASK_ID + "&commentId=" + COMMENT_ID, command.linkAction());
+        TaskCommentedEvent event = captor.getValue();
+        assertEquals(2L, event.targetUserId());
+        assertEquals(NotificationTypeDto.REPLY, event.type());
+        assertEquals("/tasks?taskId=" + TASK_ID + "&commentId=" + COMMENT_ID, event.linkAction());
     }
 
     @Test
@@ -212,13 +212,13 @@ class TaskCommentServiceTest {
         service.createComment(TASK_ID,
                 new CreateTaskCommentRequest("Mention parent author", PARENT_COMMENT_ID, Set.of(2L)), EMAIL);
 
-        ArgumentCaptor<SystemNotificationCommandDto> captor = ArgumentCaptor
-                .forClass(SystemNotificationCommandDto.class);
-        verify(userNotificationPort).createNotification(captor.capture());
+        ArgumentCaptor<TaskCommentedEvent> captor = ArgumentCaptor
+                .forClass(TaskCommentedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
 
-        SystemNotificationCommandDto command = captor.getValue();
-        assertEquals(2L, command.targetUserId());
-        assertEquals(NotificationTypeDto.MENTION, command.type());
+        TaskCommentedEvent event = captor.getValue();
+        assertEquals(2L, event.targetUserId());
+        assertEquals(NotificationTypeDto.MENTION, event.type());
     }
 
     @Test
@@ -272,13 +272,13 @@ class TaskCommentServiceTest {
         service.updateComment(TASK_ID, COMMENT_ID,
                 new UpdateTaskCommentRequest("Updated", Set.of(2L, 3L)), EMAIL);
 
-        ArgumentCaptor<SystemNotificationCommandDto> captor = ArgumentCaptor
-                .forClass(SystemNotificationCommandDto.class);
-        verify(userNotificationPort).createNotification(captor.capture());
+        ArgumentCaptor<TaskCommentedEvent> captor = ArgumentCaptor
+                .forClass(TaskCommentedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
 
-        SystemNotificationCommandDto command = captor.getValue();
-        assertEquals(3L, command.targetUserId());
-        assertEquals(NotificationTypeDto.MENTION, command.type());
+        TaskCommentedEvent event = captor.getValue();
+        assertEquals(3L, event.targetUserId());
+        assertEquals(NotificationTypeDto.MENTION, event.type());
         verify(realtimeService).publishUpdated(any());
     }
 
@@ -442,10 +442,10 @@ class TaskCommentServiceTest {
                 .toList();
     }
 
-    private boolean hasNotification(List<SystemNotificationCommandDto> commands, Long targetUserId,
+    private boolean hasNotification(List<TaskCommentedEvent> events, Long targetUserId,
             NotificationTypeDto type) {
-        return commands.stream()
-                .anyMatch(command -> command.targetUserId().equals(targetUserId)
-                        && command.type() == type);
+        return events.stream()
+                .anyMatch(event -> event.targetUserId().equals(targetUserId)
+                        && event.type() == type);
     }
 }

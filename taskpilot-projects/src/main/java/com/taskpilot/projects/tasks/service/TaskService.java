@@ -35,7 +35,8 @@ import com.taskpilot.contracts.skill.dto.SkillDto;
 import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.skill.port.out.SkillPort;
 import com.taskpilot.contracts.assignment.port.out.UserPort;
-import com.taskpilot.contracts.user.port.out.NotificationPort;
+import org.springframework.context.ApplicationEventPublisher;
+import com.taskpilot.contracts.user.event.TaskAssignedEvent;
 
 import lombok.RequiredArgsConstructor;
 
@@ -49,7 +50,7 @@ public class TaskService {
     private final UserIdentityPort userIdentityPort;
     private final SkillPort skillPort;
     private final UserPort userPort;
-    private final NotificationPort notificationPort;
+    private final ApplicationEventPublisher eventPublisher;
     private final LabelRepository labelRepository;
     private final TaskLabelRepository taskLabelRepository;
     private final TaskRequiredSkillRepository taskRequiredSkillRepository;
@@ -255,9 +256,11 @@ public class TaskService {
 
         if (request.assigneeId() != null && !request.assigneeId().equals(task.getAssigneeId())) {
             task.setAssigneeId(request.assigneeId());
-            notificationPort.sendSystemNotification(request.assigneeId(), "Task Assigned",
-                    "You have been assigned to task: " + task.getTitle(),
-                    "/tasks?taskId=" + task.getId());
+            eventPublisher.publishEvent(new TaskAssignedEvent(
+                    request.assigneeId(),
+                    task.getId(),
+                    task.getTitle(),
+                    "/tasks?taskId=" + task.getId()));
         }
         if (request.startDate() != null || request.dueDate() != null) {
             Instant nextStartDate = request.startDate() != null ? request.startDate() : task.getStartDate();
