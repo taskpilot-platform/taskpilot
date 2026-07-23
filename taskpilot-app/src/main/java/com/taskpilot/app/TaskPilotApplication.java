@@ -9,11 +9,14 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
+import org.springframework.data.web.config.EnableSpringDataWebSupport;
+
 import java.io.File;
 
 @EnableAsync
 @EnableScheduling
 @EnableJpaAuditing
+@EnableSpringDataWebSupport(pageSerializationMode = EnableSpringDataWebSupport.PageSerializationMode.VIA_DTO)
 @SpringBootApplication(scanBasePackages = "com.taskpilot")
 @EnableJpaRepositories(basePackages = "com.taskpilot")
 @EntityScan(basePackages = "com.taskpilot")

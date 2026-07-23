@@ -19,16 +19,15 @@ import org.springframework.web.servlet.NoHandlerFoundException;
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(AsyncRequestNotUsableException.class)
-    public ResponseEntity<Void> handleAsyncRequestNotUsableException(AsyncRequestNotUsableException ex) {
+    public void handleAsyncRequestNotUsableException(AsyncRequestNotUsableException ex) {
         log.debug("Ignore async request not usable (likely client disconnected SSE): {}", ex.getMessage());
-        return ResponseEntity.status(HttpStatus.NO_CONTENT).build();
     }
 
     @ExceptionHandler(IOException.class)
     public ResponseEntity<Void> handleClientAbortIOException(IOException ex) {
         if (isClientDisconnect(ex)) {
             log.debug("Ignore IO abort caused by client disconnect: {}", ex.getMessage());
-            return ResponseEntity.status(HttpStatus.NO_CONTENT).build();
+            return null;
         }
         log.error("Unhandled IOException caught: {}", ex.getMessage(), ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
@@ -65,7 +64,7 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleGeneralException(Exception ex) {
         if (isClientDisconnect(ex)) {
             log.debug("Ignore async response failure caused by client disconnect: {}", ex.getMessage());
-            return ResponseEntity.status(HttpStatus.NO_CONTENT).build();
+            return null;
         }
 
         log.error("Unhandled Exception caught: ", ex);
