@@ -1,7 +1,7 @@
 package com.taskpilot.projects.projects.dto;
 
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
-import com.taskpilot.projects.common.entity.ProjectMemberEntity.MemberRole;
+import com.taskpilot.projects.common.enums.MemberRole;
 
 import java.time.Instant;
 

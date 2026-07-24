@@ -7,7 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 import com.taskpilot.projects.common.entity.SprintEntity;
-import com.taskpilot.projects.common.entity.SprintEntity.SprintStatus;
+import com.taskpilot.projects.common.enums.SprintStatus;
 
 @Repository
 public interface SprintRepository extends JpaRepository<SprintEntity, Long> {

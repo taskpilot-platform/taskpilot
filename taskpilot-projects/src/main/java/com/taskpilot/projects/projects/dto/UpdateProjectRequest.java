@@ -1,8 +1,8 @@
 package com.taskpilot.projects.projects.dto;
 
 import com.taskpilot.projects.common.enums.HeuristicMode;
-import com.taskpilot.projects.common.entity.ProjectEntity.ProjectStatus;
-import com.taskpilot.projects.common.entity.ProjectEntity.WorkflowMode;
+import com.taskpilot.projects.common.enums.ProjectStatus;
+import com.taskpilot.projects.common.enums.WorkflowMode;
 import jakarta.validation.constraints.Size;
 
 import java.time.LocalDate;

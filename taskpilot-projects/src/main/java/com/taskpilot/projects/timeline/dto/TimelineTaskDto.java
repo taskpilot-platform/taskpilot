@@ -2,8 +2,8 @@ package com.taskpilot.projects.timeline.dto;
 
 import java.time.Instant;
 
-import com.taskpilot.projects.common.entity.TaskEntity.PriorityLevel;
-import com.taskpilot.projects.common.entity.TaskEntity.TaskStatus;
+import com.taskpilot.projects.common.enums.PriorityLevel;
+import com.taskpilot.projects.common.enums.TaskStatus;
 
 public record TimelineTaskDto(
         Long id,

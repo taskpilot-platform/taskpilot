@@ -7,6 +7,8 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import com.taskpilot.projects.common.enums.HeuristicMode;
+import com.taskpilot.projects.common.enums.ProjectStatus;
+import com.taskpilot.projects.common.enums.WorkflowMode;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -65,12 +67,4 @@ public class ProjectEntity {
 
     @Column(name = "created_at", insertable = false, updatable = false)
     private Instant createdAt;
-
-    public enum ProjectStatus {
-        PLANNING, ACTIVE, COMPLETED, ARCHIVED
-    }
-
-    public enum WorkflowMode {
-        KANBAN, SCRUM
-    }
 }

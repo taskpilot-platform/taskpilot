@@ -39,6 +39,8 @@ import com.taskpilot.projects.common.entity.CommentMentionEntity;
 import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
 import com.taskpilot.projects.common.entity.TaskEntity;
+import com.taskpilot.projects.common.enums.MemberRole;
+import com.taskpilot.projects.common.enums.ProjectStatus;
 import com.taskpilot.projects.common.repository.CommentMentionRepository;
 import com.taskpilot.projects.common.repository.CommentRepository;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
@@ -139,7 +141,7 @@ public class TaskCommentService implements TaskCommentQueryPort {
 
         boolean isAuthor = comment.getUserId().equals(currentUserId);
         boolean isManager = projectMemberRepository.findByProjectIdAndUserId(task.getProjectId(), currentUserId)
-                .map(member -> member.getRole() == ProjectMemberEntity.MemberRole.MANAGER)
+                .map(member -> member.getRole() == MemberRole.MANAGER)
                 .orElse(false);
         if (!isAuthor && !isManager) {
             throw new BusinessException(HttpStatus.FORBIDDEN.value(),
@@ -353,7 +355,7 @@ public class TaskCommentService implements TaskCommentQueryPort {
     private void validateProjectNotArchived(Long projectId) {
         ProjectEntity project = projectRepository.findById(projectId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Project not found"));
-        if (project.getStatus() == ProjectEntity.ProjectStatus.ARCHIVED) {
+        if (project.getStatus() == ProjectStatus.ARCHIVED) {
             throw new BusinessException(HttpStatus.CONFLICT.value(), "Project is archived");
         }
     }

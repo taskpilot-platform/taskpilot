@@ -4,6 +4,7 @@ import java.time.Instant;
 
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
+import com.taskpilot.projects.common.enums.MemberRole;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -55,8 +56,4 @@ public class ProjectMemberEntity {
     @Builder.Default
     @Column(name = "performance_score")
     private Double performanceScore = 0.5;
-
-    public enum MemberRole {
-        MANAGER, MEMBER
-    }
 }

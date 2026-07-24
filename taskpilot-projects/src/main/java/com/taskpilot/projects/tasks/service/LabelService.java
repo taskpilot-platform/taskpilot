@@ -10,7 +10,8 @@ import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.LabelEntity;
 import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
-import com.taskpilot.projects.common.entity.ProjectMemberEntity.MemberRole;
+import com.taskpilot.projects.common.enums.MemberRole;
+import com.taskpilot.projects.common.enums.ProjectStatus;
 import com.taskpilot.projects.common.repository.LabelRepository;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
 import com.taskpilot.projects.common.repository.ProjectRepository;
@@ -57,7 +58,7 @@ public class LabelService {
     private void validateProjectNotArchived(Long projectId) {
         ProjectEntity project = projectRepository.findById(projectId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Project not found"));
-        if (project.getStatus() == ProjectEntity.ProjectStatus.ARCHIVED) {
+        if (project.getStatus() == ProjectStatus.ARCHIVED) {
             throw new BusinessException(HttpStatus.CONFLICT.value(), "Project is archived");
         }
     }

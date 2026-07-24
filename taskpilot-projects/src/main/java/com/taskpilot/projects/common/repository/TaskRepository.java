@@ -9,11 +9,12 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import com.taskpilot.projects.common.entity.TaskEntity;
+import com.taskpilot.projects.common.enums.TaskStatus;
 
 @Repository
 public interface TaskRepository extends JpaRepository<TaskEntity, Long> {
     long countByProjectId(Long projectId);
-    long countByProjectIdAndStatus(Long projectId, TaskEntity.TaskStatus status);
+    long countByProjectIdAndStatus(Long projectId, TaskStatus status);
     
     List<TaskEntity> findByProjectId(Long projectId);
     List<TaskEntity> findByAssigneeId(Long assigneeId);
@@ -23,7 +24,7 @@ public interface TaskRepository extends JpaRepository<TaskEntity, Long> {
 
     long countBySprintId(Long sprintId);
 
-    boolean existsBySprintIdAndStatusNot(Long sprintId, TaskEntity.TaskStatus status);
+    boolean existsBySprintIdAndStatusNot(Long sprintId, TaskStatus status);
 
     @Modifying
     @Query("UPDATE TaskEntity t SET t.sprintId = NULL WHERE t.sprintId = :sprintId")

@@ -23,6 +23,11 @@ import com.taskpilot.contracts.user.port.out.NotificationPort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.enums.HeuristicMode;
+import com.taskpilot.projects.common.enums.MemberRole;
+import com.taskpilot.projects.common.enums.PriorityLevel;
+import com.taskpilot.projects.common.enums.ProjectStatus;
+import com.taskpilot.projects.common.enums.TaskStatus;
+import com.taskpilot.projects.common.enums.WorkflowMode;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
 import com.taskpilot.projects.common.entity.SprintEntity;
 import com.taskpilot.projects.common.entity.TaskEntity;
@@ -183,7 +188,7 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
         validateProjectMember(task.getProjectId(), requesterUserId);
         validateProjectNotArchived(task.getProjectId());
 
-        TaskEntity.TaskStatus nextStatus = parseStatus(status);
+        TaskStatus nextStatus = parseStatus(status);
         task.setStatus(nextStatus);
         taskRepository.save(task);
         return toTaskSummary(task);
@@ -274,7 +279,7 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
 
         List<TaskEntity> tasks = taskRepository.findByProjectId(projectId);
         long total = tasks.size();
-        long done = tasks.stream().filter(task -> task.getStatus() == TaskEntity.TaskStatus.DONE).count();
+        long done = tasks.stream().filter(task -> task.getStatus() == TaskStatus.DONE).count();
         long overdue = tasks.stream().filter(this::isOverdue).count();
         long completion = total == 0 ? 0 : Math.round(done * 100.0 / total);
 
@@ -402,7 +407,7 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     @Transactional
     public void updateMemberRole(Long projectId, Long targetUserId, String role, Long requesterUserId) {
         String email = getRequesterEmail(requesterUserId);
-        ProjectMemberEntity.MemberRole parsedRole = parseMemberRole(role);
+        MemberRole parsedRole = parseMemberRole(role);
         projectService.updateMemberRole(projectId, targetUserId, parsedRole, email);
     }
 
@@ -434,10 +439,10 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
         projectService.deleteProject(projectId, email);
     }
 
-    private ProjectEntity.ProjectStatus parseProjectStatus(String status) {
+    private ProjectStatus parseProjectStatus(String status) {
         if (status == null || status.isBlank()) return null;
         try {
-            return ProjectEntity.ProjectStatus.valueOf(status.trim().toUpperCase());
+            return ProjectStatus.valueOf(status.trim().toUpperCase());
         } catch (IllegalArgumentException ex) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Invalid status. Use ACTIVE, COMPLETED, ARCHIVED");
         }
@@ -452,21 +457,21 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
         }
     }
 
-    private ProjectEntity.WorkflowMode parseWorkflowMode(String mode) {
+    private WorkflowMode parseWorkflowMode(String mode) {
         if (mode == null || mode.isBlank()) return null;
         try {
-            return ProjectEntity.WorkflowMode.valueOf(mode.trim().toUpperCase());
+            return WorkflowMode.valueOf(mode.trim().toUpperCase());
         } catch (IllegalArgumentException ex) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Invalid workflow mode. Use STANDARD, SCRUM, KANBAN");
         }
     }
 
-    private ProjectMemberEntity.MemberRole parseMemberRole(String role) {
+    private MemberRole parseMemberRole(String role) {
         if (role == null || role.isBlank()) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Role cannot be blank");
         }
         try {
-            return ProjectMemberEntity.MemberRole.valueOf(role.trim().toUpperCase());
+            return MemberRole.valueOf(role.trim().toUpperCase());
         } catch (IllegalArgumentException ex) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Invalid role. Use MANAGER or MEMBER");
         }
@@ -612,7 +617,7 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
 
     private void validateProjectNotArchived(Long projectId) {
         ProjectEntity project = findProject(projectId);
-        if (project.getStatus() == ProjectEntity.ProjectStatus.ARCHIVED) {
+        if (project.getStatus() == ProjectStatus.ARCHIVED) {
             throw new BusinessException(HttpStatus.CONFLICT.value(), "Project is archived");
         }
     }
@@ -735,7 +740,7 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     private MemberWorkloadDto toMemberWorkload(Long memberId, List<TaskEntity> assignedTasks) {
         UserProfileDto profile = userPort.findById(memberId).orElse(null);
         int openTasks = (int) assignedTasks.stream()
-                .filter(task -> task.getStatus() != TaskEntity.TaskStatus.DONE)
+                .filter(task -> task.getStatus() != TaskStatus.DONE)
                 .count();
         int overdueTasks = (int) assignedTasks.stream().filter(this::isOverdue).count();
         int workloadScore = profile != null ? profile.currentWorkload() : Math.min(100, openTasks * 10);
@@ -790,35 +795,35 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     private boolean isOverdue(TaskEntity task) {
         return task.getDueDate() != null
                 && task.getDueDate().isBefore(Instant.now())
-                && task.getStatus() != TaskEntity.TaskStatus.DONE;
+                && task.getStatus() != TaskStatus.DONE;
     }
 
-    private TaskEntity.TaskStatus parseStatus(String status) {
+    private TaskStatus parseStatus(String status) {
         try {
-            return TaskEntity.TaskStatus.valueOf(normalizeEnum(status));
+            return TaskStatus.valueOf(normalizeEnum(status));
         } catch (IllegalArgumentException ex) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
                     "Invalid task status. Allowed values: TODO, IN_PROGRESS, REVIEW, DONE");
         }
     }
 
-    private TaskEntity.PriorityLevel parsePriority(String priority) {
+    private PriorityLevel parsePriority(String priority) {
         if (priority == null || priority.isBlank()) {
-            return TaskEntity.PriorityLevel.MEDIUM;
+            return PriorityLevel.MEDIUM;
         }
         try {
-            return TaskEntity.PriorityLevel.valueOf(normalizeEnum(priority));
+            return PriorityLevel.valueOf(normalizeEnum(priority));
         } catch (IllegalArgumentException ex) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
                     "Invalid task priority. Allowed values: LOW, MEDIUM, HIGH, URGENT");
         }
     }
 
-    private TaskEntity.TaskStatus parseOptionalStatus(String status) {
+    private TaskStatus parseOptionalStatus(String status) {
         return status == null || status.isBlank() ? null : parseStatus(status);
     }
 
-    private TaskEntity.PriorityLevel parseOptionalPriority(String priority) {
+    private PriorityLevel parseOptionalPriority(String priority) {
         return priority == null || priority.isBlank() ? null : parsePriority(priority);
     }
 

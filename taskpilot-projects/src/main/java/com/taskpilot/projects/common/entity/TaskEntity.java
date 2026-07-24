@@ -5,6 +5,8 @@ import java.util.List;
 
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
+import com.taskpilot.projects.common.enums.PriorityLevel;
+import com.taskpilot.projects.common.enums.TaskStatus;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -83,12 +85,4 @@ public class TaskEntity {
 
     @Column(name = "updated_at", insertable = false, updatable = false)
     private Instant updatedAt;
-
-    public enum TaskStatus {
-        TODO, IN_PROGRESS, REVIEW, DONE
-    }
-
-    public enum PriorityLevel {
-        LOW, MEDIUM, HIGH, URGENT
-    }
 }

@@ -22,8 +22,10 @@ import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.enums.HeuristicMode;
+import com.taskpilot.projects.common.enums.MemberRole;
+import com.taskpilot.projects.common.enums.ProjectStatus;
+import com.taskpilot.projects.common.enums.TaskStatus;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
-import com.taskpilot.projects.common.entity.ProjectMemberEntity.MemberRole;
 import com.taskpilot.projects.common.entity.TaskEntity;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
 import com.taskpilot.projects.common.repository.ProjectRepository;
@@ -324,7 +326,7 @@ public class ProjectServiceImpl {
         ProjectEntity project = findProjectById(projectId);
         validateUserIsProjectManager(projectId, userId);
 
-        project.setStatus(ProjectEntity.ProjectStatus.ARCHIVED);
+        project.setStatus(ProjectStatus.ARCHIVED);
         projectRepository.save(project);
     }
 
@@ -334,7 +336,7 @@ public class ProjectServiceImpl {
         ProjectEntity project = findProjectById(projectId);
         validateUserIsProjectManager(projectId, userId);
 
-        project.setStatus(ProjectEntity.ProjectStatus.ACTIVE);
+        project.setStatus(ProjectStatus.ACTIVE);
         projectRepository.save(project);
     }
 
@@ -359,10 +361,10 @@ public class ProjectServiceImpl {
         long totalMembers = projectMemberRepository.countMembers(projectId);
 
         long totalTasks = taskRepository.countByProjectId(projectId);
-        long todoTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskEntity.TaskStatus.TODO);
-        long inProgressTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskEntity.TaskStatus.IN_PROGRESS);
-        long reviewTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskEntity.TaskStatus.REVIEW);
-        long doneTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskEntity.TaskStatus.DONE);
+        long todoTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.TODO);
+        long inProgressTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.IN_PROGRESS);
+        long reviewTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.REVIEW);
+        long doneTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.DONE);
 
         double completionRate = totalTasks > 0 ? ((double) doneTasks / totalTasks) * 100.0 : 0.0;
 
@@ -434,7 +436,7 @@ public class ProjectServiceImpl {
     }
 
     public void validateProjectNotArchived(ProjectEntity project) {
-        if (project.getStatus() == ProjectEntity.ProjectStatus.ARCHIVED) {
+        if (project.getStatus() == ProjectStatus.ARCHIVED) {
             throw new BusinessException(HttpStatus.CONFLICT.value(), "Project is archived");
         }
     }

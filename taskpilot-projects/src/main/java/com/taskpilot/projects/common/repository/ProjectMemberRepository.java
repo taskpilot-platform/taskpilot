@@ -12,6 +12,7 @@ import org.springframework.stereotype.Repository;
 
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
 import com.taskpilot.projects.common.entity.ProjectMemberId;
+import com.taskpilot.projects.common.enums.MemberRole;
 
 @Repository
 public interface ProjectMemberRepository extends JpaRepository<ProjectMemberEntity, ProjectMemberId> {
@@ -32,7 +33,7 @@ public interface ProjectMemberRepository extends JpaRepository<ProjectMemberEnti
 
         List<ProjectMemberEntity> findByUserId(Long userId);
 
-        List<ProjectMemberEntity> findByProjectIdAndRole(Long projectId, ProjectMemberEntity.MemberRole role);
+        List<ProjectMemberEntity> findByProjectIdAndRole(Long projectId, MemberRole role);
 
         Optional<ProjectMemberEntity> findByProjectIdAndUserId(Long projectId, Long userId);
 

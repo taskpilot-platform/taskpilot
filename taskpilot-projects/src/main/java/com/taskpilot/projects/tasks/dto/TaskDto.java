@@ -4,9 +4,11 @@ import java.time.Instant;
 import java.util.List;
 
 import com.taskpilot.projects.common.entity.TaskEntity;
+import com.taskpilot.projects.common.enums.PriorityLevel;
+import com.taskpilot.projects.common.enums.TaskStatus;
 
 public record TaskDto(Long id, Long projectId, Long parentId, Long sprintId, String title,
-        String description, TaskEntity.TaskStatus status, TaskEntity.PriorityLevel priority,
+        String description, TaskStatus status, PriorityLevel priority,
         Float position, List<LabelDto> labels, Integer difficultyLevel, Long assigneeId,
         Long reporterId, Instant startDate, Instant dueDate, Instant createdAt, Instant updatedAt) {
     public static TaskDto fromEntity(TaskEntity entity, List<LabelDto> labels) {
