@@ -22,6 +22,7 @@ import com.taskpilot.contracts.skill.port.out.SkillPort;
 import com.taskpilot.contracts.user.port.out.NotificationPort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.ProjectEntity;
+import com.taskpilot.projects.common.enums.HeuristicMode;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
 import com.taskpilot.projects.common.entity.SprintEntity;
 import com.taskpilot.projects.common.entity.TaskEntity;
@@ -442,10 +443,10 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
         }
     }
 
-    private ProjectEntity.HeuristicMode parseHeuristicMode(String mode) {
+    private HeuristicMode parseHeuristicMode(String mode) {
         if (mode == null || mode.isBlank()) return null;
         try {
-            return ProjectEntity.HeuristicMode.valueOf(mode.trim().toUpperCase());
+            return HeuristicMode.valueOf(mode.trim().toUpperCase());
         } catch (IllegalArgumentException ex) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Invalid heuristic mode. Use BALANCED, SKILL_FIT_ONLY, WORKLOAD_ONLY");
         }

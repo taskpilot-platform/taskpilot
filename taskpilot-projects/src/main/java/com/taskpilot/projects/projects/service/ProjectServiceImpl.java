@@ -21,6 +21,7 @@ import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.ProjectEntity;
+import com.taskpilot.projects.common.enums.HeuristicMode;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity.MemberRole;
 import com.taskpilot.projects.common.entity.TaskEntity;
@@ -105,7 +106,7 @@ public class ProjectServiceImpl {
                 .name(request.name())
                 .description(request.description())
                 .heuristicMode(request.heuristicMode() != null ? request.heuristicMode()
-                        : ProjectEntity.HeuristicMode.BALANCED)
+                        : HeuristicMode.BALANCED)
                 .startDate(request.startDate())
                 .endDate(request.endDate())
                 .build();

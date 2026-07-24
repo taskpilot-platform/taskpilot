@@ -6,6 +6,8 @@ import java.time.LocalDate;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+import com.taskpilot.projects.common.enums.HeuristicMode;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -66,10 +68,6 @@ public class ProjectEntity {
 
     public enum ProjectStatus {
         PLANNING, ACTIVE, COMPLETED, ARCHIVED
-    }
-
-    public enum HeuristicMode {
-        BALANCED, URGENT, TRAINING
     }
 
     public enum WorkflowMode {
