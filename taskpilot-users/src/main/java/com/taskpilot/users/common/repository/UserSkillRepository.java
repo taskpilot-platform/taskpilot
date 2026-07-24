@@ -1,7 +1,7 @@
-package com.taskpilot.users.repository;
+package com.taskpilot.users.common.repository;
 
-import com.taskpilot.users.entity.UserSkillEntity;
-import com.taskpilot.users.entity.UserSkillId;
+import com.taskpilot.users.common.entity.UserSkillEntity;
+import com.taskpilot.users.common.entity.UserSkillId;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;

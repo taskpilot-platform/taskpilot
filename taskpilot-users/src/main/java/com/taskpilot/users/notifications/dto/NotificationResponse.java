@@ -2,14 +2,15 @@ package com.taskpilot.users.notifications.dto;
 
 import java.time.Instant;
 
-import com.taskpilot.users.entity.NotificationEntity;
+import com.taskpilot.users.common.entity.NotificationEntity;
+import com.taskpilot.users.common.enums.NotificationType;
 
 public record NotificationResponse(
         Long id,
         Long userId,
         String title,
         String message,
-        NotificationEntity.NotificationType type,
+        NotificationType type,
         Boolean isRead,
         String linkAction,
         Instant createdAt

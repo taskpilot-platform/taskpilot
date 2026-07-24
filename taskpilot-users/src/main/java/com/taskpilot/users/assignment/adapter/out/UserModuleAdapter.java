@@ -29,16 +29,17 @@ import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.contracts.skill.dto.SkillDto;
 import com.taskpilot.contracts.skill.dto.UserSkillSummaryDto;
 import com.taskpilot.contracts.skill.port.out.SkillPort;
-import com.taskpilot.users.entity.SkillEntity;
-import com.taskpilot.users.entity.UserEntity;
-import com.taskpilot.users.entity.UserSkillEntity;
-import com.taskpilot.users.entity.UserSkillId;
+import com.taskpilot.users.common.entity.SkillEntity;
+import com.taskpilot.users.common.entity.UserEntity;
+import com.taskpilot.users.common.entity.UserSkillEntity;
+import com.taskpilot.users.common.entity.UserSkillId;
+import com.taskpilot.users.common.enums.UserRole;
 import com.taskpilot.users.notifications.service.NotificationService;
-import com.taskpilot.users.repository.NotificationRepository;
-import com.taskpilot.users.repository.SkillRepository;
-import com.taskpilot.users.repository.SystemSettingRepository;
-import com.taskpilot.users.repository.UserRepository;
-import com.taskpilot.users.repository.UserSkillRepository;
+import com.taskpilot.users.common.repository.NotificationRepository;
+import com.taskpilot.users.common.repository.SkillRepository;
+import com.taskpilot.users.common.repository.SystemSettingRepository;
+import com.taskpilot.users.common.repository.UserRepository;
+import com.taskpilot.users.common.repository.UserSkillRepository;
 
 import lombok.RequiredArgsConstructor;
 
@@ -321,7 +322,7 @@ public class UserModuleAdapter
     private void requireAdmin(Long requesterUserId) {
         UserEntity user = userRepository.findById(requesterUserId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
-        if (user.getRole() != UserEntity.UserRole.ADMIN) {
+        if (user.getRole() != UserRole.ADMIN) {
             throw new BusinessException(HttpStatus.FORBIDDEN.value(), "Admin permission is required");
         }
     }

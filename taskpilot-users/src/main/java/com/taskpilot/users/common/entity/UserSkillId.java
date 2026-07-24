@@ -1,4 +1,4 @@
-package com.taskpilot.users.entity;
+package com.taskpilot.users.common.entity;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Embeddable;

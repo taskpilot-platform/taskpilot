@@ -1,6 +1,8 @@
-package com.taskpilot.users.entity;
+package com.taskpilot.users.common.entity;
 
 import com.taskpilot.infrastructure.base.BaseEntity;
+import com.taskpilot.users.common.enums.UserRole;
+import com.taskpilot.users.common.enums.UserStatus;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.JdbcTypeCode;
@@ -38,13 +40,4 @@ public class UserEntity extends BaseEntity {
     @Builder.Default
     @Column(name = "current_workload")
     private Integer currentWorkload = 0;
-
-    public enum UserRole {
-        ADMIN, USER
-    }
-
-    public enum UserStatus {
-        AVAILABLE, OOO, BUSY, DEACTIVATED
-    }
-
 }

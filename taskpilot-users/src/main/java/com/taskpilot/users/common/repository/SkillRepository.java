@@ -1,6 +1,6 @@
-package com.taskpilot.users.repository;
+package com.taskpilot.users.common.repository;
 
-import com.taskpilot.users.entity.SkillEntity;
+import com.taskpilot.users.common.entity.SkillEntity;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;

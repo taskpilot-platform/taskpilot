@@ -1,9 +1,9 @@
 package com.taskpilot.users.auth.service;
 
 import com.taskpilot.infrastructure.exception.BusinessException;
-import com.taskpilot.users.entity.RefreshTokenEntity;
-import com.taskpilot.users.entity.UserEntity;
-import com.taskpilot.users.repository.RefreshTokenRepository;
+import com.taskpilot.users.common.entity.RefreshTokenEntity;
+import com.taskpilot.users.common.entity.UserEntity;
+import com.taskpilot.users.common.repository.RefreshTokenRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;

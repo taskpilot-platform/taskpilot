@@ -1,4 +1,4 @@
-package com.taskpilot.users.entity;
+package com.taskpilot.users.common.entity;
 
 import com.taskpilot.infrastructure.base.BaseEntity;
 import jakarta.persistence.Column;

@@ -4,11 +4,13 @@ import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.users.admin.dto.AdminCreateUserRequest;
 import com.taskpilot.users.admin.dto.AdminUpdateUserRequest;
 import com.taskpilot.users.admin.dto.AdminUserResponse;
-import com.taskpilot.users.repository.PasswordResetTokenRepository;
+import com.taskpilot.users.common.repository.PasswordResetTokenRepository;
 import com.taskpilot.users.auth.service.email.EmailService;
-import com.taskpilot.users.entity.PasswordResetTokenEntity;
-import com.taskpilot.users.entity.UserEntity;
-import com.taskpilot.users.repository.UserRepository;
+import com.taskpilot.users.common.entity.PasswordResetTokenEntity;
+import com.taskpilot.users.common.entity.UserEntity;
+import com.taskpilot.users.common.enums.UserRole;
+import com.taskpilot.users.common.enums.UserStatus;
+import com.taskpilot.users.common.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -102,10 +104,10 @@ public class AdminUserService {
 
         String currentEmail = SecurityContextHolder.getContext().getAuthentication().getName();
         if (user.getEmail().equalsIgnoreCase(currentEmail)) {
-            if (request.status() == UserEntity.UserStatus.DEACTIVATED) {
+            if (request.status() == UserStatus.DEACTIVATED) {
                 throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Cannot deactivate your own account");
             }
-            if (request.role() == UserEntity.UserRole.USER) {
+            if (request.role() == UserRole.USER) {
                 throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Cannot demote your own admin account");
             }
         }
@@ -134,7 +136,7 @@ public class AdminUserService {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Cannot deactivate your own account");
         }
 
-        user.setStatus(UserEntity.UserStatus.DEACTIVATED);
+        user.setStatus(UserStatus.DEACTIVATED);
         userRepository.save(user);
     }
 

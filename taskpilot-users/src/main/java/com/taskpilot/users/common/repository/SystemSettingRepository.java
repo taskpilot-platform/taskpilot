@@ -1,6 +1,6 @@
-package com.taskpilot.users.repository;
+package com.taskpilot.users.common.repository;
 
-import com.taskpilot.users.entity.SystemSettingEntity;
+import com.taskpilot.users.common.entity.SystemSettingEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;

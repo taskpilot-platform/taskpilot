@@ -9,11 +9,12 @@ import com.taskpilot.users.auth.dto.RefreshTokenRequest;
 import com.taskpilot.users.auth.dto.RegisterRequest;
 import com.taskpilot.users.auth.dto.ResetPasswordRequest;
 import com.taskpilot.users.auth.service.email.EmailService;
-import com.taskpilot.users.entity.PasswordResetTokenEntity;
-import com.taskpilot.users.entity.RefreshTokenEntity;
-import com.taskpilot.users.entity.UserEntity;
-import com.taskpilot.users.repository.PasswordResetTokenRepository;
-import com.taskpilot.users.repository.UserRepository;
+import com.taskpilot.users.common.entity.PasswordResetTokenEntity;
+import com.taskpilot.users.common.entity.RefreshTokenEntity;
+import com.taskpilot.users.common.entity.UserEntity;
+import com.taskpilot.users.common.enums.UserRole;
+import com.taskpilot.users.common.repository.PasswordResetTokenRepository;
+import com.taskpilot.users.common.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -49,7 +50,7 @@ public class AuthService {
                 .email(request.email())
                 .password(passwordEncoder.encode(request.password()))
                 .fullName(request.fullName())
-                .role(UserEntity.UserRole.USER)
+                .role(UserRole.USER)
                 .build();
 
         userRepository.save(newUser);
