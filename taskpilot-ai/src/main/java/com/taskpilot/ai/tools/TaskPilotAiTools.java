@@ -22,7 +22,7 @@ import com.taskpilot.contracts.skill.port.out.SkillPort;
 import com.taskpilot.contracts.user.port.out.UserNotificationQueryPort;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
-import org.springframework.lang.Nullable;
+import jakarta.annotation.Nullable;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;

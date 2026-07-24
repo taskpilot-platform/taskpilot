@@ -63,6 +63,7 @@ import java.util.regex.Pattern;
 @Slf4j
 @Service
 @RequiredArgsConstructor
+@SuppressWarnings({"unchecked", "deprecation"})
 public class AiStreamingService {
 
     private static final int MAX_TOOL_ROUNDS = 4;
