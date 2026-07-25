@@ -22,7 +22,10 @@ jobs:
           cache: "maven"
 
       - name: Run Maven Tests
-        run: mvn clean test
+        run: mvn clean test -B
+
+      - name: Test Docker Build (Hugging Face Space verification)
+        run: docker build -t taskpilot-hf-test .
 
   sync-to-hub:
     needs: build-and-test

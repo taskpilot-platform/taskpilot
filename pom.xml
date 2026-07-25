@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.0.2</version>
+        <version>3.4.13</version>
         <relativePath />
     </parent>
 
@@ -21,6 +21,8 @@
 
     <properties>
         <java.version>25</java.version>
+        <lombok.version>1.18.40</lombok.version>
+        <byte-buddy.version>1.17.5</byte-buddy.version>
         <taskpilot.version>${project.version}</taskpilot.version>
         <langchain4j.core.version>1.0.0</langchain4j.core.version>
         <langchain4j.version>1.0.0-beta5</langchain4j.version>
@@ -140,7 +142,6 @@
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
-            <optional>true</optional>
         </dependency>
     </dependencies>
 
@@ -154,8 +155,16 @@
                         <path>
                             <groupId>org.projectlombok</groupId>
                             <artifactId>lombok</artifactId>
+                            <version>${lombok.version}</version>
                         </path>
                     </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>-Dnet.bytebuddy.experimental=true</argLine>
                 </configuration>
             </plugin>
         </plugins>
@@ -166,7 +175,7 @@
                 <plugin>
                     <groupId>org.springframework.boot</groupId>
                     <artifactId>spring-boot-maven-plugin</artifactId>
-                    <version>4.0.2</version>
+                    <version>3.4.13</version>
                 </plugin>
             </plugins>
         </pluginManagement>

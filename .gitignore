@@ -38,3 +38,4 @@ report/
 *.log
 # Test scripts
 scripts/ai-test-agent.js
+scripts/verify-hf-deploy.sh

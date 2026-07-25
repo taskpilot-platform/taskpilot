@@ -26,7 +26,6 @@ import com.taskpilot.projects.common.enums.MemberRole;
 import com.taskpilot.projects.common.enums.ProjectStatus;
 import com.taskpilot.projects.common.enums.TaskStatus;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
-import com.taskpilot.projects.common.entity.TaskEntity;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
 import com.taskpilot.projects.common.repository.ProjectRepository;
 import com.taskpilot.projects.common.repository.TaskRepository;
@@ -405,8 +404,7 @@ public class ProjectServiceImpl {
                             member,
                             liteProfile != null ? liteProfile.fullName() : null,
                             fullProfile != null ? fullProfile.email() : null,
-                            liteProfile != null ? liteProfile.avatarUrl() : null
-                    );
+                            liteProfile != null ? liteProfile.avatarUrl() : null);
                 })
                 .toList();
     }
