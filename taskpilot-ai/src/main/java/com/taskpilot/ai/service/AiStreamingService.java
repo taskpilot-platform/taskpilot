@@ -46,6 +46,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.StructuredTaskScope;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -1959,31 +1960,35 @@ public class AiStreamingService {
             safeSend(emitter, "token", Map.of("token", startMsg), MediaType.APPLICATION_JSON);
         }
 
-        // 2. Launch execution tasks in parallel using CompletableFuture and our virtual thread executor
+        // 2. Launch execution tasks in parallel using Java 25 StructuredTaskScope & ScopedValue
         record ToolExecutionResult(ToolExecutionRequest request, String output, Throwable error) {}
 
-        List<CompletableFuture<ToolExecutionResult>> futures = normalizedRequests.stream()
-                .map(request -> CompletableFuture.supplyAsync(() -> {
-                    ToolExecutionContext.set(new ToolExecutionContext.Context(userId, sessionId, userInput, allowedTools));
+        ToolExecutionContext.Context ctx = new ToolExecutionContext.Context(userId, sessionId, userInput, allowedTools);
+        List<StructuredTaskScope.Subtask<ToolExecutionResult>> subtasks = new ArrayList<>();
+
+        try (var scope = StructuredTaskScope.open(StructuredTaskScope.Joiner.<ToolExecutionResult>awaitAll())) {
+            for (ToolExecutionRequest request : normalizedRequests) {
+                var subtask = scope.fork(() -> ToolExecutionContext.callWith(ctx, () -> {
                     try {
                         String output = toolCallingRegistryService.execute(request);
                         return new ToolExecutionResult(request, output, null);
                     } catch (Throwable t) {
                         log.error("[executeTools] Error executing tool {}", request.name(), t);
                         return new ToolExecutionResult(request, null, t);
-                    } finally {
-                        ToolExecutionContext.clear();
                     }
-                }, executor))
-                .toList();
-
-        // Wait for all tool executions to finish
-        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+                }));
+                subtasks.add(subtask);
+            }
+            scope.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("[executeTools] Interrupted while executing parallel tools", e);
+        }
 
         // 3. Process results sequentially in the original request order to ensure stable SSE token sequence
         List<ToolExecutionResultMessage> results = new ArrayList<>();
-        for (var future : futures) {
-            ToolExecutionResult execution = future.join();
+        for (var subtask : subtasks) {
+            ToolExecutionResult execution = subtask.get();
             ToolExecutionRequest request = execution.request();
             String output = execution.output();
             if (execution.error() != null) {

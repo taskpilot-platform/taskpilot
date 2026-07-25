@@ -36,4 +36,4 @@ COPY --chown=appuser:appgroup --from=build /app/taskpilot-app/target/*-SNAPSHOT.
 
 EXPOSE 7860
 
-ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75.0", "-jar", "app.jar"]
+ENTRYPOINT ["java", "--enable-preview", "-XX:MaxRAMPercentage=75.0", "-jar", "app.jar"]

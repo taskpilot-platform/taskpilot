@@ -53,6 +53,17 @@ public final class ToolExecutionContext {
     }
 
     public record Context(Long userId, Long sessionId, String userInput, java.util.Collection<String> allowedTools) {
+        public Context(Long userId, Long sessionId, String userInput, java.util.Collection<String> allowedTools) {
+            // Flexible Constructor Body: pre-assignment validation and sanitization
+            if (userInput != null && userInput.length() > 10000) {
+                userInput = userInput.substring(0, 10000);
+            }
+            this.userId = userId;
+            this.sessionId = sessionId;
+            this.userInput = userInput;
+            this.allowedTools = allowedTools != null ? allowedTools : java.util.Collections.emptySet();
+        }
+
         public Context(Long userId, Long sessionId, String userInput) {
             this(userId, sessionId, userInput, java.util.Collections.emptySet());
         }
