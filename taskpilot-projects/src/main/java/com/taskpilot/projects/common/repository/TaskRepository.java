@@ -11,15 +11,19 @@ import org.springframework.stereotype.Repository;
 import com.taskpilot.projects.common.entity.TaskEntity;
 import com.taskpilot.projects.common.enums.TaskStatus;
 
-@Repository
 public interface TaskRepository extends JpaRepository<TaskEntity, Long> {
     long countByProjectId(Long projectId);
+
     long countByProjectIdAndStatus(Long projectId, TaskStatus status);
-    
+
     List<TaskEntity> findByProjectId(Long projectId);
+
     List<TaskEntity> findByAssigneeId(Long assigneeId);
+
     List<TaskEntity> findByParentId(Long parentId);
+
     List<TaskEntity> findBySprintId(Long sprintId);
+
     List<TaskEntity> findByProjectIdAndSprintIdIsNullOrderByPositionAsc(Long projectId);
 
     long countBySprintId(Long sprintId);
@@ -29,4 +33,8 @@ public interface TaskRepository extends JpaRepository<TaskEntity, Long> {
     @Modifying
     @Query("UPDATE TaskEntity t SET t.sprintId = NULL WHERE t.sprintId = :sprintId")
     int clearSprintId(@Param("sprintId") Long sprintId);
+
+    @Modifying
+    @Query("DELETE FROM TaskEntity t WHERE t.projectId = :projectId")
+    void deleteByProjectId(@Param("projectId") Long projectId);
 }

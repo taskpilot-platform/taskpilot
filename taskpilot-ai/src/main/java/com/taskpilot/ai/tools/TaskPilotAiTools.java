@@ -58,9 +58,25 @@ public class TaskPilotAiTools {
     private final UserNotificationQueryPort userNotificationQueryPort;
     private final PendingAiActionService pendingAiActionService;
     private final SmartQueryService smartQueryService;
+    @jakarta.annotation.Nullable
+    private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
 
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+    public TaskPilotAiTools(
+            AutoAssignmentService autoAssignmentService,
+            ProjectMemberPort projectMemberPort,
+            ProjectInsightsPort projectInsightsPort,
+            MemberAnalyticsPort memberAnalyticsPort,
+            TaskCommandPort taskCommandPort,
+            TaskCommentQueryPort taskCommentQueryPort,
+            SprintQueryPort sprintQueryPort,
+            SkillPort skillPort,
+            UserNotificationQueryPort userNotificationQueryPort,
+            PendingAiActionService pendingAiActionService,
+            SmartQueryService smartQueryService) {
+        this(autoAssignmentService, projectMemberPort, projectInsightsPort, memberAnalyticsPort,
+                taskCommandPort, taskCommentQueryPort, sprintQueryPort, skillPort, userNotificationQueryPort,
+                pendingAiActionService, smartQueryService, null);
+    }
 
     @Tool("Search for projects the current user participates in. All filters are optional (can be null/empty). Supports keyword search and sorting.")
     public Object queryProjects(
@@ -2006,15 +2022,29 @@ public class TaskPilotAiTools {
         if (patchData instanceof Map) {
             return (Map<String, Object>) patchData;
         }
-        if (patchData instanceof String) {
+        if (patchData instanceof String strData) {
+            String trimmed = strData.trim();
+            if (trimmed.isEmpty() || trimmed.equals("{}")) return java.util.Collections.emptyMap();
             try {
-                return PATCH_OBJECT_MAPPER.readValue((String) patchData, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+                if (trimmed.startsWith("\"") && trimmed.endsWith("\"") && trimmed.length() > 1) {
+                    try {
+                        Object unquoted = PATCH_OBJECT_MAPPER.readValue(trimmed, Object.class);
+                        if (unquoted instanceof String s) trimmed = s.trim();
+                        else if (unquoted instanceof Map) return (Map<String, Object>) unquoted;
+                    } catch (Exception ignored) {}
+                }
+                Object parsed = PATCH_OBJECT_MAPPER.readValue(trimmed, Object.class);
+                if (parsed instanceof Map) {
+                    return (Map<String, Object>) parsed;
+                } else if (parsed instanceof String innerStr) {
+                    return PATCH_OBJECT_MAPPER.readValue(innerStr, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+                }
             } catch (Exception e) {
                 log.warn("Failed to parse patch string: {}", patchData, e);
                 throw new IllegalArgumentException("Invalid patch data format. Must be valid JSON object.", e);
             }
         }
-        throw new IllegalArgumentException("Invalid patch data type: " + patchData.getClass().getSimpleName());
+        throw new IllegalArgumentException("Invalid patch data type: " + (patchData != null ? patchData.getClass().getSimpleName() : "null"));
     }
 
     @Tool("Execute multiple query chains in parallel. Each chain is a sequence of dependent queries. " +

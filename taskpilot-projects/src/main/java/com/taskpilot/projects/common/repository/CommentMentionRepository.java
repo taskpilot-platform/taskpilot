@@ -8,7 +8,6 @@ import org.springframework.stereotype.Repository;
 
 import com.taskpilot.projects.common.entity.CommentMentionEntity;
 
-@Repository
 public interface CommentMentionRepository
         extends JpaRepository<CommentMentionEntity, CommentMentionEntity.CommentMentionId> {
 

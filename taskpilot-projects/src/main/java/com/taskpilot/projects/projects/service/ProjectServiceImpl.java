@@ -29,6 +29,8 @@ import com.taskpilot.projects.common.entity.ProjectMemberEntity;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
 import com.taskpilot.projects.common.repository.ProjectRepository;
 import com.taskpilot.projects.common.repository.TaskRepository;
+import com.taskpilot.projects.common.repository.SprintRepository;
+import com.taskpilot.projects.common.repository.LabelRepository;
 import com.taskpilot.projects.projects.dto.CreateProjectRequest;
 import com.taskpilot.projects.projects.dto.JoinProjectRequest;
 import com.taskpilot.projects.projects.dto.MyProjectResponse;
@@ -52,6 +54,8 @@ public class ProjectServiceImpl {
     private final UserPort userPort;
     private final NotificationPort notificationPort;
     private final TaskRepository taskRepository;
+    private final SprintRepository sprintRepository;
+    private final LabelRepository labelRepository;
     private final UserProfilePort userProfilePort;
 
     // ==================== PROJECT CRUD ====================
@@ -345,7 +349,10 @@ public class ProjectServiceImpl {
         ProjectEntity project = findProjectById(projectId);
         validateUserIsProjectManager(projectId, userId);
 
-        // Cascade delete will handle the rest
+        taskRepository.deleteByProjectId(projectId);
+        sprintRepository.deleteByProjectId(projectId);
+        labelRepository.deleteByProjectId(projectId);
+        projectMemberRepository.deleteByProjectId(projectId);
         projectRepository.deleteProjectById(projectId);
     }
 
@@ -466,6 +473,7 @@ public class ProjectServiceImpl {
         }
     }
 
+    @SuppressWarnings("SPRING_DATA_STRING_PROPERTY_REFERENCE")
     private Pageable buildSafePageable(Pageable pageable, String... allowedFields) {
         if (!pageable.getSort().isSorted()) {
             return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),

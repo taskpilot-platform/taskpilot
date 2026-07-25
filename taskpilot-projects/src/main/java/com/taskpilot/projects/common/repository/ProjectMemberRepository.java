@@ -14,7 +14,6 @@ import com.taskpilot.projects.common.entity.ProjectMemberEntity;
 import com.taskpilot.projects.common.entity.ProjectMemberId;
 import com.taskpilot.projects.common.enums.MemberRole;
 
-@Repository
 public interface ProjectMemberRepository extends JpaRepository<ProjectMemberEntity, ProjectMemberId> {
 
         @Query("SELECT pm FROM ProjectMemberEntity pm WHERE pm.userId = :userId")
@@ -57,4 +56,8 @@ public interface ProjectMemberRepository extends JpaRepository<ProjectMemberEnti
                         @Param("fromDate") java.time.LocalDate fromDate,
                         @Param("toDate") java.time.LocalDate toDate,
                         Pageable pageable);
+
+        @org.springframework.data.jpa.repository.Modifying
+        @Query("DELETE FROM ProjectMemberEntity pm WHERE pm.projectId = :projectId")
+        void deleteByProjectId(@Param("projectId") Long projectId);
 }

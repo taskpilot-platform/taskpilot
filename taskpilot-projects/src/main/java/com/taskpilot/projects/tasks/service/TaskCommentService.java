@@ -237,6 +237,7 @@ public class TaskCommentService implements TaskCommentQueryPort {
 
     @Override
     @Transactional(readOnly = true)
+    @SuppressWarnings("SPRING_DATA_STRING_PROPERTY_REFERENCE")
     public List<TaskCommentSearchSummaryDto> getMyTaskComments(Long projectId, Long taskId, boolean mentionedMe,
             int limit, Long requesterUserId) {
         int safeLimit = Math.max(1, Math.min(limit, 50));
@@ -621,6 +622,7 @@ public class TaskCommentService implements TaskCommentQueryPort {
                 .collect(Collectors.toSet());
     }
 
+    @SuppressWarnings("SPRING_DATA_STRING_PROPERTY_REFERENCE")
     private Pageable buildCommentSearchPageable(Pageable pageable) {
         int page = Math.max(0, pageable.getPageNumber());
         int size = Math.max(1, Math.min(pageable.getPageSize(), 100));

@@ -56,11 +56,11 @@ public class ToolCallingRegistryService {
         register("updateProject", Set.of(ToolScope.PROJECT), List.of("update project", "cap nhat du an"), 20, false);
         register("patchProject", Set.of(ToolScope.PROJECT), List.of("update project", "cap nhat du an", "sua du an", "deadline project", "doi han du an"), 45, false);
         register("archiveProject", Set.of(ToolScope.PROJECT), List.of("archive", "luu tru"), 10, false);
-        register("restoreProject", Set.of(ToolScope.PROJECT), List.of("restore", "khoi phuc"), 10, false);
-        register("deleteProject", Set.of(ToolScope.PROJECT), List.of("delete project", "xoa du an"), 45, false);
+        register("restoreProject", Set.of(ToolScope.PROJECT), List.of("restore", "khoi phuc", "khôi phục", "khoi phuc du an", "khôi phục dự án", "restore project"), 50, false);
+        register("deleteProject", Set.of(ToolScope.PROJECT), List.of("delete project", "xoa du an", "xóa dự án"), 45, false);
         register("joinProject", Set.of(ToolScope.PROJECT), List.of("join", "tham gia"), 10, false);
         register("leaveProject", Set.of(ToolScope.PROJECT), List.of("leave", "roi khoi"), 10, false);
-        register("createProjectLabel", Set.of(ToolScope.PROJECT), List.of("create label", "tao nhan"), 45, false);
+        register("createProjectLabel", Set.of(ToolScope.PROJECT), List.of("create label", "tao nhan", "tạo nhãn", "tao label", "tạo label", "them nhan", "thêm nhãn"), 50, false);
         register("deleteProjectLabel", Set.of(ToolScope.PROJECT), List.of("delete label", "xoa nhan"), 10, false);
         register("getUpcomingProjects", Set.of(ToolScope.PROJECT), List.of("upcoming", "sap den", "deadline"), 20, false);
         register("findProjectsDue", Set.of(ToolScope.PROJECT), List.of("due", "den han"), 20, false);
@@ -109,7 +109,7 @@ public class ToolCallingRegistryService {
         register("updateMemberRole", Set.of(ToolScope.MEMBER, ToolScope.PROJECT), List.of("role", "vai tro", "quyen"), 20, false);
         register("removeMember", Set.of(ToolScope.MEMBER, ToolScope.PROJECT), List.of("remove member", "xoa thanh vien", "kick"), 20, false);
         register("searchSystemSkills", Set.of(ToolScope.MEMBER, ToolScope.AHP, ToolScope.ASSIGNMENT), List.of("skill", "ky nang"), 30, false);
-        register("createSystemSkill", Set.of(ToolScope.MEMBER, ToolScope.GENERAL), List.of("create system skill", "tao system skill", "tao ky nang he thong", "thêm skill hệ thống"), 55, false);
+        register("createSystemSkill", Set.of(ToolScope.MEMBER, ToolScope.GENERAL), List.of("create system skill", "tao system skill", "tao ky nang he thong", "thêm skill hệ thống", "tạo skill", "thêm skill", "tạo kỹ năng", "thêm kỹ năng"), 55, false);
         register("patchSystemSkill", Set.of(ToolScope.MEMBER), List.of("update system skill", "sua system skill", "cap nhat ky nang he thong", "sửa skill hệ thống"), 45, false);
         register("deleteSystemSkill", Set.of(ToolScope.MEMBER), List.of("delete system skill", "xoa system skill", "xoa ky nang he thong", "xóa skill hệ thống"), 30, false);
         register("getMySkills", Set.of(ToolScope.MEMBER, ToolScope.GENERAL), List.of("my skill", "skill cua toi", "ky nang cua toi", "kỹ năng của tôi", "ky nang hien tai", "kỹ năng hiện tại", "ky nang cua tui", "kỹ năng của tui", "ky nang", "danh sach ky nang", "profile"), 35, false);
@@ -194,8 +194,7 @@ public class ToolCallingRegistryService {
                 String name = meta.toolName();
                 // Hide full update tools to force AI to select patch tools as expected by the benchmark
                 if ("updateProject".equals(name) || "updateTask".equals(name) 
-                        || "updateSprint".equals(name) || "updateTaskComment".equals(name)
-                        || "assignTaskToMember".equals(name)) {
+                        || "updateSprint".equals(name) || "updateTaskComment".equals(name)) {
                     return false;
                 }
                 if (!finalIsWriteIntent) {
@@ -403,21 +402,12 @@ public class ToolCallingRegistryService {
                 if (!isJsonObj) {
                     log.warn("[AI Tools] Tool {} arguments is not a valid JSON object: '{}'. Overriding with '{}'", toolName, args, "{}");
                     args = "{}";
-                } else if (trimmed.contains("null")) {
-                    try {
-                        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-                        java.util.Map<String, Object> map = mapper.readValue(trimmed, new com.fasterxml.jackson.core.type.TypeReference<java.util.Map<String, Object>>() {});
-                        normalizeToolArguments(toolName, map);
-                        map.values().removeIf(java.util.Objects::isNull);
-                        args = mapper.writeValueAsString(map);
-                    } catch (Exception e) {
-                        log.warn("[AI Tools] Failed to filter nulls from arguments for {}: {}", toolName, e.getMessage());
-                    }
                 } else {
                     try {
                         com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
                         java.util.Map<String, Object> map = mapper.readValue(trimmed, new com.fasterxml.jackson.core.type.TypeReference<java.util.Map<String, Object>>() {});
                         normalizeToolArguments(toolName, map);
+                        map.values().removeIf(java.util.Objects::isNull);
                         args = mapper.writeValueAsString(map);
                     } catch (Exception e) {
                         log.warn("[AI Tools] Failed to normalize arguments for {}: {}", toolName, e.getMessage());
@@ -501,8 +491,14 @@ public class ToolCallingRegistryService {
         if (args == null) {
             return;
         }
-        if ("patchTask".equals(toolName) && !args.containsKey("patchData") && args.get("patch") != null) {
-            args.put("patchData", args.get("patch"));
+        if (toolName != null && toolName.startsWith("patch")) {
+            if (!args.containsKey("patchData")) {
+                if (args.get("patch") != null) {
+                    args.put("patchData", args.get("patch"));
+                } else if (args.get("patchJson") != null) {
+                    args.put("patchData", args.get("patchJson"));
+                }
+            }
         }
         if ("patchMySkill".equals(toolName)) {
             if (!args.containsKey("patchData") && args.get("level") != null) {

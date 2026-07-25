@@ -8,11 +8,10 @@ import org.springframework.stereotype.Repository;
 
 import java.util.List;
 
-@Repository
 public interface SystemSettingRepository extends JpaRepository<SystemSettingEntity, String> {
 
-   @Query("SELECT s FROM SystemSettingEntity s WHERE " +
-         "(:keyword IS NULL OR LOWER(s.keyName) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
-         "OR LOWER(s.description) LIKE LOWER(CONCAT('%', :keyword, '%')))")
-   List<SystemSettingEntity> findByKeyword(@Param("keyword") String keyword);
+      @Query("SELECT s FROM SystemSettingEntity s WHERE " +
+                  "(:keyword IS NULL OR LOWER(s.keyName) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
+                  "OR LOWER(s.description) LIKE LOWER(CONCAT('%', :keyword, '%')))")
+      List<SystemSettingEntity> findByKeyword(@Param("keyword") String keyword);
 }

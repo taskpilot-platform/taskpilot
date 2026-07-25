@@ -127,9 +127,6 @@ public class SprintService {
         if (sprintRepository.existsByProjectIdAndStatus(projectId, SprintStatus.ACTIVE)) {
             throw new BusinessException(HttpStatus.CONFLICT.value(), "Project already has an active sprint");
         }
-        if (taskRepository.countBySprintId(sprintId) == 0) {
-            throw new BusinessException(HttpStatus.CONFLICT.value(), "Sprint must contain at least one task");
-        }
 
         sprint.setStatus(SprintStatus.ACTIVE);
         return SprintDto.fromEntity(sprintRepository.save(sprint));
@@ -144,9 +141,6 @@ public class SprintService {
 
         if (sprint.getStatus() != SprintStatus.ACTIVE) {
             throw new BusinessException(HttpStatus.CONFLICT.value(), "Only active sprint can be completed");
-        }
-        if (taskRepository.existsBySprintIdAndStatusNot(sprintId, TaskStatus.DONE)) {
-            throw new BusinessException(HttpStatus.CONFLICT.value(), "All non-DONE tasks block sprint completion");
         }
 
         sprint.setStatus(SprintStatus.COMPLETED);

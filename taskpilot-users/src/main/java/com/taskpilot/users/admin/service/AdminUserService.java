@@ -61,6 +61,7 @@ public class AdminUserService {
         return AdminUserResponse.fromEntity(user);
     }
 
+    @SuppressWarnings("SPRING_DATA_STRING_PROPERTY_REFERENCE")
     private Pageable buildSafePageable(Pageable pageable, String... allowedFields) {
         if (!pageable.getSort().isSorted()) {
             return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),

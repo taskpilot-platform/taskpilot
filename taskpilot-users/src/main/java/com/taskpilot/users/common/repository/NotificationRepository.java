@@ -12,7 +12,6 @@ import org.springframework.stereotype.Repository;
 
 import com.taskpilot.users.common.entity.NotificationEntity;
 
-@Repository
 public interface NotificationRepository extends JpaRepository<NotificationEntity, Long> {
 
     Page<NotificationEntity> findByUserIdOrderByCreatedAtDesc(Long userId, Pageable pageable);
