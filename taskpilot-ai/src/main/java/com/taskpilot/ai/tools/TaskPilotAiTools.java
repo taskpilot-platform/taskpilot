@@ -40,7 +40,6 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class TaskPilotAiTools {
 
     private static final ObjectMapper PATCH_OBJECT_MAPPER = com.fasterxml.jackson.databind.json.JsonMapper.builder()
@@ -60,6 +59,34 @@ public class TaskPilotAiTools {
     private final SmartQueryService smartQueryService;
     @jakarta.annotation.Nullable
     private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public TaskPilotAiTools(
+            AutoAssignmentService autoAssignmentService,
+            ProjectMemberPort projectMemberPort,
+            ProjectInsightsPort projectInsightsPort,
+            MemberAnalyticsPort memberAnalyticsPort,
+            TaskCommandPort taskCommandPort,
+            TaskCommentQueryPort taskCommentQueryPort,
+            SprintQueryPort sprintQueryPort,
+            SkillPort skillPort,
+            UserNotificationQueryPort userNotificationQueryPort,
+            PendingAiActionService pendingAiActionService,
+            SmartQueryService smartQueryService,
+            @jakarta.annotation.Nullable org.springframework.jdbc.core.JdbcTemplate jdbcTemplate) {
+        this.autoAssignmentService = autoAssignmentService;
+        this.projectMemberPort = projectMemberPort;
+        this.projectInsightsPort = projectInsightsPort;
+        this.memberAnalyticsPort = memberAnalyticsPort;
+        this.taskCommandPort = taskCommandPort;
+        this.taskCommentQueryPort = taskCommentQueryPort;
+        this.sprintQueryPort = sprintQueryPort;
+        this.skillPort = skillPort;
+        this.userNotificationQueryPort = userNotificationQueryPort;
+        this.pendingAiActionService = pendingAiActionService;
+        this.smartQueryService = smartQueryService;
+        this.jdbcTemplate = jdbcTemplate;
+    }
 
     public TaskPilotAiTools(
             AutoAssignmentService autoAssignmentService,
