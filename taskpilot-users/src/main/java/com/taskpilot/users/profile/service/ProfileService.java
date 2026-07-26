@@ -1,11 +1,12 @@
 package com.taskpilot.users.profile.service;
 
 import com.taskpilot.infrastructure.exception.BusinessException;
-import com.taskpilot.users.entity.UserEntity;
+import com.taskpilot.users.common.entity.UserEntity;
+import com.taskpilot.users.common.enums.UserStatus;
 import com.taskpilot.users.profile.dto.ChangePasswordRequest;
 import com.taskpilot.users.profile.dto.UpdateProfileRequest;
 import com.taskpilot.users.profile.dto.UserProfileResponse;
-import com.taskpilot.users.repository.UserRepository;
+import com.taskpilot.users.common.repository.UserRepository;
 import com.taskpilot.users.auth.service.RefreshTokenService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.multipart.MultipartFile;
@@ -75,7 +76,7 @@ public class ProfileService {
 
     public void deleteAccount() {
         UserEntity user = getCurrentUser();
-        user.setStatus(UserEntity.UserStatus.DEACTIVATED);
+        user.setStatus(UserStatus.DEACTIVATED);
         user.setEmail(user.getEmail() + "_deleted_" + System.currentTimeMillis());
         userRepository.save(user);
 

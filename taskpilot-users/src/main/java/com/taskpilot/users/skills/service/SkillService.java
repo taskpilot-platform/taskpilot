@@ -1,13 +1,13 @@
 package com.taskpilot.users.skills.service;
 
 import com.taskpilot.infrastructure.exception.BusinessException;
-import com.taskpilot.users.entity.SkillEntity;
-import com.taskpilot.users.entity.UserEntity;
-import com.taskpilot.users.entity.UserSkillEntity;
-import com.taskpilot.users.entity.UserSkillId;
-import com.taskpilot.users.repository.SkillRepository;
-import com.taskpilot.users.repository.UserRepository;
-import com.taskpilot.users.repository.UserSkillRepository;
+import com.taskpilot.users.common.entity.SkillEntity;
+import com.taskpilot.users.common.entity.UserEntity;
+import com.taskpilot.users.common.entity.UserSkillEntity;
+import com.taskpilot.users.common.entity.UserSkillId;
+import com.taskpilot.users.common.repository.SkillRepository;
+import com.taskpilot.users.common.repository.UserRepository;
+import com.taskpilot.users.common.repository.UserSkillRepository;
 import com.taskpilot.users.skills.dto.AddSkillRequest;
 import com.taskpilot.users.skills.dto.SkillDirectoryResponse;
 import com.taskpilot.users.skills.dto.UpdateSkillRequest;

@@ -5,6 +5,9 @@ import java.time.LocalDate;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+import com.taskpilot.projects.common.enums.HeuristicMode;
+import com.taskpilot.projects.common.enums.SprintStatus;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -55,9 +58,5 @@ public class SprintEntity {
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
     @Enumerated(EnumType.STRING)
     @Column(name = "heuristic_mode")
-    private ProjectEntity.HeuristicMode heuristicMode;
-
-    public enum SprintStatus {
-        PLANNING, ACTIVE, COMPLETED
-    }
+    private HeuristicMode heuristicMode;
 }

@@ -11,10 +11,11 @@ import com.taskpilot.contracts.user.dto.NotificationTypeDto;
 import com.taskpilot.contracts.user.dto.SystemNotificationCommandDto;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.infrastructure.notification.OneSignalService;
-import com.taskpilot.users.entity.NotificationEntity;
+import com.taskpilot.users.common.entity.NotificationEntity;
+import com.taskpilot.users.common.enums.NotificationType;
 import com.taskpilot.users.notifications.dto.NotificationResponse;
-import com.taskpilot.users.repository.NotificationRepository;
-import com.taskpilot.users.repository.UserRepository;
+import com.taskpilot.users.common.repository.NotificationRepository;
+import com.taskpilot.users.common.repository.UserRepository;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -114,8 +115,8 @@ public class NotificationService {
                 .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found")));
     }
 
-    private NotificationEntity.NotificationType toEntityType(NotificationTypeDto type) {
-        return NotificationEntity.NotificationType.valueOf(
+    private NotificationType toEntityType(NotificationTypeDto type) {
+        return NotificationType.valueOf(
                 (type != null ? type : NotificationTypeDto.SYSTEM).name());
     }
 }

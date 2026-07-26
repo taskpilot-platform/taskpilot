@@ -1,6 +1,6 @@
 package com.taskpilot.projects.projects.dto;
 
-import com.taskpilot.projects.common.entity.ProjectEntity.HeuristicMode;
+import com.taskpilot.projects.common.enums.HeuristicMode;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 

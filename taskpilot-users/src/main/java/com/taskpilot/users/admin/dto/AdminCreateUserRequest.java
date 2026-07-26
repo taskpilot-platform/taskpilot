@@ -3,7 +3,7 @@ package com.taskpilot.users.admin.dto;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import com.taskpilot.users.entity.UserEntity.UserRole;
+import com.taskpilot.users.common.enums.UserRole;
 
 public record AdminCreateUserRequest(
         @NotBlank(message = "Email cannot be blank")

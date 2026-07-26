@@ -57,38 +57,39 @@ public class SmartQueryService {
             return new SmartQueryResponseDto(results, errors, List.of(status), System.currentTimeMillis() - start);
         }
 
-        // Multi-chain: chạy song song qua thread pool
+        // Multi-chain: chạy song song qua Java 25 StructuredTaskScope & Virtual Threads
         final ToolExecutionContext.Context context = ToolExecutionContext.get();
-        List<CompletableFuture<ChainResult>> futures = new ArrayList<>();
+        List<StructuredTaskScope.Subtask<ChainResult>> subtasks = new ArrayList<>();
 
-        for (int i = 0; i < chains.size(); i++) {
-            final int chainIdx = i;
-            final List<SmartQueryRequestDto.QueryStep> chain = chains.get(i).steps();
+        try (var scope = StructuredTaskScope.open(StructuredTaskScope.Joiner.<ChainResult>awaitAll())) {
+            for (int i = 0; i < chains.size(); i++) {
+                final int chainIdx = i;
+                final List<SmartQueryRequestDto.QueryStep> chain = chains.get(i).steps();
 
-            CompletableFuture<ChainResult> future = CompletableFuture.supplyAsync(() -> {
-                if (context != null) {
-                    ToolExecutionContext.set(context);
-                }
-                try {
+                StructuredTaskScope.Subtask<ChainResult> subtask = scope.fork(() -> {
+                    if (context != null) {
+                        return ToolExecutionContext.callWith(context, () -> executeChain(chainIdx, chain, userId));
+                    }
                     return executeChain(chainIdx, chain, userId);
-                } finally {
-                    ToolExecutionContext.clear();
-                }
-            }, CHAIN_EXECUTOR);
+                });
 
-            futures.add(future);
-        }
+                subtasks.add(subtask);
+            }
 
-        try {
-            // Chờ tối đa 10 giây cho toàn bộ các luồng hoàn thành
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-                    .orTimeout(10, TimeUnit.SECONDS)
-                    .join();
-        } catch (Exception e) {
+            scope.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             log.warn("Parallel chains execution hit timeout or exception", e);
         }
 
-        return mergeResults(futures, start);
+        List<ChainResult> chainResults = new ArrayList<>();
+        for (var subtask : subtasks) {
+            if (subtask.state() == StructuredTaskScope.Subtask.State.SUCCESS) {
+                chainResults.add(subtask.get());
+            }
+        }
+
+        return mergeResultsList(chainResults, start);
     }
 
     private ChainResult executeChain(int chainIndex, List<SmartQueryRequestDto.QueryStep> steps, Long userId) {
@@ -654,6 +655,33 @@ public class SmartQueryService {
             } catch (Exception e) {
                 log.error("Chain execution failed unexpectedly", e);
             }
+        }
+
+        long totalDurationMs = System.currentTimeMillis() - startTime;
+        return new SmartQueryResponseDto(results, errors, statuses, totalDurationMs);
+    }
+
+    private SmartQueryResponseDto mergeResultsList(List<ChainResult> chainResults, long startTime) {
+        Map<String, Object> results = new LinkedHashMap<>();
+        Map<String, String> errors = new LinkedHashMap<>();
+        List<SmartQueryResponseDto.ChainStatus> statuses = new ArrayList<>();
+
+        for (ChainResult cr : chainResults) {
+            int idx = cr.chainIndex();
+            cr.results().forEach((k, v) -> {
+                String finalKey = results.containsKey(k) ? "chain_" + idx + "_" + k : k;
+                results.put(finalKey, v);
+            });
+            cr.errors().forEach((k, v) -> {
+                String finalKey = errors.containsKey(k) ? "chain_" + idx + "_" + k : k;
+                errors.put(finalKey, v);
+            });
+            statuses.add(new SmartQueryResponseDto.ChainStatus(
+                    cr.chainIndex(),
+                    cr.totalSteps(),
+                    cr.completedSteps(),
+                    cr.durationMs()
+            ));
         }
 
         long totalDurationMs = System.currentTimeMillis() - startTime;

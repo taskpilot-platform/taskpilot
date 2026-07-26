@@ -1,6 +1,6 @@
 package com.taskpilot.users.admin.dto;
 
-import com.taskpilot.users.entity.SkillEntity;
+import com.taskpilot.users.common.entity.SkillEntity;
 
 public record AdminSkillResponse(
         Long id,

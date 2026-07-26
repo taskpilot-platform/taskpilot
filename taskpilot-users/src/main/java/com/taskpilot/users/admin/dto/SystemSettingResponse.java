@@ -1,6 +1,6 @@
 package com.taskpilot.users.admin.dto;
 
-import com.taskpilot.users.entity.SystemSettingEntity;
+import com.taskpilot.users.common.entity.SystemSettingEntity;
 
 public record SystemSettingResponse(
         String keyName,

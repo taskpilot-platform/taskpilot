@@ -1,9 +1,9 @@
 package com.taskpilot.projects.projects.dto;
 
 import com.taskpilot.projects.common.entity.ProjectEntity;
-import com.taskpilot.projects.common.entity.ProjectEntity.HeuristicMode;
-import com.taskpilot.projects.common.entity.ProjectEntity.ProjectStatus;
-import com.taskpilot.projects.common.entity.ProjectEntity.WorkflowMode;
+import com.taskpilot.projects.common.enums.HeuristicMode;
+import com.taskpilot.projects.common.enums.ProjectStatus;
+import com.taskpilot.projects.common.enums.WorkflowMode;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -17,8 +17,7 @@ public record ProjectResponse(
         WorkflowMode workflowMode,
         LocalDate startDate,
         LocalDate endDate,
-        Instant createdAt
-) {
+        Instant createdAt) {
     public static ProjectResponse fromEntity(ProjectEntity entity) {
         return new ProjectResponse(
                 entity.getId(),
@@ -29,7 +28,6 @@ public record ProjectResponse(
                 entity.getWorkflowMode(),
                 entity.getStartDate(),
                 entity.getEndDate(),
-                entity.getCreatedAt()
-        );
+                entity.getCreatedAt());
     }
 }

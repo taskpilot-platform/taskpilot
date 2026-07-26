@@ -1,7 +1,8 @@
 package com.taskpilot.app;
 
-import com.taskpilot.users.entity.UserEntity;
-import com.taskpilot.users.repository.UserRepository;
+import com.taskpilot.users.common.entity.UserEntity;
+import com.taskpilot.users.common.enums.UserRole;
+import com.taskpilot.users.common.repository.UserRepository;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
@@ -23,7 +24,7 @@ public class InitUserPassword implements CommandLineRunner {
             user -> {
                 String encodedPassword = passwordEncoder.encode("abcdefghijkl");
                 user.setPassword(encodedPassword);
-                user.setRole(UserEntity.UserRole.ADMIN);
+                user.setRole(UserRole.ADMIN);
                 userRepository.save(user);
                 log.info("[InitUserPassword] Updated password for dangphuthien2005@gmail.com to abcdefghijkl and role to ADMIN");
             },
@@ -33,7 +34,7 @@ public class InitUserPassword implements CommandLineRunner {
                         .email("dangphuthien2005@gmail.com")
                         .password(passwordEncoder.encode("abcdefghijkl"))
                         .fullName("FuTie Neith")
-                        .role(UserEntity.UserRole.ADMIN)
+                        .role(UserRole.ADMIN)
                         .build();
                 userRepository.save(newUser);
                 log.info("[InitUserPassword] Created user dangphuthien2005@gmail.com with password abcdefghijkl and role ADMIN");

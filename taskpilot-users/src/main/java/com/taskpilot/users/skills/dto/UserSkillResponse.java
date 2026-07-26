@@ -1,6 +1,6 @@
 package com.taskpilot.users.skills.dto;
 
-import com.taskpilot.users.entity.UserSkillEntity;
+import com.taskpilot.users.common.entity.UserSkillEntity;
 
 public record UserSkillResponse(
         Long skillId,

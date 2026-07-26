@@ -7,9 +7,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 import com.taskpilot.projects.common.entity.SprintEntity;
-import com.taskpilot.projects.common.entity.SprintEntity.SprintStatus;
+import com.taskpilot.projects.common.enums.SprintStatus;
 
-@Repository
 public interface SprintRepository extends JpaRepository<SprintEntity, Long> {
     List<SprintEntity> findByProjectIdOrderByStartDateAsc(Long projectId);
 
@@ -18,4 +17,8 @@ public interface SprintRepository extends JpaRepository<SprintEntity, Long> {
     Optional<SprintEntity> findByProjectIdAndStatus(Long projectId, SprintStatus status);
 
     boolean existsByProjectIdAndStatus(Long projectId, SprintStatus status);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("DELETE FROM SprintEntity s WHERE s.projectId = :projectId")
+    void deleteByProjectId(@org.springframework.data.repository.query.Param("projectId") Long projectId);
 }

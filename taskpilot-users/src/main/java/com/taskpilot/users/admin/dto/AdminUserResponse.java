@@ -1,8 +1,8 @@
 package com.taskpilot.users.admin.dto;
 
-import com.taskpilot.users.entity.UserEntity;
-import com.taskpilot.users.entity.UserEntity.UserRole;
-import com.taskpilot.users.entity.UserEntity.UserStatus;
+import com.taskpilot.users.common.entity.UserEntity;
+import com.taskpilot.users.common.enums.UserRole;
+import com.taskpilot.users.common.enums.UserStatus;
 import java.time.Instant;
 
 public record AdminUserResponse(

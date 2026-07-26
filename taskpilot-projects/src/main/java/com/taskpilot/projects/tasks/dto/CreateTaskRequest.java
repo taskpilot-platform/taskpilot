@@ -3,7 +3,7 @@ package com.taskpilot.projects.tasks.dto;
 import java.time.Instant;
 import java.util.List;
 
-import com.taskpilot.projects.common.entity.TaskEntity;
+import com.taskpilot.projects.common.enums.PriorityLevel;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -19,7 +19,7 @@ public record CreateTaskRequest(
     String title,
     
     String description,
-    TaskEntity.PriorityLevel priority,
+    PriorityLevel priority,
     Float position,
     List<Long> labelIds,
     Integer difficultyLevel,

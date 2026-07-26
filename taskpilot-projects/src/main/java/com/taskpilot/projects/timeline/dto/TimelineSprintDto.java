@@ -3,7 +3,7 @@ package com.taskpilot.projects.timeline.dto;
 import java.time.LocalDate;
 import java.util.List;
 
-import com.taskpilot.projects.common.entity.SprintEntity.SprintStatus;
+import com.taskpilot.projects.common.enums.SprintStatus;
 
 public record TimelineSprintDto(
         Long id,

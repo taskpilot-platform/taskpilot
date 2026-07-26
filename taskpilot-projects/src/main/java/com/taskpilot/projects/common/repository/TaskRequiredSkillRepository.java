@@ -10,9 +10,10 @@ import org.springframework.stereotype.Repository;
 
 import com.taskpilot.projects.common.entity.TaskRequiredSkillEntity;
 
-@Repository
-public interface TaskRequiredSkillRepository extends JpaRepository<TaskRequiredSkillEntity, TaskRequiredSkillEntity.TaskRequiredSkillId> {
+public interface TaskRequiredSkillRepository
+        extends JpaRepository<TaskRequiredSkillEntity, TaskRequiredSkillEntity.TaskRequiredSkillId> {
     List<TaskRequiredSkillEntity> findByTaskId(Long taskId);
+
     void deleteByTaskId(Long taskId);
 
     @Query("SELECT t FROM TaskRequiredSkillEntity t WHERE t.taskId IN :taskIds")

@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.0.2</version>
+        <version>4.1.0</version>
         <relativePath />
     </parent>
 
@@ -21,6 +21,8 @@
 
     <properties>
         <java.version>25</java.version>
+        <lombok.version>1.18.40</lombok.version>
+        <byte-buddy.version>1.17.5</byte-buddy.version>
         <taskpilot.version>${project.version}</taskpilot.version>
         <langchain4j.core.version>1.0.0</langchain4j.core.version>
         <langchain4j.version>1.0.0-beta5</langchain4j.version>
@@ -73,6 +75,10 @@
                 <version>11.3.2</version>
             </dependency>
             <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-starter-flyway</artifactId>
+            </dependency>
+            <dependency>
                 <groupId>io.github.cdimascio</groupId>
                 <artifactId>dotenv-java</artifactId>
                 <version>3.2.0</version>
@@ -81,7 +87,7 @@
             <dependency>
                 <groupId>org.springdoc</groupId>
                 <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
-                <version>3.0.2</version>
+                <version>3.0.3</version>
             </dependency>
             <dependency>
                 <groupId>io.jsonwebtoken</groupId>
@@ -140,7 +146,6 @@
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
-            <optional>true</optional>
         </dependency>
     </dependencies>
 
@@ -150,12 +155,23 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
+                    <compilerArgs>
+                        <arg>--enable-preview</arg>
+                    </compilerArgs>
                     <annotationProcessorPaths>
                         <path>
                             <groupId>org.projectlombok</groupId>
                             <artifactId>lombok</artifactId>
+                            <version>${lombok.version}</version>
                         </path>
                     </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>-Dnet.bytebuddy.experimental=true --enable-preview</argLine>
                 </configuration>
             </plugin>
         </plugins>
@@ -166,7 +182,10 @@
                 <plugin>
                     <groupId>org.springframework.boot</groupId>
                     <artifactId>spring-boot-maven-plugin</artifactId>
-                    <version>4.0.2</version>
+                    <version>4.1.0</version>
+                    <configuration>
+                        <jvmArguments>--enable-preview</jvmArguments>
+                    </configuration>
                 </plugin>
             </plugins>
         </pluginManagement>

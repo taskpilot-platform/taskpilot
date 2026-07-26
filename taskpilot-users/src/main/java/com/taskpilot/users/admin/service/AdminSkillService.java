@@ -3,8 +3,8 @@ package com.taskpilot.users.admin.service;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.users.admin.dto.AdminSkillRequest;
 import com.taskpilot.users.admin.dto.AdminSkillResponse;
-import com.taskpilot.users.entity.SkillEntity;
-import com.taskpilot.users.repository.SkillRepository;
+import com.taskpilot.users.common.entity.SkillEntity;
+import com.taskpilot.users.common.repository.SkillRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -40,6 +40,7 @@ public class AdminSkillService {
         return AdminSkillResponse.fromEntity(skill);
     }
 
+    @SuppressWarnings("SPRING_DATA_STRING_PROPERTY_REFERENCE")
     private Pageable buildSafePageable(Pageable pageable, String... allowedFields) {
         if (!pageable.getSort().isSorted()) {
             return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), Sort.by(Sort.Direction.ASC, "id"));

@@ -1,7 +1,7 @@
 package com.taskpilot.users.admin.dto;
 
-import com.taskpilot.users.entity.UserEntity.UserRole;
-import com.taskpilot.users.entity.UserEntity.UserStatus;
+import com.taskpilot.users.common.enums.UserRole;
+import com.taskpilot.users.common.enums.UserStatus;
 
 public record AdminUpdateUserRequest(
         UserRole role,

@@ -13,6 +13,10 @@ import org.springframework.transaction.annotation.Transactional;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.entity.TaskEntity;
+import com.taskpilot.projects.common.enums.PriorityLevel;
+import com.taskpilot.projects.common.enums.ProjectStatus;
+import com.taskpilot.projects.common.enums.SprintStatus;
+import com.taskpilot.projects.common.enums.TaskStatus;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
 import com.taskpilot.projects.common.repository.ProjectRepository;
 import com.taskpilot.projects.common.repository.SprintRepository;
@@ -73,7 +77,7 @@ public class TaskService {
     private void validateProjectNotArchived(Long projectId) {
         ProjectEntity project = projectRepository.findById(projectId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Project not found"));
-        if (project.getStatus() == ProjectEntity.ProjectStatus.ARCHIVED) {
+        if (project.getStatus() == ProjectStatus.ARCHIVED) {
             throw new BusinessException(HttpStatus.CONFLICT.value(), "Project is archived");
         }
     }
@@ -96,7 +100,7 @@ public class TaskService {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
                     "Sprint must belong to the same project");
         }
-        if (sprint.getStatus() == SprintEntity.SprintStatus.COMPLETED) {
+        if (sprint.getStatus() == SprintStatus.COMPLETED) {
             throw new BusinessException(HttpStatus.CONFLICT.value(), "Completed sprint is readonly");
         }
     }
@@ -182,14 +186,14 @@ public class TaskService {
                 .sprintId(request.sprintId())
                 .title(request.title())
                 .description(request.description())
-                .priority(request.priority() != null ? request.priority() : TaskEntity.PriorityLevel.MEDIUM)
+                .priority(request.priority() != null ? request.priority() : PriorityLevel.MEDIUM)
                 .position(request.position() != null ? request.position() : 0f)
                 .difficultyLevel(request.difficultyLevel() != null ? request.difficultyLevel() : 1)
                 .assigneeId(request.assigneeId())
                 .reporterId(userId)
                 .startDate(request.startDate())
                 .dueDate(request.dueDate())
-                .status(TaskEntity.TaskStatus.TODO).build();
+                .status(TaskStatus.TODO).build();
 
         taskRepository.save(task);
 
@@ -379,7 +383,7 @@ public class TaskService {
         if (task.getSprintId() != null) {
             SprintEntity currentSprint = sprintRepository.findById(task.getSprintId())
                     .orElse(null);
-            if (currentSprint != null && currentSprint.getStatus() == SprintEntity.SprintStatus.COMPLETED) {
+            if (currentSprint != null && currentSprint.getStatus() == SprintStatus.COMPLETED) {
                 throw new BusinessException(HttpStatus.CONFLICT.value(),
                         "Cannot move a task out of a completed sprint");
             }

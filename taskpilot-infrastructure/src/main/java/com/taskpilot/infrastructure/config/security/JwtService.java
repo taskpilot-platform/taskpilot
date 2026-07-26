@@ -71,7 +71,7 @@ public class JwtService {
                 return false;
             }
             return !tokenBlocklistService.isRevoked(token);
-        } catch (Exception _) {
+        } catch (Exception e) {
             return false;
         }
     }
@@ -80,7 +80,7 @@ public class JwtService {
         try {
             Date expiration = extractClaim(token, Claims::getExpiration);
             tokenBlocklistService.revoke(token, Instant.ofEpochMilli(expiration.getTime()));
-        } catch (Exception _) {
+        } catch (Exception e) {
         }
     }
 }

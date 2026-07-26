@@ -1,9 +1,11 @@
-package com.taskpilot.users.entity;
+package com.taskpilot.users.common.entity;
 
 import java.time.Instant;
 
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
+
+import com.taskpilot.users.common.enums.NotificationType;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -62,14 +64,5 @@ public class NotificationEntity {
         if (createdAt == null) {
             createdAt = Instant.now();
         }
-    }
-
-    public enum NotificationType {
-        SYSTEM,
-        ASSIGNED,
-        DEADLINE_NEAR,
-        COMMENT,
-        MENTION,
-        REPLY
     }
 }

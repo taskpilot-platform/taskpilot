@@ -22,12 +22,16 @@ import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.ProjectEntity;
+import com.taskpilot.projects.common.enums.HeuristicMode;
+import com.taskpilot.projects.common.enums.MemberRole;
+import com.taskpilot.projects.common.enums.ProjectStatus;
+import com.taskpilot.projects.common.enums.TaskStatus;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
-import com.taskpilot.projects.common.entity.ProjectMemberEntity.MemberRole;
-import com.taskpilot.projects.common.entity.TaskEntity;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
 import com.taskpilot.projects.common.repository.ProjectRepository;
 import com.taskpilot.projects.common.repository.TaskRepository;
+import com.taskpilot.projects.common.repository.SprintRepository;
+import com.taskpilot.projects.common.repository.LabelRepository;
 import com.taskpilot.projects.projects.dto.CreateProjectRequest;
 import com.taskpilot.projects.projects.dto.JoinProjectRequest;
 import com.taskpilot.projects.projects.dto.MyProjectResponse;
@@ -51,6 +55,8 @@ public class ProjectServiceImpl {
     private final UserPort userPort;
     private final ApplicationEventPublisher eventPublisher;
     private final TaskRepository taskRepository;
+    private final SprintRepository sprintRepository;
+    private final LabelRepository labelRepository;
     private final UserProfilePort userProfilePort;
 
     // ==================== PROJECT CRUD ====================
@@ -106,7 +112,7 @@ public class ProjectServiceImpl {
                 .name(request.name())
                 .description(request.description())
                 .heuristicMode(request.heuristicMode() != null ? request.heuristicMode()
-                        : ProjectEntity.HeuristicMode.BALANCED)
+                        : HeuristicMode.BALANCED)
                 .startDate(request.startDate())
                 .endDate(request.endDate())
                 .build();
@@ -324,7 +330,7 @@ public class ProjectServiceImpl {
         ProjectEntity project = findProjectById(projectId);
         validateUserIsProjectManager(projectId, userId);
 
-        project.setStatus(ProjectEntity.ProjectStatus.ARCHIVED);
+        project.setStatus(ProjectStatus.ARCHIVED);
         projectRepository.save(project);
     }
 
@@ -334,7 +340,7 @@ public class ProjectServiceImpl {
         ProjectEntity project = findProjectById(projectId);
         validateUserIsProjectManager(projectId, userId);
 
-        project.setStatus(ProjectEntity.ProjectStatus.ACTIVE);
+        project.setStatus(ProjectStatus.ACTIVE);
         projectRepository.save(project);
     }
 
@@ -344,7 +350,10 @@ public class ProjectServiceImpl {
         ProjectEntity project = findProjectById(projectId);
         validateUserIsProjectManager(projectId, userId);
 
-        // Cascade delete will handle the rest
+        taskRepository.deleteByProjectId(projectId);
+        sprintRepository.deleteByProjectId(projectId);
+        labelRepository.deleteByProjectId(projectId);
+        projectMemberRepository.deleteByProjectId(projectId);
         projectRepository.deleteProjectById(projectId);
     }
 
@@ -359,10 +368,10 @@ public class ProjectServiceImpl {
         long totalMembers = projectMemberRepository.countMembers(projectId);
 
         long totalTasks = taskRepository.countByProjectId(projectId);
-        long todoTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskEntity.TaskStatus.TODO);
-        long inProgressTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskEntity.TaskStatus.IN_PROGRESS);
-        long reviewTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskEntity.TaskStatus.REVIEW);
-        long doneTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskEntity.TaskStatus.DONE);
+        long todoTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.TODO);
+        long inProgressTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.IN_PROGRESS);
+        long reviewTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.REVIEW);
+        long doneTasks = taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.DONE);
 
         double completionRate = totalTasks > 0 ? ((double) doneTasks / totalTasks) * 100.0 : 0.0;
 
@@ -403,8 +412,7 @@ public class ProjectServiceImpl {
                             member,
                             liteProfile != null ? liteProfile.fullName() : null,
                             fullProfile != null ? fullProfile.email() : null,
-                            liteProfile != null ? liteProfile.avatarUrl() : null
-                    );
+                            liteProfile != null ? liteProfile.avatarUrl() : null);
                 })
                 .toList();
     }
@@ -434,7 +442,7 @@ public class ProjectServiceImpl {
     }
 
     public void validateProjectNotArchived(ProjectEntity project) {
-        if (project.getStatus() == ProjectEntity.ProjectStatus.ARCHIVED) {
+        if (project.getStatus() == ProjectStatus.ARCHIVED) {
             throw new BusinessException(HttpStatus.CONFLICT.value(), "Project is archived");
         }
     }
@@ -466,6 +474,7 @@ public class ProjectServiceImpl {
         }
     }
 
+    @SuppressWarnings("SPRING_DATA_STRING_PROPERTY_REFERENCE")
     private Pageable buildSafePageable(Pageable pageable, String... allowedFields) {
         if (!pageable.getSort().isSorted()) {
             return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),

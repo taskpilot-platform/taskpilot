@@ -3,13 +3,14 @@ package com.taskpilot.projects.tasks.dto;
 import java.time.Instant;
 import java.util.List;
 
-import com.taskpilot.projects.common.entity.TaskEntity;
+import com.taskpilot.projects.common.enums.PriorityLevel;
+import com.taskpilot.projects.common.enums.TaskStatus;
 
 public record UpdateTaskRequest(
     String title,
     String description,
-    TaskEntity.TaskStatus status,
-    TaskEntity.PriorityLevel priority,
+    TaskStatus status,
+    PriorityLevel priority,
     Float position,
     List<Long> labelIds,
     Integer difficultyLevel,

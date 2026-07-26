@@ -42,6 +42,8 @@ import com.taskpilot.projects.common.entity.CommentMentionEntity;
 import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
 import com.taskpilot.projects.common.entity.TaskEntity;
+import com.taskpilot.projects.common.enums.MemberRole;
+import com.taskpilot.projects.common.enums.ProjectStatus;
 import com.taskpilot.projects.common.repository.CommentMentionRepository;
 import com.taskpilot.projects.common.repository.CommentRepository;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
@@ -121,7 +123,7 @@ class TaskCommentServiceTest {
         when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task));
         when(userIdentityPort.findByEmail(EMAIL)).thenReturn(Optional.of(new UserIdentityDto(ACTOR_ID, EMAIL)));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectEntity.ProjectStatus.ACTIVE)));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
         when(projectMemberRepository.findMembers(PROJECT_ID)).thenReturn(members(1L, 2L, 3L, 4L, 5L));
         when(commentRepository.save(any(CommentEntity.class))).thenAnswer(invocation -> {
             CommentEntity comment = invocation.getArgument(0);
@@ -159,7 +161,7 @@ class TaskCommentServiceTest {
         when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task));
         when(userIdentityPort.findByEmail(EMAIL)).thenReturn(Optional.of(new UserIdentityDto(ACTOR_ID, EMAIL)));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectEntity.ProjectStatus.ACTIVE)));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
         when(commentRepository.findByIdAndTaskId(PARENT_COMMENT_ID, TASK_ID)).thenReturn(Optional.of(parent));
         when(commentRepository.save(any(CommentEntity.class))).thenAnswer(invocation -> {
             CommentEntity comment = invocation.getArgument(0);
@@ -195,7 +197,7 @@ class TaskCommentServiceTest {
         when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task));
         when(userIdentityPort.findByEmail(EMAIL)).thenReturn(Optional.of(new UserIdentityDto(ACTOR_ID, EMAIL)));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectEntity.ProjectStatus.ACTIVE)));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
         when(projectMemberRepository.findMembers(PROJECT_ID)).thenReturn(members(1L, 2L));
         when(commentRepository.findByIdAndTaskId(PARENT_COMMENT_ID, TASK_ID)).thenReturn(Optional.of(parent));
         when(commentRepository.save(any(CommentEntity.class))).thenAnswer(invocation -> {
@@ -226,7 +228,7 @@ class TaskCommentServiceTest {
         when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task()));
         when(userIdentityPort.findByEmail(EMAIL)).thenReturn(Optional.of(new UserIdentityDto(ACTOR_ID, EMAIL)));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectEntity.ProjectStatus.ACTIVE)));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
         when(commentRepository.findByIdAndTaskId(PARENT_COMMENT_ID, TASK_ID)).thenReturn(Optional.empty());
 
         BusinessException ex = assertThrows(BusinessException.class,
@@ -244,7 +246,7 @@ class TaskCommentServiceTest {
         when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task()));
         when(userIdentityPort.findByEmail(EMAIL)).thenReturn(Optional.of(new UserIdentityDto(ACTOR_ID, EMAIL)));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectEntity.ProjectStatus.ACTIVE)));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
         when(commentRepository.findByIdAndTaskId(PARENT_COMMENT_ID, TASK_ID)).thenReturn(Optional.of(parent));
 
         BusinessException ex = assertThrows(BusinessException.class,
@@ -262,7 +264,7 @@ class TaskCommentServiceTest {
         when(commentRepository.findByIdAndTaskId(COMMENT_ID, TASK_ID)).thenReturn(Optional.of(comment));
         when(userIdentityPort.findByEmail(EMAIL)).thenReturn(Optional.of(new UserIdentityDto(ACTOR_ID, EMAIL)));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectEntity.ProjectStatus.ACTIVE)));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
         when(commentMentionRepository.findByCommentId(COMMENT_ID)).thenReturn(mentions(2L));
         when(projectMemberRepository.findMembers(PROJECT_ID)).thenReturn(members(1L, 2L, 3L));
         when(commentRepository.save(any(CommentEntity.class))).thenReturn(comment);
@@ -291,7 +293,7 @@ class TaskCommentServiceTest {
         when(commentRepository.findByIdAndTaskId(COMMENT_ID, TASK_ID)).thenReturn(Optional.of(comment));
         when(userIdentityPort.findByEmail(EMAIL)).thenReturn(Optional.of(new UserIdentityDto(ACTOR_ID, EMAIL)));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectEntity.ProjectStatus.ACTIVE)));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.updateComment(TASK_ID, COMMENT_ID,
@@ -309,12 +311,12 @@ class TaskCommentServiceTest {
         when(commentRepository.findByIdAndTaskId(COMMENT_ID, TASK_ID)).thenReturn(Optional.of(comment));
         when(userIdentityPort.findByEmail(EMAIL)).thenReturn(Optional.of(new UserIdentityDto(ACTOR_ID, EMAIL)));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectEntity.ProjectStatus.ACTIVE)));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
         when(projectMemberRepository.findByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(Optional.of(
                 ProjectMemberEntity.builder()
                         .projectId(PROJECT_ID)
                         .userId(ACTOR_ID)
-                        .role(ProjectMemberEntity.MemberRole.MANAGER)
+                        .role(MemberRole.MANAGER)
                         .build()));
         when(commentRepository.save(any(CommentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(commentMentionRepository.findByCommentIdIn(anyCollection())).thenReturn(mentions(2L));
@@ -350,7 +352,7 @@ class TaskCommentServiceTest {
                 .thenReturn(new PageImpl<>(List.of(activeComment, deletedComment), PageRequest.of(0, 20), 2));
         when(commentMentionRepository.findByCommentIdIn(anyCollection())).thenReturn(mentionsFor(COMMENT_ID, 4L));
         when(taskRepository.findAllById(any())).thenReturn(List.of(task()));
-        when(projectRepository.findAllById(any())).thenReturn(List.of(project(ProjectEntity.ProjectStatus.ACTIVE)));
+        when(projectRepository.findAllById(any())).thenReturn(List.of(project(ProjectStatus.ACTIVE)));
         when(userProfilePort.findLiteByIds(anySet())).thenAnswer(invocation -> profiles(invocation.getArgument(0)));
 
         Page<CommentSearchResultDto> page = service.searchComments(
@@ -387,7 +389,7 @@ class TaskCommentServiceTest {
         return task;
     }
 
-    private ProjectEntity project(ProjectEntity.ProjectStatus status) {
+    private ProjectEntity project(ProjectStatus status) {
         ProjectEntity project = ProjectEntity.builder()
                 .name("TaskPilot")
                 .status(status)
@@ -417,7 +419,7 @@ class TaskCommentServiceTest {
                 .map(userId -> ProjectMemberEntity.builder()
                         .projectId(PROJECT_ID)
                         .userId(userId)
-                        .role(ProjectMemberEntity.MemberRole.MEMBER)
+                        .role(MemberRole.MEMBER)
                         .build())
                 .toList();
     }
