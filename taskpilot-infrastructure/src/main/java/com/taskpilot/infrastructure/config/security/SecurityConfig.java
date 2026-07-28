@@ -8,6 +8,7 @@ import com.taskpilot.infrastructure.dto.ApiResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -30,7 +31,7 @@ import java.util.List;
 @EnableWebSecurity
 @EnableMethodSecurity
 public class SecurityConfig {
-        @Value("${FE_ORIGIN:http://localhost:5173")
+        @Value("${FE_ORIGIN:${app.cors.allowed-origins:http://localhost:5173}}")
         private String feOrigin;
         private final JwtAuthenticationFilter jwtAuthFilter;
         private static final ObjectMapper objectMapper = new ObjectMapper()
@@ -45,10 +46,12 @@ public class SecurityConfig {
         @Bean
         public SecurityFilterChain filterChain(HttpSecurity http)
                         throws Exception {
-                http.csrf(AbstractHttpConfigurer::disable)
+                http.cors(cors -> cors.configurationSource(corsConfigurationSource()))
+                                .csrf(AbstractHttpConfigurer::disable)
                                 .authorizeHttpRequests(auth -> auth
                                                 .dispatcherTypeMatchers(DispatcherType.ASYNC)
                                                 .permitAll()
+                                                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                                                 .requestMatchers("/actuator/health").permitAll()
                                                 .requestMatchers("/actuator/**").hasRole("ADMIN")
                                                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
@@ -94,10 +97,9 @@ public class SecurityConfig {
         @Bean
         public CorsConfigurationSource corsConfigurationSource() {
                 CorsConfiguration configuration = new CorsConfiguration();
-                configuration.setAllowedOriginPatterns(List.of(feOrigin.split(",")));
+                configuration.setAllowedOriginPatterns(List.of("*"));
                 configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-                configuration.setAllowedHeaders(List.of(
-                                "Authorization", "Content-Type", "Accept", "Origin", "Last-Event-ID"));
+                configuration.setAllowedHeaders(List.of("*"));
                 configuration.setExposedHeaders(List.of(
                                 "Authorization",
                                 // SSE required headers

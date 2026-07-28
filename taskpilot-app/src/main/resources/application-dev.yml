@@ -31,5 +31,7 @@ management:
     health:
       show-details: always
 
+app:
   cors:
-  allowed-origins: http://localhost:*
+    allowed-origins: http://localhost:*
+

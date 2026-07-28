@@ -69,6 +69,16 @@ springdoc:
     tags-sorter: alpha
     operations-sorter: method
 
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+  endpoint:
+    health:
+      show-details: always
+
 ai:
   gemini:
     api-key: ${GEMINI_API_KEY}

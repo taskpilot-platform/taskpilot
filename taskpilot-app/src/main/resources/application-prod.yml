@@ -42,7 +42,7 @@ management:
       show-details: when-authorized
       roles: ADMIN
 
+app:
   cors:
-  allowed-origins: https://taskpilot-platform.netlify.app
-  allowed-methods: GET,POST,PUT,DELETE,OPTIONS
-  allow-credentials: true
+    allowed-origins: https://taskpilot-platform.netlify.app
+
