@@ -34,18 +34,14 @@ public class NotificationController {
     public ApiResponse<Page<NotificationResponse>> getMyNotifications(
             Authentication authentication,
             @PageableDefault(size = 20) Pageable pageable) {
-        return ApiResponse.success(
-                HttpStatus.OK.value(),
-                "Notifications retrieved successfully",
+        return ApiResponse.ok("Notifications retrieved successfully",
                 notificationService.getMyNotifications(authentication.getName(), pageable));
     }
 
     @Operation(summary = "Get unread notifications count")
     @GetMapping("/my/unread-count")
     public ApiResponse<Long> getUnreadCount(Authentication authentication) {
-        return ApiResponse.success(
-                HttpStatus.OK.value(),
-                "Unread notifications count retrieved successfully",
+        return ApiResponse.ok("Unread notifications count retrieved successfully",
                 notificationService.getUnreadCount(authentication.getName()));
     }
 
@@ -60,9 +56,7 @@ public class NotificationController {
     public ApiResponse<NotificationResponse> getNotificationById(
             @PathVariable Long notificationId,
             Authentication authentication) {
-        return ApiResponse.success(
-                HttpStatus.OK.value(),
-                "Notification retrieved successfully",
+        return ApiResponse.ok("Notification retrieved successfully",
                 notificationService.getNotificationById(notificationId, authentication.getName()));
     }
 
@@ -71,18 +65,14 @@ public class NotificationController {
     public ApiResponse<NotificationResponse> markAsRead(
             @PathVariable Long notificationId,
             Authentication authentication) {
-        return ApiResponse.success(
-                HttpStatus.OK.value(),
-                "Notification marked as read",
+        return ApiResponse.ok("Notification marked as read",
                 notificationService.markAsRead(notificationId, authentication.getName()));
     }
 
     @Operation(summary = "Mark all notifications as read")
     @PutMapping("/read-all")
     public ApiResponse<Integer> markAllAsRead(Authentication authentication) {
-        return ApiResponse.success(
-                HttpStatus.OK.value(),
-                "All notifications marked as read",
+        return ApiResponse.ok("All notifications marked as read",
                 notificationService.markAllAsRead(authentication.getName()));
     }
 }

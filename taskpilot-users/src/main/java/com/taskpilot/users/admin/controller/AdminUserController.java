@@ -29,14 +29,14 @@ public class AdminUserController {
     public ApiResponse<Page<AdminUserResponse>> getAllUsers(
             @RequestParam(required = false) String keyword,
             @PageableDefault(size = 10) Pageable pageable) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Users retrieved successfully",
+        return ApiResponse.ok("Users retrieved successfully",
                 adminUserService.getAllUsers(keyword, pageable));
     }
 
     @Operation(summary = "View User Detail", description = "Get detailed information of a system user by id.")
     @GetMapping("/{id}")
     public ApiResponse<AdminUserResponse> getUserDetail(@PathVariable Long id) {
-        return ApiResponse.success(HttpStatus.OK.value(), "User retrieved successfully",
+        return ApiResponse.ok("User retrieved successfully",
                 adminUserService.getUserDetail(id));
     }
 
@@ -44,7 +44,7 @@ public class AdminUserController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<AdminUserResponse> createUser(@Valid @RequestBody AdminCreateUserRequest request) {
-        return ApiResponse.success(HttpStatus.CREATED.value(), "User created successfully",
+        return ApiResponse.created("User created successfully",
                 adminUserService.createUser(request));
     }
 
@@ -52,7 +52,7 @@ public class AdminUserController {
     @PutMapping("/{id}")
     public ApiResponse<AdminUserResponse> updateUser(@PathVariable Long id,
             @Valid @RequestBody AdminUpdateUserRequest request) {
-        return ApiResponse.success(HttpStatus.OK.value(), "User updated successfully",
+        return ApiResponse.ok("User updated successfully",
                 adminUserService.updateUser(id, request));
     }
 
@@ -60,14 +60,13 @@ public class AdminUserController {
     @DeleteMapping("/{id}")
     public ApiResponse<Void> deactivateUser(@PathVariable Long id) {
         adminUserService.deactivateUser(id);
-        return ApiResponse.success(HttpStatus.OK.value(), "User deactivated successfully", null);
+        return ApiResponse.ok("User deactivated successfully", null);
     }
 
     @Operation(summary = "Reset User Password", description = "Generate a new random password for the user.")
     @PutMapping("/{id}/reset-password")
     public ApiResponse<Void> resetPassword(@PathVariable Long id) {
         adminUserService.resetPassword(id);
-        return ApiResponse.success(HttpStatus.OK.value(),
-                "Password reset successfully. New password will be sent via email.", null);
+        return ApiResponse.ok("Password reset successfully. New password will be sent via email.", null);
     }
 }

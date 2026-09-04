@@ -25,7 +25,7 @@ public class SystemSkillController {
     @Operation(summary = "Search System Skills", description = "Search for system skills by keyword. Hard limited to 20 results.")
     @GetMapping("/search")
     public ApiResponse<List<SkillDirectoryResponse>> searchSkills(@RequestParam String keyword) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Skills retrieved successfully",
+        return ApiResponse.ok("Skills retrieved successfully",
                 skillService.searchSkills(keyword));
     }
 }
