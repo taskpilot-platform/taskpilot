@@ -1,3 +1,6 @@
+server:
+  port: ${PORT:${SERVER_PORT:7860}}
+
 spring:
   application:
     name: taskpilot-app
@@ -16,9 +19,9 @@ spring:
     validate-on-migrate: false
 
   datasource:
-    url: ${DB_URL}
-    username: ${DB_USERNAME}
-    password: ${DB_PASSWORD}
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/taskpilot}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
     driver-class-name: ${DB_DRIVER_CLASS_NAME:org.postgresql.Driver}
     hikari:
       maximum-pool-size: ${DB_POOL_MAX_SIZE:30}
@@ -49,8 +52,8 @@ spring:
 application:
   security:
     jwt:
-      secret-key: ${JWT_SECRET}
-      expiration: ${JWT_EXPIRATION}
+      secret-key: ${JWT_SECRET:404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
+      expiration: ${JWT_EXPIRATION:86400000}
       blocklist:
         provider: ${JWT_BLOCKLIST_PROVIDER:memory}
     password-reset:
@@ -78,10 +81,13 @@ management:
   endpoint:
     health:
       show-details: always
+  health:
+    mail:
+      enabled: false
 
 ai:
   gemini:
-    api-key: ${GEMINI_API_KEY}
+    api-key: ${GEMINI_API_KEY:}
     api-keys: ${GEMINI_API_KEYS:}
     # Quality-first primary. Fallbacks prefer models that currently have text-out quota.
     model-name: ${AI_GEMINI_MODEL:gemini-3.5-flash}
@@ -98,7 +104,7 @@ ai:
     timeout-seconds: ${AI_GEMINI_TIMEOUT_SECONDS:180}
 
   github:
-    token: ${GITHUB_TOKEN}
+    token: ${GITHUB_TOKEN:}
     fallback-model: ${AI_GITHUB_FALLBACK_MODEL:gpt-4o}
     reasoning-model: ${AI_GITHUB_REASONING_MODEL:DeepSeek-R1}
 

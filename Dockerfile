@@ -24,16 +24,28 @@ RUN mvn clean package -DskipTests -B
 
 # Stage 2: Runtime
 FROM eclipse-temurin:25-jre-alpine
-WORKDIR /app
 
-ENV SERVER_PORT=7860
+ENV PORT=7860 \
+    SERVER_PORT=7860 \
+    HOME=/home/user
 
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+# Create unprivileged user with explicit UID 1000 / GID 1000 required by Hugging Face Spaces
+RUN addgroup -g 1000 user && \
+    adduser -u 1000 -G user -s /bin/sh -D user
 
-USER appuser
+WORKDIR /home/user/app
 
-COPY --chown=appuser:appgroup --from=build /app/taskpilot-app/target/*-SNAPSHOT.jar app.jar
+COPY --chown=user:user --from=build /app/taskpilot-app/target/*-SNAPSHOT.jar app.jar
+
+USER user
 
 EXPOSE 7860
 
-ENTRYPOINT ["java", "--enable-preview", "-XX:MaxRAMPercentage=75.0", "-jar", "app.jar"]
+ENTRYPOINT ["java", \
+    "--enable-preview", \
+    "-XX:MaxRAMPercentage=75.0", \
+    "-XX:InitialRAMPercentage=50.0", \
+    "-XX:+ExitOnOutOfMemoryError", \
+    "-Djava.net.preferIPv4Stack=true", \
+    "-Djava.security.egd=file:/dev/./urandom", \
+    "-jar", "app.jar"]
