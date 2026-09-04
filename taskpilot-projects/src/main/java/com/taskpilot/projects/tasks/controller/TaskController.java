@@ -3,7 +3,6 @@ package com.taskpilot.projects.tasks.controller;
 import java.util.List;
 
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -42,24 +41,24 @@ public class TaskController {
     public ApiResponse<List<TaskDto>> getTasksByProject(
             @RequestParam Long projectId,
             Authentication authentication) {
-        List<TaskDto> tasks = taskService.getTasksByProject(projectId, authentication.getName());
-        return ApiResponse.success(HttpStatus.OK.value(), "Tasks retrieved successfully", tasks);
+        return ApiResponse.ok("Tasks retrieved successfully",
+                taskService.getTasksByProject(projectId, authentication.getName()));
     }
 
     @GetMapping("/{taskId}")
     public ApiResponse<TaskDetailDto> getTaskById(
             @PathVariable Long taskId,
             Authentication authentication) {
-        TaskDetailDto task = taskService.getTaskById(taskId, authentication.getName());
-        return ApiResponse.success(HttpStatus.OK.value(), "Task retrieved successfully", task);
+        return ApiResponse.ok("Task retrieved successfully",
+                taskService.getTaskById(taskId, authentication.getName()));
     }
 
     @GetMapping("/{taskId}/subtasks")
     public ApiResponse<List<TaskDto>> getSubtasks(
             @PathVariable Long taskId,
             Authentication authentication) {
-        List<TaskDto> tasks = taskService.getSubtasks(taskId, authentication.getName());
-        return ApiResponse.success(HttpStatus.OK.value(), "Subtasks retrieved successfully", tasks);
+        return ApiResponse.ok("Subtasks retrieved successfully",
+                taskService.getSubtasks(taskId, authentication.getName()));
     }
 
     @PostMapping
@@ -67,8 +66,8 @@ public class TaskController {
     public ApiResponse<TaskDto> createTask(
             @Valid @RequestBody CreateTaskRequest request,
             Authentication authentication) {
-        TaskDto task = taskService.createTask(request, authentication.getName());
-        return ApiResponse.success(HttpStatus.CREATED.value(), "Task created successfully", task);
+        return ApiResponse.created("Task created successfully",
+                taskService.createTask(request, authentication.getName()));
     }
 
     @PutMapping("/{taskId}")
@@ -76,8 +75,8 @@ public class TaskController {
             @PathVariable Long taskId,
             @Valid @RequestBody UpdateTaskRequest request,
             Authentication authentication) {
-        TaskDto task = taskService.updateTask(taskId, request, authentication.getName());
-        return ApiResponse.success(HttpStatus.OK.value(), "Task updated successfully", task);
+        return ApiResponse.ok("Task updated successfully",
+                taskService.updateTask(taskId, request, authentication.getName()));
     }
 
     @DeleteMapping("/{taskId}")
@@ -85,7 +84,7 @@ public class TaskController {
             @PathVariable Long taskId,
             Authentication authentication) {
         taskService.deleteTask(taskId, authentication.getName());
-        return ApiResponse.success(HttpStatus.OK.value(), "Task deleted successfully", null);
+        return ApiResponse.ok("Task deleted successfully", null);
     }
 
     @PatchMapping("/{taskId}/kanban")
@@ -93,8 +92,8 @@ public class TaskController {
             @PathVariable Long taskId,
             @Valid @RequestBody KanbanMoveRequest request,
             Authentication authentication) {
-        TaskDto task = taskService.moveTaskKanban(taskId, request, authentication.getName());
-        return ApiResponse.success(HttpStatus.OK.value(), "Task moved successfully", task);
+        return ApiResponse.ok("Task moved successfully",
+                taskService.moveTaskKanban(taskId, request, authentication.getName()));
     }
 
     @PatchMapping("/{taskId}/sprint")
@@ -102,7 +101,7 @@ public class TaskController {
             @PathVariable Long taskId,
             @RequestBody UpdateTaskSprintRequest request,
             Authentication authentication) {
-        TaskDto task = taskService.updateTaskSprint(taskId, request, authentication.getName());
-        return ApiResponse.success(HttpStatus.OK.value(), "Task sprint updated successfully", task);
+        return ApiResponse.ok("Task sprint updated successfully",
+                taskService.updateTaskSprint(taskId, request, authentication.getName()));
     }
 }

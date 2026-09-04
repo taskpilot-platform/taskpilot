@@ -1,6 +1,7 @@
 package com.taskpilot.users.admin.service;
 
 import com.taskpilot.infrastructure.exception.BusinessException;
+import com.taskpilot.infrastructure.util.PageableUtils;
 import com.taskpilot.users.admin.dto.AdminSkillRequest;
 import com.taskpilot.users.admin.dto.AdminSkillResponse;
 import com.taskpilot.users.common.entity.SkillEntity;
@@ -23,7 +24,7 @@ public class AdminSkillService {
     private final SkillRepository skillRepository;
 
     public Page<AdminSkillResponse> getAllSkills(String keyword, Pageable pageable) {
-        Pageable safePageable = buildSafePageable(pageable, "id", "name", "description", "isActive");
+        Pageable safePageable = PageableUtils.sanitize(pageable, "id", Sort.Direction.ASC, "id", "name", "description", "isActive");
 
         Page<SkillEntity> skills;
         if (keyword != null && !keyword.isBlank()) {
@@ -38,22 +39,6 @@ public class AdminSkillService {
         SkillEntity skill = skillRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Skill not found"));
         return AdminSkillResponse.fromEntity(skill);
-    }
-
-    @SuppressWarnings("SPRING_DATA_STRING_PROPERTY_REFERENCE")
-    private Pageable buildSafePageable(Pageable pageable, String... allowedFields) {
-        if (!pageable.getSort().isSorted()) {
-            return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), Sort.by(Sort.Direction.ASC, "id"));
-        }
-
-        Set<String> allowed = Set.of(allowedFields);
-        for (Sort.Order order : pageable.getSort()) {
-            if (!allowed.contains(order.getProperty())) {
-                return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
-                        Sort.by(Sort.Direction.ASC, "id"));
-            }
-        }
-        return pageable;
     }
 
     @Transactional

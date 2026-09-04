@@ -40,7 +40,7 @@ public class SprintController {
             @PathVariable Long projectId,
             @Valid @RequestBody CreateSprintRequest request,
             Authentication authentication) {
-        return ApiResponse.success(HttpStatus.CREATED.value(), "Sprint created successfully",
+        return ApiResponse.created("Sprint created successfully",
                 sprintService.createSprint(projectId, request, authentication.getName()));
     }
 
@@ -48,7 +48,7 @@ public class SprintController {
     public ApiResponse<List<SprintDto>> listSprints(
             @PathVariable Long projectId,
             Authentication authentication) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Sprints retrieved successfully",
+        return ApiResponse.ok("Sprints retrieved successfully",
                 sprintService.listSprints(projectId, authentication.getName()));
     }
 
@@ -58,7 +58,7 @@ public class SprintController {
             @PathVariable Long sprintId,
             @Valid @RequestBody UpdateSprintRequest request,
             Authentication authentication) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Sprint updated successfully",
+        return ApiResponse.ok("Sprint updated successfully",
                 sprintService.updateSprint(projectId, sprintId, request, authentication.getName()));
     }
 
@@ -68,7 +68,7 @@ public class SprintController {
             @PathVariable Long sprintId,
             Authentication authentication) {
         sprintService.deleteSprint(projectId, sprintId, authentication.getName());
-        return ApiResponse.success(HttpStatus.OK.value(), "Sprint deleted successfully", null);
+        return ApiResponse.ok("Sprint deleted successfully", null);
     }
 
     @PostMapping("/sprints/{sprintId}/start")
@@ -76,7 +76,7 @@ public class SprintController {
             @PathVariable Long projectId,
             @PathVariable Long sprintId,
             Authentication authentication) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Sprint started successfully",
+        return ApiResponse.ok("Sprint started successfully",
                 sprintService.startSprint(projectId, sprintId, authentication.getName()));
     }
 
@@ -85,7 +85,7 @@ public class SprintController {
             @PathVariable Long projectId,
             @PathVariable Long sprintId,
             Authentication authentication) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Sprint completed successfully",
+        return ApiResponse.ok("Sprint completed successfully",
                 sprintService.completeSprint(projectId, sprintId, authentication.getName()));
     }
 
@@ -93,7 +93,7 @@ public class SprintController {
     public ApiResponse<BacklogResponse> getBacklog(
             @PathVariable Long projectId,
             Authentication authentication) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Backlog retrieved successfully",
+        return ApiResponse.ok("Backlog retrieved successfully",
                 sprintService.getBacklog(projectId, authentication.getName()));
     }
 
@@ -101,7 +101,7 @@ public class SprintController {
     public ApiResponse<BoardResponse> getBoard(
             @PathVariable Long projectId,
             Authentication authentication) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Board retrieved successfully",
+        return ApiResponse.ok("Board retrieved successfully",
                 sprintService.getBoard(projectId, authentication.getName()));
     }
 }

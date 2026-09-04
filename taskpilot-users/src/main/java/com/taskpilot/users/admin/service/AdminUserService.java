@@ -1,6 +1,7 @@
 package com.taskpilot.users.admin.service;
 
 import com.taskpilot.infrastructure.exception.BusinessException;
+import com.taskpilot.infrastructure.util.PageableUtils;
 import com.taskpilot.users.admin.dto.AdminCreateUserRequest;
 import com.taskpilot.users.admin.dto.AdminUpdateUserRequest;
 import com.taskpilot.users.admin.dto.AdminUserResponse;
@@ -46,8 +47,8 @@ public class AdminUserService {
     private static final int DEFAULT_PASSWORD_LENGTH = 12;
 
     public Page<AdminUserResponse> getAllUsers(String keyword, Pageable pageable) {
-        Pageable safePageable = buildSafePageable(pageable, "id", "email", "fullName", "role",
-                "status", "currentWorkload", "createdAt", "updatedAt");
+        Pageable safePageable = PageableUtils.sanitize(pageable, "id", Sort.Direction.ASC,
+                "id", "email", "fullName", "role", "status", "currentWorkload", "createdAt", "updatedAt");
         if (keyword != null && !keyword.isBlank()) {
             return userRepository.findByKeyword(keyword.trim(), safePageable)
                     .map(AdminUserResponse::fromEntity);
@@ -59,23 +60,6 @@ public class AdminUserService {
         UserEntity user = userRepository.findById(id).orElseThrow(
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
         return AdminUserResponse.fromEntity(user);
-    }
-
-    @SuppressWarnings("SPRING_DATA_STRING_PROPERTY_REFERENCE")
-    private Pageable buildSafePageable(Pageable pageable, String... allowedFields) {
-        if (!pageable.getSort().isSorted()) {
-            return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
-                    Sort.by(Sort.Direction.ASC, "id"));
-        }
-
-        Set<String> allowed = Set.of(allowedFields);
-        for (Sort.Order order : pageable.getSort()) {
-            if (!allowed.contains(order.getProperty())) {
-                return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
-                        Sort.by(Sort.Direction.ASC, "id"));
-            }
-        }
-        return pageable;
     }
 
     @Transactional

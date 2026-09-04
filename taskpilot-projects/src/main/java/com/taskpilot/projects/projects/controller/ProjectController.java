@@ -37,7 +37,7 @@ public class ProjectController {
                         Authentication authentication,
                         @RequestParam(required = false) String keyword,
                         @PageableDefault(size = 10) Pageable pageable) {
-                return ApiResponse.success(HttpStatus.OK.value(), "Projects retrieved successfully",
+                return ApiResponse.ok("Projects retrieved successfully",
                                 projectService.getMyProjects(authentication.getName(), keyword, pageable));
         }
 
@@ -46,7 +46,7 @@ public class ProjectController {
         public ApiResponse<ProjectResponse> getProjectDetail(
                         @PathVariable Long projectId,
                         Authentication authentication) {
-                return ApiResponse.success(HttpStatus.OK.value(), "Project retrieved successfully",
+                return ApiResponse.ok("Project retrieved successfully",
                                 projectService.getProjectDetail(projectId, authentication.getName()));
         }
 
@@ -56,7 +56,7 @@ public class ProjectController {
         public ApiResponse<ProjectResponse> createProject(
                         @Valid @RequestBody CreateProjectRequest request,
                         Authentication authentication) {
-                return ApiResponse.success(HttpStatus.CREATED.value(), "Project created successfully",
+                return ApiResponse.created("Project created successfully",
                                 projectService.createProject(request, authentication.getName()));
         }
 
@@ -66,7 +66,7 @@ public class ProjectController {
                         @PathVariable Long projectId,
                         @Valid @RequestBody UpdateProjectRequest request,
                         Authentication authentication) {
-                return ApiResponse.success(HttpStatus.OK.value(), "Project updated successfully",
+                return ApiResponse.ok("Project updated successfully",
                                 projectService.updateProject(projectId, request, authentication.getName()));
         }
 
@@ -75,7 +75,7 @@ public class ProjectController {
         public ApiResponse<ProjectMemberResponse> joinProject(
                         @Valid @RequestBody JoinProjectRequest request,
                         Authentication authentication) {
-                return ApiResponse.success(HttpStatus.OK.value(), "Joined project successfully",
+                return ApiResponse.ok("Joined project successfully",
                                 projectService.joinProject(request, authentication.getName()));
         }
 
@@ -85,7 +85,7 @@ public class ProjectController {
                         @PathVariable Long projectId,
                         Authentication authentication) {
                 projectService.leaveProject(projectId, authentication.getName());
-                return ApiResponse.success(HttpStatus.OK.value(), "Left project successfully", null);
+                return ApiResponse.ok("Left project successfully", null);
         }
 
         @Operation(summary = "Get project summary", description = "Get project statistics and summary report")
@@ -93,7 +93,7 @@ public class ProjectController {
         public ApiResponse<ProjectSummaryResponse> getProjectSummary(
                         @PathVariable Long projectId,
                         Authentication authentication) {
-                return ApiResponse.success(HttpStatus.OK.value(), "Project summary retrieved successfully",
+                return ApiResponse.ok("Project summary retrieved successfully",
                                 projectService.getProjectSummary(projectId, authentication.getName()));
         }
 
@@ -102,7 +102,7 @@ public class ProjectController {
         public ApiResponse<List<ProjectMemberResponse>> getProjectMembers(
                         @PathVariable Long projectId,
                         Authentication authentication) {
-                return ApiResponse.success(HttpStatus.OK.value(), "Project members retrieved successfully",
+                return ApiResponse.ok("Project members retrieved successfully",
                                 projectService.getProjectMembers(projectId, authentication.getName()));
         }
 
@@ -114,7 +114,7 @@ public class ProjectController {
                         @Valid @RequestBody UpdateMemberRoleRequest request,
                         Authentication authentication) {
                 projectService.updateMemberRole(projectId, userId, request.role(), authentication.getName());
-                return ApiResponse.success(HttpStatus.OK.value(), "Member role updated successfully", null);
+                return ApiResponse.ok("Member role updated successfully", null);
         }
 
         @Operation(summary = "Remove member", description = "Remove a member from the project (Manager only)")
@@ -124,7 +124,7 @@ public class ProjectController {
                         @PathVariable Long userId,
                         Authentication authentication) {
                 projectService.removeMember(projectId, userId, authentication.getName());
-                return ApiResponse.success(HttpStatus.OK.value(), "Member removed successfully", null);
+                return ApiResponse.ok("Member removed successfully", null);
         }
 
         @Operation(summary = "Archive project", description = "Archive a project to make it read-only (Manager only)")
@@ -133,7 +133,7 @@ public class ProjectController {
                         @PathVariable Long projectId,
                         Authentication authentication) {
                 projectService.archiveProject(projectId, authentication.getName());
-                return ApiResponse.success(HttpStatus.OK.value(), "Project archived successfully", null);
+                return ApiResponse.ok("Project archived successfully", null);
         }
 
         @Operation(summary = "Restore project", description = "Restore an archived project to active status (Manager only)")
@@ -142,7 +142,7 @@ public class ProjectController {
                         @PathVariable Long projectId,
                         Authentication authentication) {
                 projectService.restoreProject(projectId, authentication.getName());
-                return ApiResponse.success(HttpStatus.OK.value(), "Project restored successfully", null);
+                return ApiResponse.ok("Project restored successfully", null);
         }
 
         @Operation(summary = "Delete project", description = "Permanently delete a project and all its data (Manager only)")
@@ -151,6 +151,6 @@ public class ProjectController {
                         @PathVariable Long projectId,
                         Authentication authentication) {
                 projectService.deleteProject(projectId, authentication.getName());
-                return ApiResponse.success(HttpStatus.OK.value(), "Project deleted successfully", null);
+                return ApiResponse.ok("Project deleted successfully", null);
         }
 }
