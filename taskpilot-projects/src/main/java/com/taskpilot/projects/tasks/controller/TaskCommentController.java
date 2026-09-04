@@ -38,9 +38,7 @@ public class TaskCommentController {
     public ApiResponse<List<TaskCommentDto>> getComments(
             @PathVariable Long taskId,
             Authentication authentication) {
-        return ApiResponse.success(
-                HttpStatus.OK.value(),
-                "Task comments retrieved successfully",
+        return ApiResponse.ok("Task comments retrieved successfully",
                 taskCommentService.getComments(taskId, authentication.getName()));
     }
 
@@ -50,9 +48,7 @@ public class TaskCommentController {
             @PathVariable Long taskId,
             @Valid @RequestBody CreateTaskCommentRequest request,
             Authentication authentication) {
-        return ApiResponse.success(
-                HttpStatus.CREATED.value(),
-                "Task comment created successfully",
+        return ApiResponse.created("Task comment created successfully",
                 taskCommentService.createComment(taskId, request, authentication.getName()));
     }
 
@@ -62,9 +58,7 @@ public class TaskCommentController {
             @PathVariable Long commentId,
             @Valid @RequestBody UpdateTaskCommentRequest request,
             Authentication authentication) {
-        return ApiResponse.success(
-                HttpStatus.OK.value(),
-                "Task comment updated successfully",
+        return ApiResponse.ok("Task comment updated successfully",
                 taskCommentService.updateComment(taskId, commentId, request, authentication.getName()));
     }
 
@@ -73,9 +67,7 @@ public class TaskCommentController {
             @PathVariable Long taskId,
             @PathVariable Long commentId,
             Authentication authentication) {
-        return ApiResponse.success(
-                HttpStatus.OK.value(),
-                "Task comment deleted successfully",
+        return ApiResponse.ok("Task comment deleted successfully",
                 taskCommentService.deleteComment(taskId, commentId, authentication.getName()));
     }
 
@@ -91,9 +83,7 @@ public class TaskCommentController {
             @PathVariable Long taskId,
             @RequestParam(required = false) String keyword,
             Authentication authentication) {
-        return ApiResponse.success(
-                HttpStatus.OK.value(),
-                "Mention candidates retrieved successfully",
+        return ApiResponse.ok("Mention candidates retrieved successfully",
                 taskCommentService.getMentionCandidates(taskId, keyword, authentication.getName()));
     }
 }

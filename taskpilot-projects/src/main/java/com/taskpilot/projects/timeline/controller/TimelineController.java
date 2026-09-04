@@ -1,6 +1,5 @@
 package com.taskpilot.projects.timeline.controller;
 
-import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -24,7 +23,7 @@ public class TimelineController {
     public ApiResponse<TimelineResponse> getTimeline(
             @PathVariable Long projectId,
             Authentication authentication) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Timeline retrieved successfully",
+        return ApiResponse.ok("Timeline retrieved successfully",
                 timelineService.getTimeline(projectId, authentication.getName()));
     }
 }

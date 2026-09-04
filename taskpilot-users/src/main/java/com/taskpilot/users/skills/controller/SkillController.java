@@ -26,20 +26,20 @@ public class SkillController {
     @Operation(summary = "View List", description = "Get all skills of the current user.")
     @GetMapping
     public ApiResponse<List<UserSkillResponse>> getMySkills() {
-        return ApiResponse.success(HttpStatus.OK.value(), "Skills retrieved successfully", skillService.getMySkills());
+        return ApiResponse.ok("Skills retrieved successfully", skillService.getMySkills());
     }
 
     @Operation(summary = "View Skill Directory", description = "Get active system skills that user can add.")
     @GetMapping("/directory")
     public ApiResponse<List<SkillDirectoryResponse>> getSkillDirectory() {
-        return ApiResponse.success(HttpStatus.OK.value(), "Skill directory retrieved successfully",
+        return ApiResponse.ok("Skill directory retrieved successfully",
                 skillService.getSkillDirectory());
     }
 
     @Operation(summary = "View Detail", description = "Get detail of a specific skill for the current user.")
     @GetMapping("/{skill_id}")
     public ApiResponse<UserSkillResponse> getSkillDetail(@PathVariable("skill_id") Long skillId) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Skill retrieved successfully",
+        return ApiResponse.ok("Skill retrieved successfully",
                 skillService.getSkillDetail(skillId));
     }
 
@@ -48,7 +48,7 @@ public class SkillController {
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<Void> addSkill(@Valid @RequestBody AddSkillRequest request) {
         skillService.addSkill(request);
-        return ApiResponse.success(HttpStatus.CREATED.value(), "Skill added successfully", null);
+        return ApiResponse.created("Skill added successfully", null);
     }
 
     @Operation(summary = "Update Skill", description = "Update the level of an existing user skill.")
@@ -56,13 +56,13 @@ public class SkillController {
     public ApiResponse<Void> updateSkill(@PathVariable("skill_id") Long skillId,
             @Valid @RequestBody UpdateSkillRequest request) {
         skillService.updateSkill(skillId, request);
-        return ApiResponse.success(HttpStatus.OK.value(), "Skill updated successfully", null);
+        return ApiResponse.ok("Skill updated successfully", null);
     }
 
     @Operation(summary = "Delete Skill", description = "Remove a skill from the current user.")
     @DeleteMapping("/{skill_id}")
     public ApiResponse<Void> deleteSkill(@PathVariable("skill_id") Long skillId) {
         skillService.deleteSkill(skillId);
-        return ApiResponse.success(HttpStatus.OK.value(), "Skill deleted successfully", null);
+        return ApiResponse.ok("Skill deleted successfully", null);
     }
 }

@@ -2,7 +2,6 @@ package com.taskpilot.projects.tasks.controller;
 
 import java.util.List;
 
-import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -31,7 +30,7 @@ public class LabelController {
     public ApiResponse<List<LabelDto>> getProjectLabels(
             @PathVariable Long projectId,
             @AuthenticationPrincipal String email) {
-        return ApiResponse.success(200, "Labels retrieved successfully", labelService.getLabelsByProject(projectId, email));
+        return ApiResponse.ok("Labels retrieved successfully", labelService.getLabelsByProject(projectId, email));
     }
 
     @PostMapping
@@ -39,7 +38,7 @@ public class LabelController {
             @PathVariable Long projectId,
             @Valid @RequestBody CreateLabelRequest request,
             @AuthenticationPrincipal String email) {
-        return ApiResponse.success(201, "Label created successfully", labelService.createLabel(projectId, request, email));
+        return ApiResponse.created("Label created successfully", labelService.createLabel(projectId, request, email));
     }
 
     @DeleteMapping("/{labelId}")
@@ -48,6 +47,6 @@ public class LabelController {
             @PathVariable Long labelId,
             @AuthenticationPrincipal String email) {
         labelService.deleteLabel(projectId, labelId, email);
-        return ApiResponse.success(200, "Label deleted successfully", null);
+        return ApiResponse.ok("Label deleted successfully", null);
     }
 }

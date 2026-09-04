@@ -12,7 +12,6 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 @Tag(name = "05. Admin - Skill Directory", description = "APIs for managing the system skill directory (Admin only)")
@@ -28,14 +27,14 @@ public class AdminSkillController {
     public ApiResponse<Page<AdminSkillResponse>> getAllSkills(
             @RequestParam(required = false) String keyword,
             @PageableDefault(size = 10) Pageable pageable) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Skills retrieved successfully",
+        return ApiResponse.ok("Skills retrieved successfully",
                 adminSkillService.getAllSkills(keyword, pageable));
     }
 
     @Operation(summary = "View Skill Detail", description = "Get detailed information of a system skill by id.")
     @GetMapping("/{id}")
     public ApiResponse<AdminSkillResponse> getSkillDetail(@PathVariable Long id) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Skill retrieved successfully",
+        return ApiResponse.ok("Skill retrieved successfully",
                 adminSkillService.getSkillDetail(id));
     }
 
@@ -43,7 +42,7 @@ public class AdminSkillController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<AdminSkillResponse> createSkill(@Valid @RequestBody AdminSkillRequest request) {
-        return ApiResponse.success(HttpStatus.CREATED.value(), "Skill created successfully",
+        return ApiResponse.created("Skill created successfully",
                 adminSkillService.createSkill(request));
     }
 
@@ -51,7 +50,7 @@ public class AdminSkillController {
     @PutMapping("/{id}")
     public ApiResponse<AdminSkillResponse> updateSkill(@PathVariable Long id,
             @Valid @RequestBody AdminSkillRequest request) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Skill updated successfully",
+        return ApiResponse.ok("Skill updated successfully",
                 adminSkillService.updateSkill(id, request));
     }
 
@@ -59,6 +58,6 @@ public class AdminSkillController {
     @DeleteMapping("/{id}")
     public ApiResponse<Void> deleteSkill(@PathVariable Long id) {
         adminSkillService.deleteSkill(id);
-        return ApiResponse.success(HttpStatus.OK.value(), "Skill deactivated successfully", null);
+        return ApiResponse.ok("Skill deactivated successfully", null);
     }
 }

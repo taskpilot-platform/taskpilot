@@ -10,19 +10,15 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.infrastructure.exception.BusinessException;
+import com.taskpilot.infrastructure.util.ValidationUtils;
 import com.taskpilot.projects.common.entity.ProjectEntity;
-import com.taskpilot.projects.common.entity.ProjectMemberEntity;
 import com.taskpilot.projects.common.entity.SprintEntity;
 import com.taskpilot.projects.common.entity.TaskEntity;
-import com.taskpilot.projects.common.enums.MemberRole;
-import com.taskpilot.projects.common.enums.ProjectStatus;
 import com.taskpilot.projects.common.enums.SprintStatus;
-import com.taskpilot.projects.common.enums.TaskStatus;
 import com.taskpilot.projects.common.enums.WorkflowMode;
-import com.taskpilot.projects.common.repository.ProjectMemberRepository;
-import com.taskpilot.projects.common.repository.ProjectRepository;
 import com.taskpilot.projects.common.repository.SprintRepository;
 import com.taskpilot.projects.common.repository.TaskRepository;
+import com.taskpilot.projects.common.service.ProjectSecurityService;
 import com.taskpilot.projects.sprints.dto.BacklogResponse;
 import com.taskpilot.projects.sprints.dto.BoardResponse;
 import com.taskpilot.projects.sprints.dto.CreateSprintRequest;
@@ -38,18 +34,16 @@ import lombok.RequiredArgsConstructor;
 public class SprintService {
 
     private final SprintRepository sprintRepository;
-    private final ProjectRepository projectRepository;
-    private final ProjectMemberRepository projectMemberRepository;
+    private final ProjectSecurityService projectSecurityService;
     private final TaskRepository taskRepository;
     private final TaskDtoMapper taskDtoMapper;
     private final UserIdentityPort userIdentityPort;
 
     @Transactional
     public SprintDto createSprint(Long projectId, CreateSprintRequest request, String email) {
-        ProjectEntity project = findProject(projectId);
-        validateManager(projectId, getCurrentUserIdByEmail(email));
-        validateProjectNotArchived(project);
-        validateDateRange(request.startDate(), request.endDate());
+        projectSecurityService.requireActiveProject(projectId);
+        projectSecurityService.validateManager(projectId, getCurrentUserIdByEmail(email));
+        ValidationUtils.validateDateRange(request.startDate(), request.endDate(), "Sprint end date must be greater than or equal to start date");
 
         SprintEntity sprint = SprintEntity.builder()
                 .projectId(projectId)
@@ -64,16 +58,15 @@ public class SprintService {
 
     @Transactional(readOnly = true)
     public List<SprintDto> listSprints(Long projectId, String email) {
-        findProject(projectId);
-        validateMember(projectId, getCurrentUserIdByEmail(email));
+        projectSecurityService.requireProject(projectId);
+        projectSecurityService.validateMember(projectId, getCurrentUserIdByEmail(email));
         return sortedSprints(projectId).stream().map(SprintDto::fromEntity).toList();
     }
 
     @Transactional
     public SprintDto updateSprint(Long projectId, Long sprintId, UpdateSprintRequest request, String email) {
-        ProjectEntity project = findProject(projectId);
-        validateManager(projectId, getCurrentUserIdByEmail(email));
-        validateProjectNotArchived(project);
+        projectSecurityService.requireActiveProject(projectId);
+        projectSecurityService.validateManager(projectId, getCurrentUserIdByEmail(email));
         SprintEntity sprint = findSprintInProject(projectId, sprintId);
 
         if (sprint.getStatus() == SprintStatus.COMPLETED) {
@@ -82,7 +75,7 @@ public class SprintService {
 
         LocalDate nextStart = request.startDate() != null ? request.startDate() : sprint.getStartDate();
         LocalDate nextEnd = request.endDate() != null ? request.endDate() : sprint.getEndDate();
-        validateDateRange(nextStart, nextEnd);
+        ValidationUtils.validateDateRange(nextStart, nextEnd, "Sprint end date must be greater than or equal to start date");
 
         if (request.name() != null && !request.name().isBlank()) {
             sprint.setName(request.name());
@@ -101,9 +94,8 @@ public class SprintService {
 
     @Transactional
     public void deleteSprint(Long projectId, Long sprintId, String email) {
-        ProjectEntity project = findProject(projectId);
-        validateManager(projectId, getCurrentUserIdByEmail(email));
-        validateProjectNotArchived(project);
+        projectSecurityService.requireActiveProject(projectId);
+        projectSecurityService.validateManager(projectId, getCurrentUserIdByEmail(email));
         SprintEntity sprint = findSprintInProject(projectId, sprintId);
 
         if (sprint.getStatus() != SprintStatus.PLANNING) {
@@ -116,9 +108,8 @@ public class SprintService {
 
     @Transactional
     public SprintDto startSprint(Long projectId, Long sprintId, String email) {
-        ProjectEntity project = findProject(projectId);
-        validateManager(projectId, getCurrentUserIdByEmail(email));
-        validateProjectNotArchived(project);
+        projectSecurityService.requireActiveProject(projectId);
+        projectSecurityService.validateManager(projectId, getCurrentUserIdByEmail(email));
         SprintEntity sprint = findSprintInProject(projectId, sprintId);
 
         if (sprint.getStatus() != SprintStatus.PLANNING) {
@@ -134,9 +125,8 @@ public class SprintService {
 
     @Transactional
     public SprintDto completeSprint(Long projectId, Long sprintId, String email) {
-        ProjectEntity project = findProject(projectId);
-        validateManager(projectId, getCurrentUserIdByEmail(email));
-        validateProjectNotArchived(project);
+        projectSecurityService.requireActiveProject(projectId);
+        projectSecurityService.validateManager(projectId, getCurrentUserIdByEmail(email));
         SprintEntity sprint = findSprintInProject(projectId, sprintId);
 
         if (sprint.getStatus() != SprintStatus.ACTIVE) {
@@ -149,8 +139,8 @@ public class SprintService {
 
     @Transactional(readOnly = true)
     public BacklogResponse getBacklog(Long projectId, String email) {
-        findProject(projectId);
-        validateMember(projectId, getCurrentUserIdByEmail(email));
+        projectSecurityService.requireProject(projectId);
+        projectSecurityService.validateMember(projectId, getCurrentUserIdByEmail(email));
 
         var unscheduled = taskDtoMapper.mapToDtoWithLabels(
                 taskRepository.findByProjectIdAndSprintIdIsNullOrderByPositionAsc(projectId));
@@ -169,8 +159,8 @@ public class SprintService {
 
     @Transactional(readOnly = true)
     public BoardResponse getBoard(Long projectId, String email) {
-        ProjectEntity project = findProject(projectId);
-        validateMember(projectId, getCurrentUserIdByEmail(email));
+        ProjectEntity project = projectSecurityService.requireProject(projectId);
+        projectSecurityService.validateMember(projectId, getCurrentUserIdByEmail(email));
 
         if (project.getWorkflowMode() == WorkflowMode.SCRUM) {
             return sprintRepository.findByProjectIdAndStatus(projectId, SprintStatus.ACTIVE)
@@ -183,66 +173,22 @@ public class SprintService {
 
         return new BoardResponse(
                 project.getWorkflowMode(),
-                sprintRepository.findByProjectIdAndStatus(projectId, SprintStatus.ACTIVE)
-                        .map(SprintDto::fromEntity)
-                        .orElse(null),
-                taskDtoMapper.mapToDtoWithLabels(taskRepository.findByProjectId(projectId)));
+                null,
+                taskDtoMapper.mapToDtoWithLabels(
+                        taskRepository.findByProjectIdAndSprintIdIsNullOrderByPositionAsc(projectId)));
     }
 
     private List<SprintEntity> sortedSprints(Long projectId) {
-        return sprintRepository.findByProjectIdOrderByStartDateAsc(projectId).stream()
-                .sorted(Comparator
-                        .comparingInt((SprintEntity sprint) -> switch (sprint.getStatus()) {
-                            case ACTIVE -> 0;
-                            case PLANNING -> 1;
-                            case COMPLETED -> 2;
-                        })
-                        .thenComparing(SprintEntity::getStartDate, Comparator.nullsLast(LocalDate::compareTo))
-                        .thenComparing(SprintEntity::getId))
-                .toList();
+        return sprintRepository.findByProjectIdOrderByStartDateAscIdAsc(projectId);
     }
 
     private SprintEntity findSprintInProject(Long projectId, Long sprintId) {
         SprintEntity sprint = sprintRepository.findById(sprintId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Sprint not found"));
         if (!sprint.getProjectId().equals(projectId)) {
-            throw new BusinessException(HttpStatus.NOT_FOUND.value(), "Sprint not found in project");
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Sprint does not belong to this project");
         }
         return sprint;
-    }
-
-    private ProjectEntity findProject(Long projectId) {
-        return projectRepository.findById(projectId)
-                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Project not found"));
-    }
-
-    private void validateMember(Long projectId, Long userId) {
-        if (!projectMemberRepository.existsByProjectIdAndUserId(projectId, userId)) {
-            throw new BusinessException(HttpStatus.FORBIDDEN.value(), "You are not a member of this project");
-        }
-    }
-
-    private void validateManager(Long projectId, Long userId) {
-        ProjectMemberEntity member = projectMemberRepository.findByProjectIdAndUserId(projectId, userId)
-                .orElseThrow(() -> new BusinessException(HttpStatus.FORBIDDEN.value(),
-                        "You are not a member of this project"));
-        if (member.getRole() != MemberRole.MANAGER) {
-            throw new BusinessException(HttpStatus.FORBIDDEN.value(),
-                    "Only Project Manager can perform this action");
-        }
-    }
-
-    private void validateProjectNotArchived(ProjectEntity project) {
-        if (project.getStatus() == ProjectStatus.ARCHIVED) {
-            throw new BusinessException(HttpStatus.CONFLICT.value(), "Project is archived");
-        }
-    }
-
-    private void validateDateRange(LocalDate startDate, LocalDate endDate) {
-        if (startDate != null && endDate != null && endDate.isBefore(startDate)) {
-            throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
-                    "Sprint end date must be greater than or equal to start date");
-        }
     }
 
     private Long getCurrentUserIdByEmail(String email) {

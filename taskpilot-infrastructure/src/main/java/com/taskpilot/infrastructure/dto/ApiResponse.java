@@ -31,6 +31,22 @@ public class ApiResponse<T> {
         return success(200, "Success", data);
     }
 
+    public static <T> ApiResponse<T> ok(T data) {
+        return success(200, "Success", data);
+    }
+
+    public static <T> ApiResponse<T> ok(String message, T data) {
+        return success(200, message, data);
+    }
+
+    public static <T> ApiResponse<T> created(T data) {
+        return success(201, "Created", data);
+    }
+
+    public static <T> ApiResponse<T> created(String message, T data) {
+        return success(201, message, data);
+    }
+
     public static <T> ApiResponse<T> error(int status, String message, T data) {
         return ApiResponse.<T>builder()
                 .status(status)

@@ -3,7 +3,6 @@ package com.taskpilot.projects.tasks.controller;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
-import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -32,9 +31,7 @@ public class CommentSearchController {
             @RequestParam(defaultValue = "false") boolean mentionedMe,
             @PageableDefault(size = 20) Pageable pageable,
             Authentication authentication) {
-        return ApiResponse.success(
-                HttpStatus.OK.value(),
-                "Comments retrieved successfully",
+        return ApiResponse.ok("Comments retrieved successfully",
                 taskCommentService.searchComments(
                         keyword,
                         projectId,

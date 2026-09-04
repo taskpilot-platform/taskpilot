@@ -6,7 +6,6 @@ import com.taskpilot.users.skills.service.SkillService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -25,7 +24,7 @@ public class SystemSkillController {
     @Operation(summary = "Search System Skills", description = "Search for system skills by keyword. Hard limited to 20 results.")
     @GetMapping("/search")
     public ApiResponse<List<SkillDirectoryResponse>> searchSkills(@RequestParam String keyword) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Skills retrieved successfully",
+        return ApiResponse.ok("Skills retrieved successfully",
                 skillService.searchSkills(keyword));
     }
 }

@@ -8,8 +8,6 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -28,7 +26,7 @@ public class AdminSettingsController {
             @RequestParam(required = false) String keyword) {
         try {
             List<SystemSettingResponse> settings = adminSettingsService.getAllSettings(keyword);
-            return ApiResponse.success(HttpStatus.OK.value(), "Settings retrieved successfully", settings);
+            return ApiResponse.ok("Settings retrieved successfully", settings);
         } catch (Exception e) {
             e.printStackTrace();
             throw e;
@@ -38,7 +36,7 @@ public class AdminSettingsController {
     @Operation(summary = "Update Config", description = "Create or update a system setting.")
     @PutMapping
     public ApiResponse<SystemSettingResponse> updateSetting(@Valid @RequestBody SystemSettingUpdateRequest request) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Setting updated successfully",
+        return ApiResponse.ok("Setting updated successfully",
                 adminSettingsService.updateSetting(request));
     }
 }

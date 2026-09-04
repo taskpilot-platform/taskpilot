@@ -31,29 +31,21 @@ public class AuthController {
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<Void> register(@Valid @RequestBody RegisterRequest request) {
         authService.register(request);
-        return ApiResponse.success(HttpStatus.CREATED.value(),
-                "User registered successfully! Please log in.",
-                null);
+        return ApiResponse.created("User registered successfully! Please log in.", null);
     }
 
     @Operation(summary = "User Login", description = "Authenticate user using email and password. Returns Access Token and Refresh Token.")
     @SecurityRequirements()
     @PostMapping("/login")
     public ApiResponse<AuthResponse> login(@Valid @RequestBody LoginRequest request) {
-        AuthResponse authResponse = authService.login(request);
-        return ApiResponse.success(HttpStatus.OK.value(),
-                "User logged in successfully!",
-                authResponse);
+        return ApiResponse.ok("User logged in successfully!", authService.login(request));
     }
 
     @Operation(summary = "Refresh Access Token", description = "Exchange a valid Refresh Token for a new JWT Access Token.")
     @SecurityRequirements()
     @PostMapping("/refresh")
     public ApiResponse<AuthResponse> refreshToken(@Valid @RequestBody RefreshTokenRequest request) {
-        AuthResponse authResponse = authService.refreshToken(request);
-        return ApiResponse.success(HttpStatus.OK.value(),
-                "Token refreshed successfully!",
-                authResponse);
+        return ApiResponse.ok("Token refreshed successfully!", authService.refreshToken(request));
     }
 
     @Operation(summary = "User Logout", description = "Revoke the user's refresh token and clear the authentication session. Requires Bearer Token.")
@@ -62,9 +54,7 @@ public class AuthController {
             @Valid @RequestBody RefreshTokenRequest request,
             @RequestHeader(value = "Authorization", required = false) String authorizationHeader) {
         authService.logout(request, authorizationHeader);
-        return ApiResponse.success(HttpStatus.OK.value(),
-                "User logged out successfully!",
-                null);
+        return ApiResponse.ok("User logged out successfully!", null);
     }
 
     @Operation(summary = "Forgot Password", description = "Send a password reset link to the user's registered email.")
@@ -73,9 +63,7 @@ public class AuthController {
     public ApiResponse<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request,
             HttpServletRequest httpRequest) {
         authService.forgotPassword(request, extractClientIp(httpRequest));
-        return ApiResponse.success(HttpStatus.OK.value(),
-                "If the email exists, a password reset link has been sent.",
-                null);
+        return ApiResponse.ok("If the email exists, a password reset link has been sent.", null);
     }
 
     @Operation(summary = "Reset Password", description = "Reset the user's password using the token sent via email.")
@@ -83,9 +71,7 @@ public class AuthController {
     @PostMapping("/reset-password")
     public ApiResponse<Void> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
         authService.resetPassword(request);
-        return ApiResponse.success(HttpStatus.OK.value(),
-                "Password reset successfully! Please log in again.",
-                null);
+        return ApiResponse.ok("Password reset successfully! Please log in again.", null);
     }
 
     private String extractClientIp(HttpServletRequest request) {

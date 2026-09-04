@@ -55,7 +55,7 @@ public class AiChatController {
         Long userId = resolveUserId(authentication);
         String title = request != null ? request.title() : null;
         ChatSessionEntity session = sessionService.createSession(userId, title);
-        return ApiResponse.success(201, "Session created", toSessionResponse(session, 0));
+        return ApiResponse.created("Session created", toSessionResponse(session, 0));
     }
 
     @Operation(summary = "List all chat sessions for the current user")
@@ -110,7 +110,7 @@ public class AiChatController {
             Authentication authentication) {
         Long userId = resolveUserId(authentication);
         toolCallingRegistryService.warmupCache(userId, sessionId);
-        return ApiResponse.success(200, "Warmup started", null);
+        return ApiResponse.ok("Warmup started", null);
     }
 
     @Operation(summary = "Stream AI chat response via SSE")

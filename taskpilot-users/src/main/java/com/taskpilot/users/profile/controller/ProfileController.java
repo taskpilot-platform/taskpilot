@@ -9,7 +9,6 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.http.MediaType;
@@ -25,21 +24,21 @@ public class ProfileController {
     @Operation(summary = "View Profile", description = "Get current user profile information.")
     @GetMapping
     public ApiResponse<UserProfileResponse> getProfile() {
-        return ApiResponse.success(HttpStatus.OK.value(), "Profile retrieved successfully",
+        return ApiResponse.ok("Profile retrieved successfully",
                 profileService.getProfile());
     }
 
     @Operation(summary = "Update Info", description = "Update user full name and avatar.")
     @PutMapping
     public ApiResponse<UserProfileResponse> updateProfile(@Valid @RequestBody UpdateProfileRequest request) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Profile updated successfully",
+        return ApiResponse.ok("Profile updated successfully",
                 profileService.updateProfile(request));
     }
 
     @Operation(summary = "Upload Avatar", description = "Upload a new avatar image (max 1MB).")
     @PostMapping(value = "/avatar", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ApiResponse<UserProfileResponse> uploadAvatar(@RequestParam("file") MultipartFile file) {
-        return ApiResponse.success(HttpStatus.OK.value(), "Avatar uploaded successfully",
+        return ApiResponse.ok("Avatar uploaded successfully",
                 profileService.uploadAvatar(file));
     }
 
@@ -47,13 +46,13 @@ public class ProfileController {
     @PutMapping("/password")
     public ApiResponse<Void> changePassword(@Valid @RequestBody ChangePasswordRequest request) {
         profileService.changePassword(request);
-        return ApiResponse.success(HttpStatus.OK.value(), "Password changed successfully", null);
+        return ApiResponse.ok("Password changed successfully", null);
     }
 
     @Operation(summary = "Delete Account", description = "Soft delete the user account and revoke session.")
     @DeleteMapping
     public ApiResponse<Void> deleteAccount() {
         profileService.deleteAccount();
-        return ApiResponse.success(HttpStatus.OK.value(), "Account disabled successfully", null);
+        return ApiResponse.ok("Account disabled successfully", null);
     }
 }
