@@ -1,0 +1,23 @@
+{
+  "viewports": [
+    { "name": "iPhone_SE", "width": 375, "height": 667, "deviceScaleFactor": 2 },
+    { "name": "iPhone_14_Pro", "width": 393, "height": 852, "deviceScaleFactor": 3 },
+    { "name": "Galaxy_S21", "width": 360, "height": 800, "deviceScaleFactor": 3 },
+    { "name": "iPad_Mini", "width": 768, "height": 1024, "deviceScaleFactor": 2 },
+    { "name": "Desktop", "width": 1280, "height": 800, "deviceScaleFactor": 1 }
+  ],
+  "routes": [
+    { "path": "/login", "priority": "medium", "requiresAuth": false },
+    { "path": "/register", "priority": "medium", "requiresAuth": false },
+    { "path": "/", "priority": "high", "requiresAuth": true },
+    { "path": "/projects", "priority": "high", "requiresAuth": true },
+    { "path": "/notifications", "priority": "medium", "requiresAuth": true },
+    { "path": "/comments", "priority": "medium", "requiresAuth": true },
+    { "path": "/copilot", "priority": "high", "requiresAuth": true },
+    { "path": "/profile", "priority": "low", "requiresAuth": true },
+    { "path": "/my-skills", "priority": "low", "requiresAuth": true },
+    { "path": "/admin/users", "priority": "low", "requiresAuth": true },
+    { "path": "/admin/skills", "priority": "low", "requiresAuth": true },
+    { "path": "/admin/settings", "priority": "low", "requiresAuth": true }
+  ]
+}
