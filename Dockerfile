@@ -1,26 +1,16 @@
 # Stage 1: Build stage
 FROM eclipse-temurin:25-jdk-alpine AS build
-RUN apk add --no-cache maven
 WORKDIR /app
 
-COPY pom.xml .
-COPY taskpilot-infrastructure/pom.xml taskpilot-infrastructure/
-COPY taskpilot-contracts/pom.xml taskpilot-contracts/
-COPY taskpilot-users/pom.xml taskpilot-users/
-COPY taskpilot-ai/pom.xml taskpilot-ai/
-COPY taskpilot-projects/pom.xml taskpilot-projects/
-COPY taskpilot-app/pom.xml taskpilot-app/
+COPY . .
 
-RUN mvn dependency:resolve -B || true
-
-COPY taskpilot-infrastructure/src taskpilot-infrastructure/src
-COPY taskpilot-contracts/src taskpilot-contracts/src
-COPY taskpilot-users/src taskpilot-users/src
-COPY taskpilot-ai/src taskpilot-ai/src
-COPY taskpilot-projects/src taskpilot-projects/src
-COPY taskpilot-app/src taskpilot-app/src
-
-RUN mvn clean package -DskipTests -B 
+RUN if [ -f taskpilot-app/target/taskpilot-app-0.0.1-SNAPSHOT.jar ]; then \
+        echo "=== Pre-built JAR found, skipping Maven download ==="; \
+    else \
+        echo "=== Building JAR with Maven Wrapper ===" && \
+        chmod +x mvnw && \
+        ./mvnw clean package -DskipTests -B; \
+    fi 
 
 # Stage 2: Runtime
 FROM eclipse-temurin:25-jre-alpine

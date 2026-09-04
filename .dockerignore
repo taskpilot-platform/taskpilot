@@ -5,9 +5,9 @@
 .github
 *.md
 docs/
-**/target/
-**/*.class
-**/*.jar
+# **/target/
+# **/*.class
+# **/*.jar
 .env
 .env.*
 docker-compose*.yml
