@@ -267,7 +267,10 @@ public class ProjectServiceImpl {
             if (!manager.getUserId().equals(userId)) {
                 eventPublisher.publishEvent(new ProjectMemberEvent(manager.getUserId(), title, message, linkAction));
             }
-     /**
+        }
+    }
+
+    /**
      * Update member role (only MANAGER can do this)
      */
     @Transactional

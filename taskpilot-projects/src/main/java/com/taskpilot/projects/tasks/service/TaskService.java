@@ -2,19 +2,16 @@ package com.taskpilot.projects.tasks.service;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.stream.Collectors;
-import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.taskpilot.infrastructure.exception.BusinessException;
-import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.entity.TaskEntity;
 import com.taskpilot.projects.common.enums.PriorityLevel;
-import com.taskpilot.projects.common.enums.ProjectStatus;
 import com.taskpilot.projects.common.enums.SprintStatus;
 import com.taskpilot.projects.common.enums.TaskStatus;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
@@ -27,13 +24,11 @@ import com.taskpilot.projects.tasks.dto.TaskDto;
 import com.taskpilot.projects.tasks.dto.TaskDetailDto;
 import com.taskpilot.projects.tasks.dto.UpdateTaskSprintRequest;
 import com.taskpilot.projects.tasks.dto.UpdateTaskRequest;
-import com.taskpilot.projects.tasks.dto.LabelDto;
 import com.taskpilot.projects.common.repository.LabelRepository;
 import com.taskpilot.projects.common.repository.TaskLabelRepository;
 import com.taskpilot.projects.common.repository.TaskRequiredSkillRepository;
 import com.taskpilot.projects.common.entity.TaskLabelEntity;
 import com.taskpilot.projects.common.entity.TaskRequiredSkillEntity;
-import com.taskpilot.projects.common.entity.LabelEntity;
 import com.taskpilot.projects.common.entity.SprintEntity;
 import com.taskpilot.contracts.skill.dto.SkillDto;
 import com.taskpilot.contracts.user.port.out.UserIdentityPort;
@@ -65,14 +60,6 @@ public class TaskService {
         return userIdentityPort.findByEmail(email)
                 .map(identity -> identity.id())
                 .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"));
-    }
-
-    private void validateUserIsMember(Long projectId, Long userId) {
-        projectSecurityService.validateMember(projectId, userId);
-    }
-
-    private void validateProjectNotArchived(Long projectId) {
-        projectSecurityService.requireActiveProject(projectId);
     }
 
     private List<TaskDto> mapToDtoWithLabels(List<TaskEntity> tasks) {
@@ -108,7 +95,7 @@ public class TaskService {
     @Transactional(readOnly = true)
     public List<TaskDto> getTasksByProject(Long projectId, String email) {
         Long userId = getCurrentUserIdByEmail(email);
-        validateUserIsMember(projectId, userId);
+        projectSecurityService.validateMember(projectId, userId);
 
         List<TaskEntity> tasks = taskRepository.findByProjectId(projectId);
         return mapToDtoWithLabels(tasks);
@@ -120,7 +107,7 @@ public class TaskService {
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found"));
 
         Long userId = getCurrentUserIdByEmail(email);
-        validateUserIsMember(task.getProjectId(), userId);
+        projectSecurityService.validateMember(task.getProjectId(), userId);
 
         var assignee = task.getAssigneeId() != null ? userPort.findById(task.getAssigneeId()).orElse(null)
                 : null;
@@ -149,7 +136,7 @@ public class TaskService {
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Parent task not found"));
 
         Long userId = getCurrentUserIdByEmail(email);
-        validateUserIsMember(parentTask.getProjectId(), userId);
+        projectSecurityService.validateMember(parentTask.getProjectId(), userId);
 
         List<TaskEntity> subtasks = taskRepository.findByParentId(parentId);
         return mapToDtoWithLabels(subtasks);
@@ -158,8 +145,8 @@ public class TaskService {
     @Transactional
     public TaskDto createTask(CreateTaskRequest request, String email) {
         Long userId = getCurrentUserIdByEmail(email);
-        validateUserIsMember(request.projectId(), userId);
-        validateProjectNotArchived(request.projectId());
+        projectSecurityService.validateMember(request.projectId(), userId);
+        projectSecurityService.validateProjectNotArchived(request.projectId());
         validateTaskDateRange(request.startDate(), request.dueDate());
 
         if (request.parentId() != null) {
@@ -235,8 +222,8 @@ public class TaskService {
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found"));
 
         Long userId = getCurrentUserIdByEmail(email);
-        validateUserIsMember(task.getProjectId(), userId);
-        validateProjectNotArchived(task.getProjectId());
+        projectSecurityService.validateMember(task.getProjectId(), userId);
+        projectSecurityService.validateProjectNotArchived(task.getProjectId());
 
         if (request.title() != null)
             task.setTitle(request.title());
@@ -324,8 +311,8 @@ public class TaskService {
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found"));
 
         Long userId = getCurrentUserIdByEmail(email);
-        validateUserIsMember(task.getProjectId(), userId);
-        validateProjectNotArchived(task.getProjectId());
+        projectSecurityService.validateMember(task.getProjectId(), userId);
+        projectSecurityService.validateProjectNotArchived(task.getProjectId());
 
         boolean canDelete = task.getReporterId().equals(userId);
         if (!canDelete) {
@@ -354,8 +341,8 @@ public class TaskService {
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found"));
 
         Long userId = getCurrentUserIdByEmail(email);
-        validateUserIsMember(task.getProjectId(), userId);
-        validateProjectNotArchived(task.getProjectId());
+        projectSecurityService.validateMember(task.getProjectId(), userId);
+        projectSecurityService.validateProjectNotArchived(task.getProjectId());
 
         task.setStatus(request.status());
         task.setPosition(request.position());
@@ -370,8 +357,8 @@ public class TaskService {
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found"));
 
         Long userId = getCurrentUserIdByEmail(email);
-        validateUserIsMember(task.getProjectId(), userId);
-        validateProjectNotArchived(task.getProjectId());
+        projectSecurityService.validateMember(task.getProjectId(), userId);
+        projectSecurityService.validateProjectNotArchived(task.getProjectId());
 
         if (task.getSprintId() != null) {
             SprintEntity currentSprint = sprintRepository.findById(task.getSprintId())
