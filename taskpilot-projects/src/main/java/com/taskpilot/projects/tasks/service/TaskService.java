@@ -18,7 +18,7 @@ import com.taskpilot.projects.common.enums.ProjectStatus;
 import com.taskpilot.projects.common.enums.SprintStatus;
 import com.taskpilot.projects.common.enums.TaskStatus;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
-import com.taskpilot.projects.common.repository.ProjectRepository;
+import com.taskpilot.projects.common.service.ProjectSecurityService;
 import com.taskpilot.projects.common.repository.SprintRepository;
 import com.taskpilot.projects.common.repository.TaskRepository;
 import com.taskpilot.projects.tasks.dto.CreateTaskRequest;
@@ -49,7 +49,7 @@ import lombok.RequiredArgsConstructor;
 public class TaskService {
 
     private final TaskRepository taskRepository;
-    private final ProjectRepository projectRepository;
+    private final ProjectSecurityService projectSecurityService;
     private final ProjectMemberRepository projectMemberRepository;
     private final UserIdentityPort userIdentityPort;
     private final SkillPort skillPort;
@@ -68,18 +68,11 @@ public class TaskService {
     }
 
     private void validateUserIsMember(Long projectId, Long userId) {
-        if (!projectMemberRepository.existsByProjectIdAndUserId(projectId, userId)) {
-            throw new BusinessException(HttpStatus.FORBIDDEN.value(),
-                    "You are not a member of this project");
-        }
+        projectSecurityService.validateMember(projectId, userId);
     }
 
     private void validateProjectNotArchived(Long projectId) {
-        ProjectEntity project = projectRepository.findById(projectId)
-                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Project not found"));
-        if (project.getStatus() == ProjectStatus.ARCHIVED) {
-            throw new BusinessException(HttpStatus.CONFLICT.value(), "Project is archived");
-        }
+        projectSecurityService.requireActiveProject(projectId);
     }
 
     private List<TaskDto> mapToDtoWithLabels(List<TaskEntity> tasks) {

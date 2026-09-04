@@ -7,7 +7,6 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
@@ -21,6 +20,8 @@ import com.taskpilot.contracts.user.event.ProjectMemberEvent;
 import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
+import com.taskpilot.infrastructure.util.PageableUtils;
+import com.taskpilot.infrastructure.util.ValidationUtils;
 import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.enums.HeuristicMode;
 import com.taskpilot.projects.common.enums.MemberRole;
@@ -32,6 +33,7 @@ import com.taskpilot.projects.common.repository.ProjectRepository;
 import com.taskpilot.projects.common.repository.TaskRepository;
 import com.taskpilot.projects.common.repository.SprintRepository;
 import com.taskpilot.projects.common.repository.LabelRepository;
+import com.taskpilot.projects.common.service.ProjectSecurityService;
 import com.taskpilot.projects.projects.dto.CreateProjectRequest;
 import com.taskpilot.projects.projects.dto.JoinProjectRequest;
 import com.taskpilot.projects.projects.dto.MyProjectResponse;
@@ -51,6 +53,7 @@ public class ProjectServiceImpl {
 
     private final ProjectRepository projectRepository;
     private final ProjectMemberRepository projectMemberRepository;
+    private final ProjectSecurityService projectSecurityService;
     private final UserIdentityPort userIdentityPort;
     private final UserPort userPort;
     private final ApplicationEventPublisher eventPublisher;
@@ -65,7 +68,7 @@ public class ProjectServiceImpl {
      */
     public Page<MyProjectResponse> getMyProjects(String email, String keyword, Pageable pageable) {
         Long userId = getCurrentUserIdByEmail(email);
-        Pageable safePageable = buildSafePageable(pageable, "projectId", "userId", "joinedAt", "role");
+        Pageable safePageable = PageableUtils.sanitize(pageable, "joinedAt", Sort.Direction.DESC, "projectId", "userId", "joinedAt", "role");
 
         Page<ProjectMemberEntity> page;
         if (keyword != null && !keyword.isBlank()) {
@@ -90,8 +93,8 @@ public class ProjectServiceImpl {
      */
     public ProjectResponse getProjectDetail(Long projectId, String email) {
         Long userId = getCurrentUserIdByEmail(email);
-        ProjectEntity project = findProjectById(projectId);
-        validateUserIsMember(projectId, userId);
+        ProjectEntity project = projectSecurityService.requireProject(projectId);
+        projectSecurityService.validateMember(projectId, userId);
         return ProjectResponse.fromEntity(project);
     }
 
@@ -101,7 +104,8 @@ public class ProjectServiceImpl {
     @Transactional
     public ProjectResponse createProject(CreateProjectRequest request, String email) {
         Long userId = getCurrentUserIdByEmail(email);
-        validateProjectDateRange(request.startDate(), request.endDate());
+        ValidationUtils.validateDateRange(request.startDate(), request.endDate(),
+                "Project end date must be greater than or equal to start date");
 
         if (projectRepository.existsByName(request.name())) {
             throw new BusinessException(HttpStatus.CONFLICT.value(),
@@ -137,14 +141,15 @@ public class ProjectServiceImpl {
     @Transactional
     public ProjectResponse updateProject(Long projectId, UpdateProjectRequest request, String email) {
         Long userId = getCurrentUserIdByEmail(email);
-        ProjectEntity project = findProjectById(projectId);
-        validateUserIsProjectManager(projectId, userId);
+        ProjectEntity project = projectSecurityService.requireProject(projectId);
+        projectSecurityService.validateManager(projectId, userId);
 
-        validateProjectNotArchived(project);
+        projectSecurityService.validateProjectNotArchived(project);
 
-        validateProjectDateRange(
+        ValidationUtils.validateDateRange(
                 request.startDate() != null ? request.startDate() : project.getStartDate(),
-                request.endDate() != null ? request.endDate() : project.getEndDate());
+                request.endDate() != null ? request.endDate() : project.getEndDate(),
+                "Project end date must be greater than or equal to start date");
 
         if (request.name() != null && !request.name().isBlank()) {
             if (!request.name().equals(project.getName()) && projectRepository.existsByName(request.name())) {
@@ -184,7 +189,7 @@ public class ProjectServiceImpl {
         Long userId = getCurrentUserIdByEmail(email);
         Long projectId = parseProjectCode(request.projectCode());
 
-        ProjectEntity project = findProjectById(projectId);
+        ProjectEntity project = projectSecurityService.requireProject(projectId);
 
         // Check if already a member
         if (projectMemberRepository.existsByProjectIdAndUserId(projectId, userId)) {
@@ -227,7 +232,7 @@ public class ProjectServiceImpl {
     @Transactional
     public void leaveProject(Long projectId, String email) {
         Long userId = getCurrentUserIdByEmail(email);
-        ProjectEntity project = findProjectById(projectId);
+        ProjectEntity project = projectSecurityService.requireProject(projectId);
 
         ProjectMemberEntity member = projectMemberRepository.findByProjectIdAndUserId(projectId, userId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(),
@@ -262,18 +267,15 @@ public class ProjectServiceImpl {
             if (!manager.getUserId().equals(userId)) {
                 eventPublisher.publishEvent(new ProjectMemberEvent(manager.getUserId(), title, message, linkAction));
             }
-        }
-    }
-
-    /**
+     /**
      * Update member role (only MANAGER can do this)
      */
     @Transactional
     public void updateMemberRole(Long projectId, Long targetUserId, MemberRole newRole, String email) {
         Long currentUserId = getCurrentUserIdByEmail(email);
-        ProjectEntity project = findProjectById(projectId);
-        validateProjectNotArchived(project);
-        validateUserIsProjectManager(projectId, currentUserId);
+        ProjectEntity project = projectSecurityService.requireProject(projectId);
+        projectSecurityService.validateProjectNotArchived(project);
+        projectSecurityService.validateManager(projectId, currentUserId);
 
         ProjectMemberEntity targetMember = projectMemberRepository.findByProjectIdAndUserId(projectId, targetUserId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Member not found in project"));
@@ -302,9 +304,9 @@ public class ProjectServiceImpl {
     @Transactional
     public void removeMember(Long projectId, Long targetUserId, String email) {
         Long currentUserId = getCurrentUserIdByEmail(email);
-        ProjectEntity project = findProjectById(projectId);
-        validateProjectNotArchived(project);
-        validateUserIsProjectManager(projectId, currentUserId);
+        ProjectEntity project = projectSecurityService.requireProject(projectId);
+        projectSecurityService.validateProjectNotArchived(project);
+        projectSecurityService.validateManager(projectId, currentUserId);
 
         ProjectMemberEntity targetMember = projectMemberRepository.findByProjectIdAndUserId(projectId, targetUserId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Member not found in project"));
@@ -327,8 +329,8 @@ public class ProjectServiceImpl {
     @Transactional
     public void archiveProject(Long projectId, String email) {
         Long userId = getCurrentUserIdByEmail(email);
-        ProjectEntity project = findProjectById(projectId);
-        validateUserIsProjectManager(projectId, userId);
+        ProjectEntity project = projectSecurityService.requireProject(projectId);
+        projectSecurityService.validateManager(projectId, userId);
 
         project.setStatus(ProjectStatus.ARCHIVED);
         projectRepository.save(project);
@@ -337,8 +339,8 @@ public class ProjectServiceImpl {
     @Transactional
     public void restoreProject(Long projectId, String email) {
         Long userId = getCurrentUserIdByEmail(email);
-        ProjectEntity project = findProjectById(projectId);
-        validateUserIsProjectManager(projectId, userId);
+        ProjectEntity project = projectSecurityService.requireProject(projectId);
+        projectSecurityService.validateManager(projectId, userId);
 
         project.setStatus(ProjectStatus.ACTIVE);
         projectRepository.save(project);
@@ -347,8 +349,8 @@ public class ProjectServiceImpl {
     @Transactional
     public void deleteProject(Long projectId, String email) {
         Long userId = getCurrentUserIdByEmail(email);
-        ProjectEntity project = findProjectById(projectId);
-        validateUserIsProjectManager(projectId, userId);
+        ProjectEntity project = projectSecurityService.requireProject(projectId);
+        projectSecurityService.validateManager(projectId, userId);
 
         taskRepository.deleteByProjectId(projectId);
         sprintRepository.deleteByProjectId(projectId);
@@ -362,8 +364,8 @@ public class ProjectServiceImpl {
      */
     public ProjectSummaryResponse getProjectSummary(Long projectId, String email) {
         Long userId = getCurrentUserIdByEmail(email);
-        ProjectEntity project = findProjectById(projectId);
-        validateUserIsMember(projectId, userId);
+        ProjectEntity project = projectSecurityService.requireProject(projectId);
+        projectSecurityService.validateMember(projectId, userId);
 
         long totalMembers = projectMemberRepository.countMembers(projectId);
 
@@ -392,8 +394,8 @@ public class ProjectServiceImpl {
      */
     public List<ProjectMemberResponse> getProjectMembers(Long projectId, String email) {
         Long userId = getCurrentUserIdByEmail(email);
-        findProjectById(projectId);
-        validateUserIsMember(projectId, userId);
+        projectSecurityService.requireProject(projectId);
+        projectSecurityService.validateMember(projectId, userId);
 
         List<ProjectMemberEntity> members = projectMemberRepository.findMembers(projectId);
 
@@ -418,35 +420,6 @@ public class ProjectServiceImpl {
     }
 
     // ==================== HELPER METHODS ====================
-    private ProjectEntity findProjectById(Long projectId) {
-        return projectRepository.findById(projectId)
-                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Project not found"));
-    }
-
-    private void validateUserIsMember(Long projectId, Long userId) {
-        if (!projectMemberRepository.existsByProjectIdAndUserId(projectId, userId)) {
-            throw new BusinessException(HttpStatus.FORBIDDEN.value(),
-                    "You are not a member of this project");
-        }
-    }
-
-    private void validateUserIsProjectManager(Long projectId, Long userId) {
-        ProjectMemberEntity member = projectMemberRepository.findByProjectIdAndUserId(projectId, userId)
-                .orElseThrow(() -> new BusinessException(HttpStatus.FORBIDDEN.value(),
-                        "You are not a member of this project"));
-
-        if (member.getRole() != MemberRole.MANAGER) {
-            throw new BusinessException(HttpStatus.FORBIDDEN.value(),
-                    "Only Project Manager can perform this action");
-        }
-    }
-
-    public void validateProjectNotArchived(ProjectEntity project) {
-        if (project.getStatus() == ProjectStatus.ARCHIVED) {
-            throw new BusinessException(HttpStatus.CONFLICT.value(), "Project is archived");
-        }
-    }
-
     private Long getCurrentUserIdByEmail(String email) {
         return userIdentityPort.findByEmail(email)
                 .map(identity -> identity.id())
@@ -466,28 +439,5 @@ public class ProjectServiceImpl {
                     "Invalid project code. Expected format: PRJ-<id> or <id>");
         }
     }
-
-    private void validateProjectDateRange(LocalDate startDate, LocalDate endDate) {
-        if (startDate != null && endDate != null && endDate.isBefore(startDate)) {
-            throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
-                    "Project end date must be greater than or equal to start date");
-        }
-    }
-
-    @SuppressWarnings("SPRING_DATA_STRING_PROPERTY_REFERENCE")
-    private Pageable buildSafePageable(Pageable pageable, String... allowedFields) {
-        if (!pageable.getSort().isSorted()) {
-            return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
-                    Sort.by(Sort.Direction.DESC, "joinedAt"));
-        }
-
-        Set<String> allowed = Set.of(allowedFields);
-        for (Sort.Order order : pageable.getSort()) {
-            if (!allowed.contains(order.getProperty())) {
-                return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
-                        Sort.by(Sort.Direction.DESC, "joinedAt"));
-            }
-        }
-        return pageable;
-    }
 }
+

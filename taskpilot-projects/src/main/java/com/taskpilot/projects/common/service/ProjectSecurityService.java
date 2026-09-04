@@ -49,4 +49,9 @@ public class ProjectSecurityService {
             throw new BusinessException(HttpStatus.CONFLICT.value(), "Project is archived");
         }
     }
+
+    public void validateProjectNotArchived(Long projectId) {
+        requireActiveProject(projectId);
+    }
 }
+
