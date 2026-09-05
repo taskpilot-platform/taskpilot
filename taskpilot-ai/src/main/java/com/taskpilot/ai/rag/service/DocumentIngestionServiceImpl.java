@@ -78,8 +78,14 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
 
         // STEP 1: Short DB Transaction - Mark document PROCESSING
         DocumentEntity document = callInTransaction(status -> {
-            DocumentEntity doc = documentRepository.findById(documentId)
-                    .orElseThrow(() -> new IllegalArgumentException("Document not found: " + documentId));
+            DocumentEntity doc = documentRepository.findById(documentId).orElse(null);
+            if (doc == null) {
+                try {
+                    Thread.sleep(150);
+                } catch (InterruptedException ignored) {}
+                doc = documentRepository.findById(documentId)
+                        .orElseThrow(() -> new IllegalArgumentException("Document not found: " + documentId));
+            }
             log.info("Starting ingestion for document id={}, project={}, file={}",
                     doc.getId(), doc.getProjectId(), doc.getOriginalFilename());
             doc.setStatus(DocumentStatus.PROCESSING);
@@ -177,6 +183,20 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
             ingestDocument(documentId);
         } catch (Exception e) {
             log.error("Async document ingestion failed for document id={}: {}", documentId, e.getMessage());
+            try {
+                callInTransaction(status -> {
+                    documentRepository.findById(documentId).ifPresent(doc -> {
+                        if (doc.getStatus() != DocumentStatus.READY) {
+                            doc.setStatus(DocumentStatus.FAILED);
+                            doc.setErrorMessage("Ingestion failed: " + e.getMessage());
+                            documentRepository.save(doc);
+                        }
+                    });
+                    return null;
+                });
+            } catch (Exception ex) {
+                log.error("Failed to mark document {} as FAILED: {}", documentId, ex.getMessage());
+            }
         }
     }
 

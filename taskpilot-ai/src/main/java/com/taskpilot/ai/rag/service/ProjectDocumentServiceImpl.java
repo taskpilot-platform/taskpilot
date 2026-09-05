@@ -15,6 +15,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
@@ -39,7 +41,6 @@ public class ProjectDocumentServiceImpl implements ProjectDocumentService {
     private final ProjectMemberPort projectMemberPort;
 
     @Override
-    @Transactional
     public DocumentResponse uploadDocument(Long projectId, MultipartFile file, Long userId) {
         validateProjectMembership(projectId, userId);
         validateFile(file);
@@ -68,8 +69,8 @@ public class ProjectDocumentServiceImpl implements ProjectDocumentService {
         DocumentEntity saved = documentRepository.save(document);
         log.info("Document registered id={}, project={}, file={}", saved.getId(), projectId, saved.getOriginalFilename());
 
-        // Asynchronously trigger ingestion pipeline
-        documentIngestionService.ingestDocumentAsync(saved.getId());
+        // Asynchronously trigger ingestion pipeline after transaction commit (or immediately if autocommit)
+        triggerAsyncIngestion(saved.getId());
 
         return toResponse(saved);
     }
@@ -114,7 +115,7 @@ public class ProjectDocumentServiceImpl implements ProjectDocumentService {
         document.setErrorMessage(null);
         DocumentEntity updated = documentRepository.save(document);
 
-        documentIngestionService.ingestDocumentAsync(documentId);
+        triggerAsyncIngestion(documentId);
         log.info("Re-ingestion triggered for document id={} in project={}", documentId, projectId);
 
         return toResponse(updated);
@@ -124,6 +125,19 @@ public class ProjectDocumentServiceImpl implements ProjectDocumentService {
     public List<ScoredChunk> searchDocuments(Long projectId, String query, int limit, double minScore, Long userId) {
         validateProjectMembership(projectId, userId);
         return projectKnowledgeService.searchKnowledge(projectId, userId, query, limit, minScore);
+    }
+
+    private void triggerAsyncIngestion(Long documentId) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    documentIngestionService.ingestDocumentAsync(documentId);
+                }
+            });
+        } else {
+            documentIngestionService.ingestDocumentAsync(documentId);
+        }
     }
 
 
