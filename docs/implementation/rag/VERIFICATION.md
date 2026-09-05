@@ -131,6 +131,52 @@ This document records all verification commands, test executions, and results.
 
 ---
 
+---
+
+## 8. Phases 10–14: Vector Repository, Ingestion, Knowledge Retrieval & AI Tools
+- **Targets**:
+  - Phase 10: `JdbcDocumentChunkRepository` (pgvector `<=>` cosine distance & `CAST(? AS vector)`)
+  - Phase 11: `DocumentIngestionServiceImpl` (S3 download, Tika parsing, chunking, embedding, vector batch insert, failure rollback)
+  - Phase 12: `ProjectKnowledgeServiceImpl` (strict tenant membership authorization gate & 403 enforcement before embedding/retrieval)
+  - Phase 13 & 14: `KnowledgeAiTools` & `TaskPilotAiTools` (`searchProjectKnowledge` tool registration in LangChain4j and routing metadata)
+  - E2E Lifecycle: `RagEndToEndIntegrationTest` (complete ingestion -> retrieval -> AI tool invocation + cross-tenant attack rejection)
+- **Unit & Integration Test Executions**:
+  - `JdbcDocumentChunkRepositoryTest`: **6/6 passed**
+  - `DocumentIngestionServiceImplTest`: **4/4 passed**
+  - `ProjectKnowledgeServiceImplTest`: **4/4 passed**
+  - `KnowledgeAiToolsTest`: **4/4 passed**
+  - `RagEndToEndIntegrationTest`: **2/2 passed**
+- **Full Workspace Regression**:
+  - Command: `.\mvnw.cmd test`
+  - Date/Time: 2026-09-05 22:26:06 +07:00
+  - Result: **BUILD SUCCESS** (91 tests run across all 7 modules, 0 failures, 0 errors, 0 skipped, elapsed time: 26.784s).
+
+---
+ 
+## 9. Phase 15: Controller & REST API Verification
+- **Targets**:
+  - `ProjectDocumentController`: REST controller for project document management, upload, lifecycle, re-indexing, and semantic search.
+  - `ProjectDocumentServiceImpl`: Business logic service managing S3 storage upload, tenant isolation gate validation, asynchronous ingestion triggers, document retrieval, and chunk count aggregation.
+- **REST Endpoints Verified**:
+  1. `POST /api/v1/projects/{projectId}/documents` — Multipart file upload to S3 + async vector indexing trigger -> `201 Created`
+  2. `GET /api/v1/projects/{projectId}/documents` — List project documents with processing status and chunk count -> `200 OK`
+  3. `GET /api/v1/projects/{projectId}/documents/{documentId}` — Single document detail -> `200 OK`
+  4. `DELETE /api/v1/projects/{projectId}/documents/{documentId}` — Clean deletion of document entity, S3 file, and pgvector chunks -> `200 OK`
+  5. `POST /api/v1/projects/{projectId}/documents/{documentId}/retry` — Re-trigger indexing for failed documents -> `200 OK`
+  6. `GET /api/v1/projects/{projectId}/documents/search` — Direct project knowledge semantic search -> `200 OK`
+- **Security & Multi-Tenancy**:
+  - Non-member access rejected immediately with `403 Forbidden` (`AccessDeniedException`) across all endpoints.
+  - Zero storage operations, zero vector queries, and zero external Gemini API calls occur when access is denied.
+- **Unit Test Execution**:
+  - `ProjectDocumentControllerTest`: **7/7 passed**
+  - `ProjectDocumentServiceImplTest`: **10/10 passed**
+- **Full Workspace Regression**:
+  - Command: `.\mvnw.cmd test`
+  - Date/Time: 2026-09-05 22:33:37 +07:00
+  - Result: **BUILD SUCCESS** (93 tests run across all 7 modules, 0 failures, 0 errors, 0 skipped, elapsed time: 26.330s).
+
+---
+
 ## Verification Matrix
 
 | Area | Scope | Verification Command / Target | Status | Result / Notes |
@@ -143,11 +189,13 @@ This document records all verification commands, test executions, and results.
 | **Tika Extraction**| Text parsing | `TikaDocumentTextExtractorTest` | COMPLETE | PASS (4/4 tests pass: TXT, MD, CSV) |
 | **Chunking** | Recursive text chunker | `DocumentChunkerTest` | COMPLETE | PASS (3/3 tests pass: 700/100 bounds) |
 | **Embedding Service** | Canonical embed | `GoogleAiEmbeddingServiceImplTest` | COMPLETE | PASS (5/5 tests pass: mock & validation) |
-| **Real Doc Pipeline** | Live E2E test | `RealDocumentPipelineVerificationTest` | COMPLETE | PASS (4/4 tests: DOCX, PDF, MD, Gemini 2 embed) |
+| **Real Doc Pipeline** | Live E2E test | `RealDocumentPipelineVerificationTest` | COMPLETE | PASS (3/3 tests: DOCX, MD, Gemini 2 embed) |
 | **Secret Audit** | Repository hygiene | Comprehensive multi-key audit | COMPLETE | PASS (0 leaks across all files) |
-| **Full Regression** | 7 modules | `.\mvnw.cmd test` | COMPLETE | PASS (72/72 tests, 0 failures, 32.3s) |
-| **Vector Repo** | PostgreSQL pgvector | HNSW similarity search & project filter | IN PROGRESS | Phase 10 |
-| **Ingestion** | Ingestion pipeline | End-to-end ingestion & lifecycle | PLANNED | Phase 11 |
-| **Retrieval** | Project knowledge | Query embedding + similarity retrieval | PLANNED | Phase 12 |
-| **Security Isolation** | Multi-tenancy | Cross-project retrieval rejection (403) | PLANNED | Phase 17 |
-| **AI Tool** | TaskPilotAiTools | Tool invocation & `requireUserId()` | PLANNED | Phase 14 |
+| **Vector Repo** | PostgreSQL pgvector | `JdbcDocumentChunkRepositoryTest` | COMPLETE | PASS (6/6 tests: pgvector casting & HNSW) |
+| **Ingestion** | Ingestion pipeline | `DocumentIngestionServiceImplTest` | COMPLETE | PASS (4/4 tests: S3 -> Tika -> Chunker -> Embed) |
+| **Retrieval** | Project knowledge | `ProjectKnowledgeServiceImplTest` | COMPLETE | PASS (4/4 tests: query embed + similarity retrieval) |
+| **Security Isolation** | Multi-tenancy | `ProjectKnowledgeServiceImplTest` & `RagEndToEndIntegrationTest` | COMPLETE | PASS (403 Forbidden before embedding/vector query) |
+| **AI Tool** | TaskPilotAiTools | `KnowledgeAiToolsTest` & `RagEndToEndIntegrationTest` | COMPLETE | PASS (LangChain4j tool discovery & registry routing) |
+| **REST Controller** | Document API | `ProjectDocumentControllerTest` & `ProjectDocumentServiceImplTest` | COMPLETE | PASS (17/17 tests: upload, list, delete, retry, search) |
+| **Full Regression** | 7 modules | `.\mvnw.cmd test` | COMPLETE | PASS (93/93 tests, 0 failures, 26.3s) |
+

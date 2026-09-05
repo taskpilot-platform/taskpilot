@@ -18,4 +18,7 @@ public interface DocumentChunkRepository {
     List<DocumentChunk> findByDocumentId(Long documentId);
 
     long countByProjectId(Long projectId);
+
+    long countByDocumentId(Long documentId);
 }
+

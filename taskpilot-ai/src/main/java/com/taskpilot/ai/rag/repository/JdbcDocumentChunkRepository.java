@@ -159,6 +159,20 @@ public class JdbcDocumentChunkRepository implements DocumentChunkRepository {
         return count != null ? count : 0L;
     }
 
+    @Override
+    public long countByDocumentId(Long documentId) {
+        if (documentId == null) {
+            return 0L;
+        }
+        Long count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM document_chunks WHERE document_id = ?",
+                Long.class,
+                documentId
+        );
+        return count != null ? count : 0L;
+    }
+
+
     public static String toVectorString(float[] vector) {
         if (vector == null || vector.length == 0) {
             return "[]";

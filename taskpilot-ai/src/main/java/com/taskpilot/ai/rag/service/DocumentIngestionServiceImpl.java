@@ -8,6 +8,7 @@ import com.taskpilot.ai.rag.repository.DocumentRepository;
 import com.taskpilot.infrastructure.storage.StorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -115,6 +116,16 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
             documentRepository.save(document);
 
             throw new RuntimeException("Document ingestion failed: " + e.getMessage(), e);
+        }
+    }
+
+    @Async
+    @Override
+    public void ingestDocumentAsync(Long documentId) {
+        try {
+            ingestDocument(documentId);
+        } catch (Exception e) {
+            log.error("Async document ingestion failed for document id={}: {}", documentId, e.getMessage());
         }
     }
 
