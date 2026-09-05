@@ -67,4 +67,9 @@ public class ProjectModuleAdapter implements ProjectMemberPort, ProjectPort {
                                                                 ? project.getHeuristicMode().name()
                                                                 : null));
         }
+
+        @Override
+        public boolean isProjectMember(Long projectId, Long userId) {
+                return projectMemberRepository.existsByProjectIdAndUserId(projectId, userId);
+        }
 }
