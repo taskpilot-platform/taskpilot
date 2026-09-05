@@ -59,6 +59,14 @@
             <groupId>com.azure</groupId>
             <artifactId>azure-identity</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-parsers-standard-package</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>org.projectlombok</groupId>
