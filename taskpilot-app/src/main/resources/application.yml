@@ -104,6 +104,8 @@ ai:
     waterfall-max-attempts: ${AI_GEMINI_WATERFALL_MAX_ATTEMPTS:2}
     use-for-tools: ${AI_GEMINI_USE_FOR_TOOLS:true}
     timeout-seconds: ${AI_GEMINI_TIMEOUT_SECONDS:180}
+    embedding-model: ${AI_GEMINI_EMBEDDING_MODEL:gemini-embedding-2}
+    embedding-dimension: ${AI_GEMINI_EMBEDDING_DIMENSION:768}
 
   github:
     token: ${GITHUB_TOKEN:}
