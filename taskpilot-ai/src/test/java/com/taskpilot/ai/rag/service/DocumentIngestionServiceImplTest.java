@@ -123,7 +123,7 @@ class DocumentIngestionServiceImplTest {
 
         assertThat(doc.getStatus()).isEqualTo(DocumentStatus.FAILED);
         assertThat(doc.getErrorMessage()).contains("S3 connection timeout");
-        verify(documentChunkRepository, times(2)).deleteByDocumentId(2L);
+        verify(documentChunkRepository).deleteByDocumentId(2L);
     }
 
     @Test
@@ -153,4 +153,53 @@ class DocumentIngestionServiceImplTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Document not found: 999");
     }
+
+    @Test
+    @DisplayName("Verify recoverStuckDocuments transitions stale PROCESSING documents to FAILED with cleanup")
+    void testRecoverStuckDocuments() {
+        DocumentEntity stuck1 = DocumentEntity.builder()
+                .id(10L)
+                .projectId(1L)
+                .originalFilename("spec.pdf")
+                .status(DocumentStatus.PROCESSING)
+                .build();
+
+        DocumentEntity stuck2 = DocumentEntity.builder()
+                .id(11L)
+                .projectId(1L)
+                .originalFilename("notes.docx")
+                .status(DocumentStatus.PROCESSING)
+                .build();
+
+        when(documentRepository.findByStatusAndUpdatedAtBefore(eq(DocumentStatus.PROCESSING), any(java.time.Instant.class)))
+                .thenReturn(List.of(stuck1, stuck2));
+
+        int recoveredCount = ingestionService.recoverStuckDocuments(java.time.Duration.ofMinutes(15));
+
+        assertThat(recoveredCount).isEqualTo(2);
+
+        assertThat(stuck1.getStatus()).isEqualTo(DocumentStatus.FAILED);
+        assertThat(stuck1.getErrorMessage()).contains("Processing timed out or was interrupted by system restart. Please retry.");
+
+        assertThat(stuck2.getStatus()).isEqualTo(DocumentStatus.FAILED);
+        assertThat(stuck2.getErrorMessage()).contains("Processing timed out or was interrupted by system restart. Please retry.");
+
+        verify(documentChunkRepository).deleteByDocumentId(10L);
+        verify(documentChunkRepository).deleteByDocumentId(11L);
+        verify(documentRepository).save(stuck1);
+        verify(documentRepository).save(stuck2);
+    }
+
+    @Test
+    @DisplayName("Verify recoverStuckDocuments returns 0 when no stale documents found")
+    void testRecoverStuckDocumentsNoneFound() {
+        when(documentRepository.findByStatusAndUpdatedAtBefore(eq(DocumentStatus.PROCESSING), any(java.time.Instant.class)))
+                .thenReturn(List.of());
+
+        int recoveredCount = ingestionService.recoverStuckDocuments(java.time.Duration.ofMinutes(15));
+
+        assertThat(recoveredCount).isEqualTo(0);
+        verifyNoInteractions(documentChunkRepository);
+    }
 }
+

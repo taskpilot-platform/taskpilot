@@ -33,7 +33,7 @@ public class ToolCallingRegistryService {
     private Map<String, ToolMeta> toolMetadataRegistry;
 
     @PostConstruct
-    void init() {
+    public void init() {
         ToolService toolService = new ToolService();
         toolService.tools(List.of(taskPilotAiTools));
 

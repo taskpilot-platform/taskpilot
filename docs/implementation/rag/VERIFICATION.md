@@ -123,7 +123,7 @@ This document records all verification commands, test executions, and results.
 - **Semantic Ranking Results**:
   - Relevant Query: `"Mục tiêu xây dựng hệ thống quản lý dự án TaskPilot"` -> Top Match Chunk #4 with Cosine Similarity **0.7217**.
   - Unrelated Query: `"Công thức nướng bánh pizza hải sản phô mai tại nhà"` -> Cosine Similarity **0.4166**.
-  - Semantic discrimination: Clear margin of **+0.3051** for relevant project content.
+  - Baseline Separation: Clear margin of **+0.3051** for relevant project content in this test sample. Note: This serves as baseline verification for this test case rather than a comprehensive benchmark of overall retrieval quality (which requires a larger evaluation set of 20–50 queries measuring Recall@K, Precision@K, and MRR/nDCG).
 - **Full Workspace Regression**:
   - Command: `.\mvnw.cmd test`
   - Date/Time: 2026-09-05 22:12:36 +07:00
@@ -177,6 +177,21 @@ This document records all verification commands, test executions, and results.
 
 ---
 
+## 10. Phase 16: Production Hardening & Conversational AI Flow Verification
+- **Targets**:
+  - **Transaction Boundary Refactoring**: Refactored `DocumentIngestionServiceImpl` to eliminate holding database transactions during external S3 downloads, Apache Tika CPU parsing, recursive chunking, and Gemini embedding API calls. DB connections are only held during brief status/chunk persistence phases via `TransactionTemplate`.
+  - **Crash Recovery**: Implemented `recoverStuckDocuments(Duration)` which periodically scans for documents stuck in `PROCESSING` longer than 15 minutes and transitions them to `FAILED` with chunk cleanup. Safe retry design prevents duplicate ingestion storms upon server restart.
+  - **Conversational AI E2E Flow**: Implemented `RagConversationalFlowIntegrationTest` validating that `searchProjectKnowledge` is properly invoked by LangChain4j tool callers, rejects cross-tenant requests before embedding, and returns grounded chunk results or graceful fallbacks for irrelevant queries without hallucination.
+- **Unit & Integration Test Execution**:
+  - `DocumentIngestionServiceImplTest`: **6/6 passed** (including crash recovery transitions and cleanup)
+  - `RagConversationalFlowIntegrationTest`: **4/4 passed** (full tool execution, 403 enforcement, irrelevant query handling, and tool specification discovery)
+- **Full Workspace Regression**:
+  - Command: `.\mvnw.cmd test`
+  - Date/Time: 2026-09-05 22:57:19 +07:00
+  - Result: **BUILD SUCCESS** (99 tests run across all 7 modules, 0 failures, 0 errors, 0 skipped, elapsed time: 24.696s).
+
+---
+
 ## Verification Matrix
 
 | Area | Scope | Verification Command / Target | Status | Result / Notes |
@@ -192,10 +207,11 @@ This document records all verification commands, test executions, and results.
 | **Real Doc Pipeline** | Live E2E test | `RealDocumentPipelineVerificationTest` | COMPLETE | PASS (3/3 tests: DOCX, MD, Gemini 2 embed) |
 | **Secret Audit** | Repository hygiene | Comprehensive multi-key audit | COMPLETE | PASS (0 leaks across all files) |
 | **Vector Repo** | PostgreSQL pgvector | `JdbcDocumentChunkRepositoryTest` | COMPLETE | PASS (6/6 tests: pgvector casting & HNSW) |
-| **Ingestion** | Ingestion pipeline | `DocumentIngestionServiceImplTest` | COMPLETE | PASS (4/4 tests: S3 -> Tika -> Chunker -> Embed) |
+| **Ingestion Pipeline**| Non-blocking TX | `DocumentIngestionServiceImplTest` | COMPLETE | PASS (6/6 tests: fine-grained TX & crash recovery) |
 | **Retrieval** | Project knowledge | `ProjectKnowledgeServiceImplTest` | COMPLETE | PASS (4/4 tests: query embed + similarity retrieval) |
 | **Security Isolation** | Multi-tenancy | `ProjectKnowledgeServiceImplTest` & `RagEndToEndIntegrationTest` | COMPLETE | PASS (403 Forbidden before embedding/vector query) |
 | **AI Tool** | TaskPilotAiTools | `KnowledgeAiToolsTest` & `RagEndToEndIntegrationTest` | COMPLETE | PASS (LangChain4j tool discovery & registry routing) |
 | **REST Controller** | Document API | `ProjectDocumentControllerTest` & `ProjectDocumentServiceImplTest` | COMPLETE | PASS (17/17 tests: upload, list, delete, retry, search) |
-| **Full Regression** | 7 modules | `.\mvnw.cmd test` | COMPLETE | PASS (93/93 tests, 0 failures, 26.3s) |
+| **Conversational E2E**| AI tool calling | `RagConversationalFlowIntegrationTest` | COMPLETE | PASS (4/4 tests: grounded output, 403 guard, irrelevant fallback) |
+| **Full Regression** | 7 modules | `.\mvnw.cmd test` | COMPLETE | PASS (99/99 tests, 0 failures, 24.7s) |
 

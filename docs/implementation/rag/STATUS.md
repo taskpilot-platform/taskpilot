@@ -18,12 +18,13 @@
   - Phase 12 — Project knowledge retrieval (`ProjectKnowledgeService`, `ProjectKnowledgeServiceImpl` with strict tenant isolation)
   - Phase 13 & 14 — AI Tool integration (`KnowledgeAiTools`, `TaskPilotAiTools`, `ToolCallingRegistryService` exposing `searchProjectKnowledge`)
   - Phase 15 — Controller & REST API (`ProjectDocumentController`, `ProjectDocumentService`, multipart S3 upload, async indexing, document lifecycle, re-indexing, knowledge search)
+  - Phase 16 — Production Hardening & E2E Conversational Verification (Non-blocking transaction boundaries, 15m crash recovery with safe retry, and LangChain4j conversational tool flow integration test)
   - Secret Audit — 100% CLEAN: All 14 secret keys strictly read from environment/.env; 0 leaks across repository
 - **In progress**: None
 - **Blocked**: None
-- **Next action**: System ready for production deployment and frontend integration.
+- **Next action**: Audit completed. System ready for production deployment and frontend integration.
 - **Last verified command**: `.\mvnw.cmd test`
-- **Last verification result**: BUILD SUCCESS (93/93 tests run, 0 failures, 0 errors, elapsed time: 26.330s)
+- **Last verification result**: BUILD SUCCESS (99/99 tests run, 0 failures, 0 errors, elapsed time: 24.696s)
 
 ---
 

@@ -7,5 +7,8 @@ public interface DocumentIngestionService {
     void ingestDocumentAsync(Long documentId);
 
     void deleteDocument(Long documentId);
+
+    int recoverStuckDocuments(java.time.Duration staleThreshold);
 }
+
 

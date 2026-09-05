@@ -17,5 +17,8 @@ public interface DocumentRepository extends JpaRepository<DocumentEntity, Long> 
 
     Optional<DocumentEntity> findByIdAndProjectId(Long id, Long projectId);
 
+    List<DocumentEntity> findByStatusAndUpdatedAtBefore(DocumentStatus status, java.time.Instant before);
+
     void deleteByProjectId(Long projectId);
 }
+
