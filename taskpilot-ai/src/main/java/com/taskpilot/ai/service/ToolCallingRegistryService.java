@@ -64,6 +64,7 @@ public class ToolCallingRegistryService {
         register("deleteProjectLabel", Set.of(ToolScope.PROJECT), List.of("delete label", "xoa nhan"), 10, false);
         register("getUpcomingProjects", Set.of(ToolScope.PROJECT), List.of("upcoming", "sap den", "deadline"), 20, false);
         register("findProjectsDue", Set.of(ToolScope.PROJECT), List.of("due", "den han"), 20, false);
+        register("searchProjectKnowledge", Set.of(ToolScope.PROJECT, ToolScope.GENERAL), List.of("tai lieu", "tài liệu", "document", "docs", "knowledge", "rag", "kien thuc", "kiến thức", "quy dinh", "quy định", "specification", "yeu cau", "yêu cầu", "thiet ke", "thiết kế"), 55, false);
 
         // TASK
         register("getTaskDetails", Set.of(ToolScope.TASK), List.of("chi tiet", "detail", "cv", "nv"), 50, true);
