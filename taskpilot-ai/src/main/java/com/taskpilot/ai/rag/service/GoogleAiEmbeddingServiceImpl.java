@@ -6,6 +6,7 @@ import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.googleai.GoogleAiEmbeddingModel;
 import dev.langchain4j.model.output.Response;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -22,6 +23,7 @@ public class GoogleAiEmbeddingServiceImpl implements EmbeddingService {
     private final int dimension;
     private final String modelName;
 
+    @Autowired
     public GoogleAiEmbeddingServiceImpl(
             @Value("${ai.gemini.api-key:}") String apiKey,
             @Value("${ai.gemini.embedding-model:gemini-embedding-2}") String modelName,
