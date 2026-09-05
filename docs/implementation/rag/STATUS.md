@@ -19,12 +19,13 @@
   - Phase 13 & 14 — AI Tool integration (`KnowledgeAiTools`, `TaskPilotAiTools`, `ToolCallingRegistryService` exposing `searchProjectKnowledge`)
   - Phase 15 — Controller & REST API (`ProjectDocumentController`, `ProjectDocumentService`, multipart S3 upload, async indexing, document lifecycle, re-indexing, knowledge search)
   - Phase 16 — Production Hardening & E2E Conversational Verification (Non-blocking transaction boundaries, 15m crash recovery with safe retry, and LangChain4j conversational tool flow integration test)
+  - Phase 17 — Frontend UI & Browser UAT (`ProjectKnowledgeTab`, `DocumentUploadCard`, `DocumentList`, `KnowledgeSearchCard`, `KnowledgeHeader`, vitest 17/17 tests passing, manual UAT checklist)
   - Secret Audit — 100% CLEAN: All 14 secret keys strictly read from environment/.env; 0 leaks across repository
 - **In progress**: None
 - **Blocked**: None
-- **Next action**: Audit completed. System ready for production deployment and frontend integration.
-- **Last verified command**: `.\mvnw.cmd test`
-- **Last verification result**: BUILD SUCCESS (99/99 tests run, 0 failures, 0 errors, elapsed time: 24.696s)
+- **Next action**: Full manual browser UAT verification per `UAT.md`.
+- **Last verified command**: `npm run build && npm test` (Frontend: 17/17 passed) & `.\mvnw.cmd test` (Backend: 99/99 passed)
+- **Last verification result**: BUILD SUCCESS (Frontend: 17/17 passed, Backend: 99/99 passed)
 
 ---
 

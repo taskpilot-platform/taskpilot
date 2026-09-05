@@ -192,6 +192,20 @@ This document records all verification commands, test executions, and results.
 
 ---
 
+## 11. Phase 17: Frontend UI, Component Decomposition & Browser UAT Verification
+- **Targets**:
+  - **Component Decomposition**: Implemented modular, non-monolithic frontend architecture under `src/components/knowledge/` (`KnowledgeHeader`, `DocumentUploadCard`, `DocumentList`, `DocumentListItem`, `DocumentStatusBadge`, `DeleteDocumentDialog`, `KnowledgeSearchCard`, `SearchResultsList`, `SearchResultItem`, and container `ProjectKnowledgeTab`).
+  - **Hooks & Services**: Implemented `useProjectDocuments` (with smart auto-polling on `PROCESSING` status), `useDocumentUpload` (drag-and-drop & validation), and `useKnowledgeSearch`.
+  - **Workspace Integration**: Added the `Knowledge` tab directly to `ProjectWorkspacePage` with route `/projects/:projectId/knowledge`.
+  - **Automated Frontend Tests**: Added 5 Vitest / React Testing Library test suites covering status badge rendering, file upload validation, document list items, empty state, delete confirmation, retry trigger, semantic search results, and 403 Forbidden tenant isolation.
+- **Frontend Test & Build Execution**:
+  - Test Command: `npm test` -> **17/17 passed (5 test files, 100%)**
+  - Build Command: `npm run build` -> **BUILD SUCCESS (`tsc -b && vite build` passed with 0 errors)**
+- **Manual Browser UAT Checklist**:
+  - Comprehensive guide and test matrix documented in `docs/implementation/rag/UAT.md`.
+
+---
+
 ## Verification Matrix
 
 | Area | Scope | Verification Command / Target | Status | Result / Notes |
@@ -213,5 +227,8 @@ This document records all verification commands, test executions, and results.
 | **AI Tool** | TaskPilotAiTools | `KnowledgeAiToolsTest` & `RagEndToEndIntegrationTest` | COMPLETE | PASS (LangChain4j tool discovery & registry routing) |
 | **REST Controller** | Document API | `ProjectDocumentControllerTest` & `ProjectDocumentServiceImplTest` | COMPLETE | PASS (17/17 tests: upload, list, delete, retry, search) |
 | **Conversational E2E**| AI tool calling | `RagConversationalFlowIntegrationTest` | COMPLETE | PASS (4/4 tests: grounded output, 403 guard, irrelevant fallback) |
-| **Full Regression** | 7 modules | `.\mvnw.cmd test` | COMPLETE | PASS (99/99 tests, 0 failures, 24.7s) |
+| **Backend Regression**| 7 modules | `.\mvnw.cmd test` | COMPLETE | PASS (99/99 tests, 0 failures, 24.7s) |
+| **Frontend UI Suite** | Vitest / RTL | `npm test` in `taskpilot-frontend` | COMPLETE | PASS (17/17 tests, 5 suites, 100%) |
+| **Frontend Build** | TypeScript / Vite | `npm run build` in `taskpilot-frontend` | COMPLETE | PASS (`tsc -b && vite build` 0 errors) |
+| **Browser UAT** | Manual checklist | `docs/implementation/rag/UAT.md` | COMPLETE | Documented & ready for verification |
 
