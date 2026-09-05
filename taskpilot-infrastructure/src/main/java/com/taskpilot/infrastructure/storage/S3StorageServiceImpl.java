@@ -9,9 +9,12 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.util.UUID;
 
@@ -71,7 +74,53 @@ public class S3StorageServiceImpl implements StorageService {
     }
 
     @Override
+    public InputStream downloadFile(String fileUrlOrKey) throws IOException {
+        String key = extractKey(fileUrlOrKey);
+        try {
+            GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(key)
+                    .build();
+            return s3Client.getObject(getObjectRequest);
+        } catch (Exception e) {
+            log.error("Failed to download file from S3: bucket={}, key={}, error={}", bucketName, key, e.getMessage());
+            throw new IOException("Failed to download file from S3: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
     public void deleteFile(String fileUrl) {
-        // Implementation for delete if needed
+        if (fileUrl == null || fileUrl.isBlank()) {
+            return;
+        }
+        String key = extractKey(fileUrl);
+        try {
+            DeleteObjectRequest deleteObjectRequest = DeleteObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(key)
+                    .build();
+            s3Client.deleteObject(deleteObjectRequest);
+            log.info("Deleted file from S3: bucket={}, key={}", bucketName, key);
+        } catch (Exception e) {
+            log.error("Failed to delete file from S3: bucket={}, key={}, error={}", bucketName, key, e.getMessage());
+        }
+    }
+
+    private String extractKey(String fileUrlOrKey) {
+        if (fileUrlOrKey == null) {
+            return "";
+        }
+        String trimmed = fileUrlOrKey.trim();
+        if (publicUrlPrefix != null && trimmed.startsWith(publicUrlPrefix)) {
+            String sub = trimmed.substring(publicUrlPrefix.length());
+            if (sub.startsWith("/")) {
+                sub = sub.substring(1);
+            }
+            return sub;
+        }
+        if (trimmed.startsWith("/")) {
+            return trimmed.substring(1);
+        }
+        return trimmed;
     }
 }
