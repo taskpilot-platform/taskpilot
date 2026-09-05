@@ -1,6 +1,7 @@
 package com.taskpilot.infrastructure.storage;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -23,21 +24,21 @@ import java.util.UUID;
 public class S3StorageServiceImpl implements StorageService {
 
     private final S3Client s3Client;
-    private final String bucketName;
+    private final String defaultBucketName;
     private final String publicUrlPrefix;
 
+    @Autowired
     public S3StorageServiceImpl(
             @Value("${supabase.s3.endpoint}") String endpoint,
             @Value("${supabase.s3.access-key}") String accessKey,
             @Value("${supabase.s3.secret-key}") String secretKey,
             @Value("${supabase.s3.region}") String region,
-            @Value("${supabase.s3.bucket}") String bucketName,
-            @Value("${supabase.s3.public-url}") String publicUrlPrefix) {
-        
-        this.bucketName = bucketName;
+            @Value("${supabase.s3.bucket:avatars}") String bucketName,
+            @Value("${supabase.s3.public-url:}") String publicUrlPrefix) {
+
+        this.defaultBucketName = bucketName;
         this.publicUrlPrefix = publicUrlPrefix;
 
-        // Ensure endpoint ends without trailing slash if required, but URI.create handles it.
         AwsBasicCredentials credentials = AwsBasicCredentials.create(accessKey, secretKey);
         this.s3Client = S3Client.builder()
                 .endpointOverride(URI.create(endpoint))
@@ -48,65 +49,87 @@ public class S3StorageServiceImpl implements StorageService {
     }
 
     @Override
-    public String uploadFile(MultipartFile file, String folder) throws IOException {
+    public String uploadFile(MultipartFile file, String folder, String bucket) throws IOException {
+        String targetBucket = (bucket != null && !bucket.isBlank()) ? bucket : defaultBucketName;
+
         String originalFilename = file.getOriginalFilename();
-        String extension = "";
-        if (originalFilename != null && originalFilename.contains(".")) {
-            extension = originalFilename.substring(originalFilename.lastIndexOf("."));
-        }
-        
-        String key = (folder != null && !folder.isEmpty() ? folder + "/" : "") 
-                + UUID.randomUUID().toString() + extension;
+        String sanitizedFilename = (originalFilename != null && !originalFilename.isBlank())
+                ? originalFilename.replaceAll("[^a-zA-Z0-9._-]", "_")
+                : "file";
+
+        String key = (folder != null && !folder.isEmpty() ? folder + "/" : "")
+                + UUID.randomUUID() + "-" + sanitizedFilename;
 
         PutObjectRequest putObjectRequest = PutObjectRequest.builder()
-                .bucket(bucketName)
+                .bucket(targetBucket)
                 .key(key)
                 .contentType(file.getContentType())
                 .build();
 
         s3Client.putObject(putObjectRequest, RequestBody.fromInputStream(file.getInputStream(), file.getSize()));
+        log.info("Uploaded file to S3: bucket={}, key={}", targetBucket, key);
 
-        String url = publicUrlPrefix;
-        if (!url.endsWith("/")) {
-            url += "/";
+        if ("avatars".equalsIgnoreCase(targetBucket) && publicUrlPrefix != null && !publicUrlPrefix.isBlank()) {
+            String url = publicUrlPrefix.endsWith("/") ? publicUrlPrefix : publicUrlPrefix + "/";
+            return url + key;
         }
-        return url + key;
+
+        return key;
     }
 
     @Override
-    public InputStream downloadFile(String fileUrlOrKey) throws IOException {
-        String key = extractKey(fileUrlOrKey);
+    public String uploadFile(MultipartFile file, String folder) throws IOException {
+        return uploadFile(file, folder, defaultBucketName);
+    }
+
+    @Override
+    public InputStream downloadFile(String bucket, String key) throws IOException {
+        String targetBucket = (bucket != null && !bucket.isBlank()) ? bucket : defaultBucketName;
+        String cleanedKey = cleanKey(key);
+
         try {
             GetObjectRequest getObjectRequest = GetObjectRequest.builder()
-                    .bucket(bucketName)
-                    .key(key)
+                    .bucket(targetBucket)
+                    .key(cleanedKey)
                     .build();
             return s3Client.getObject(getObjectRequest);
         } catch (Exception e) {
-            log.error("Failed to download file from S3: bucket={}, key={}, error={}", bucketName, key, e.getMessage());
+            log.error("Failed to download file from S3: bucket={}, key={}, error={}", targetBucket, cleanedKey, e.getMessage());
             throw new IOException("Failed to download file from S3: " + e.getMessage(), e);
         }
     }
 
     @Override
-    public void deleteFile(String fileUrl) {
-        if (fileUrl == null || fileUrl.isBlank()) {
+    public InputStream downloadFile(String fileUrlOrKey) throws IOException {
+        return downloadFile(defaultBucketName, fileUrlOrKey);
+    }
+
+    @Override
+    public void deleteFile(String bucket, String key) {
+        if (key == null || key.isBlank()) {
             return;
         }
-        String key = extractKey(fileUrl);
+        String targetBucket = (bucket != null && !bucket.isBlank()) ? bucket : defaultBucketName;
+        String cleanedKey = cleanKey(key);
+
         try {
             DeleteObjectRequest deleteObjectRequest = DeleteObjectRequest.builder()
-                    .bucket(bucketName)
-                    .key(key)
+                    .bucket(targetBucket)
+                    .key(cleanedKey)
                     .build();
             s3Client.deleteObject(deleteObjectRequest);
-            log.info("Deleted file from S3: bucket={}, key={}", bucketName, key);
+            log.info("Deleted file from S3: bucket={}, key={}", targetBucket, cleanedKey);
         } catch (Exception e) {
-            log.error("Failed to delete file from S3: bucket={}, key={}, error={}", bucketName, key, e.getMessage());
+            log.error("Failed to delete file from S3: bucket={}, key={}, error={}", targetBucket, cleanedKey, e.getMessage());
         }
     }
 
-    private String extractKey(String fileUrlOrKey) {
+    @Override
+    public void deleteFile(String fileUrlOrKey) {
+        deleteFile(defaultBucketName, fileUrlOrKey);
+    }
+
+    private String cleanKey(String fileUrlOrKey) {
         if (fileUrlOrKey == null) {
             return "";
         }
@@ -118,8 +141,12 @@ public class S3StorageServiceImpl implements StorageService {
             }
             return sub;
         }
-        if (trimmed.startsWith("/")) {
-            return trimmed.substring(1);
+        if (trimmed.startsWith("/documents/")) {
+            trimmed = trimmed.substring("/documents/".length());
+        } else if (trimmed.startsWith("/avatars/")) {
+            trimmed = trimmed.substring("/avatars/".length());
+        } else if (trimmed.startsWith("/")) {
+            trimmed = trimmed.substring(1);
         }
         return trimmed;
     }

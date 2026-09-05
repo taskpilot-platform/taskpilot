@@ -98,7 +98,7 @@ class RagEndToEndIntegrationTest {
                 .build();
 
         when(documentRepository.findById(1L)).thenReturn(Optional.of(document));
-        when(storageService.downloadFile("projects/100/architecture.md"))
+        when(storageService.downloadFile("documents", "projects/100/architecture.md"))
                 .thenReturn(new ByteArrayInputStream("Architecture text".getBytes()));
         when(textExtractor.extractText(any(), eq("architecture.md"), eq("text/markdown")))
                 .thenReturn("TaskPilot RAG subsystem architecture with PostgreSQL pgvector and LangChain4j");

@@ -49,7 +49,7 @@ public class ProjectDocumentServiceImpl implements ProjectDocumentService {
 
         String storageKey;
         try {
-            storageKey = storageService.uploadFile(file, folder);
+            storageKey = storageService.uploadFile(file, folder, "documents");
         } catch (IOException e) {
             log.error("Failed to upload file to storage for project {}: {}", projectId, e.getMessage(), e);
             throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR.value(), "File storage upload failed: " + e.getMessage());

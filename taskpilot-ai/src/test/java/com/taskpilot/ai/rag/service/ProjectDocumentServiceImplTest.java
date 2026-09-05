@@ -71,8 +71,8 @@ class ProjectDocumentServiceImplTest {
         );
 
         when(projectMemberPort.isProjectMember(projectId, userId)).thenReturn(true);
-        when(storageService.uploadFile(eq(file), eq("projects/100/documents")))
-                .thenReturn("https://s3.example.com/projects/100/documents/arch.pdf");
+        when(storageService.uploadFile(eq(file), eq("projects/100/documents"), eq("documents")))
+                .thenReturn("projects/100/documents/arch.pdf");
 
         DocumentEntity savedEntity = DocumentEntity.builder()
                 .id(1L)

@@ -67,7 +67,7 @@ class DocumentIngestionServiceImplTest {
                 .build();
 
         when(documentRepository.findById(1L)).thenReturn(Optional.of(doc));
-        when(storageService.downloadFile("documents/spec.pdf"))
+        when(storageService.downloadFile("documents", "documents/spec.pdf"))
                 .thenReturn(new ByteArrayInputStream("mock stream".getBytes()));
         when(documentTextExtractor.extractText(any(), eq("spec.pdf"), eq("application/pdf")))
                 .thenReturn("Parsed specification document text");
@@ -114,7 +114,7 @@ class DocumentIngestionServiceImplTest {
                 .build();
 
         when(documentRepository.findById(2L)).thenReturn(Optional.of(doc));
-        when(storageService.downloadFile("documents/corrupt.docx"))
+        when(storageService.downloadFile("documents", "documents/corrupt.docx"))
                 .thenThrow(new IOException("S3 connection timeout"));
 
         assertThatThrownBy(() -> ingestionService.ingestDocument(2L))
@@ -127,11 +127,11 @@ class DocumentIngestionServiceImplTest {
     }
 
     @Test
-    @DisplayName("Verify deleteDocument removes vector chunks, S3 file, and database entity")
-    void testDeleteDocument() {
+    @DisplayName("Verify deleteDocument removes vector chunks, S3 file and document entity")
+    void testDeleteDocumentSuccess() {
         DocumentEntity doc = DocumentEntity.builder()
                 .id(3L)
-                .projectId(10L)
+                .projectId(100L)
                 .storageKey("documents/delete-me.txt")
                 .build();
 
@@ -140,7 +140,7 @@ class DocumentIngestionServiceImplTest {
         ingestionService.deleteDocument(3L);
 
         verify(documentChunkRepository).deleteByDocumentId(3L);
-        verify(storageService).deleteFile("documents/delete-me.txt");
+        verify(storageService).deleteFile("documents", "documents/delete-me.txt");
         verify(documentRepository).delete(doc);
     }
 

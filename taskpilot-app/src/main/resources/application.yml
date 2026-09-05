@@ -175,4 +175,5 @@ supabase:
     secret-key: ${SUPABASE_S3_SECRET_KEY:secret}
     region: ${SUPABASE_S3_REGION:ap-southeast-1}
     bucket: ${SUPABASE_S3_BUCKET:avatars}
+    document-bucket: ${SUPABASE_S3_DOCUMENT_BUCKET:documents}
     public-url: ${SUPABASE_S3_PUBLIC_URL:https://xxxx.supabase.co/storage/v1/object/public/avatars}

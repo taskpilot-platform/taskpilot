@@ -98,7 +98,7 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
 
             // 2a. Download from S3 storage
             String text;
-            try (InputStream stream = storageService.downloadFile(storageKey)) {
+            try (InputStream stream = storageService.downloadFile("documents", storageKey)) {
                 text = documentTextExtractor.extractText(stream, originalFilename, contentType);
             }
 
@@ -196,7 +196,7 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
 
             // 2. Delete file in S3
             try {
-                storageService.deleteFile(doc.getStorageKey());
+                storageService.deleteFile("documents", doc.getStorageKey());
             } catch (Exception e) {
                 log.warn("Failed to delete S3 file key={}: {}", doc.getStorageKey(), e.getMessage());
             }
