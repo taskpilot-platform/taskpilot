@@ -1,5 +1,6 @@
 package com.taskpilot.ai.rag.service;
 
+import com.taskpilot.ai.rag.config.RagEmbeddingProperties;
 import com.taskpilot.ai.rag.domain.DocumentChunk;
 import com.taskpilot.ai.rag.domain.DocumentStatus;
 import com.taskpilot.ai.rag.entity.DocumentEntity;
@@ -13,6 +14,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.PreparedStatementSetter;
+import org.springframework.jdbc.core.RowMapper;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -38,19 +42,26 @@ class DocumentIngestionServiceImplTest {
     @Mock
     private DocumentChunker documentChunker;
     @Mock
-    private EmbeddingService embeddingService;
+    private EmbeddingGateway embeddingGateway;
+    @Mock
+    private JdbcTemplate jdbcTemplate;
 
+    private RagEmbeddingProperties properties;
     private DocumentIngestionServiceImpl ingestionService;
 
     @BeforeEach
     void setUp() {
+        properties = new RagEmbeddingProperties();
         ingestionService = new DocumentIngestionServiceImpl(
                 documentRepository,
                 documentChunkRepository,
                 storageService,
                 documentTextExtractor,
                 documentChunker,
-                embeddingService
+                embeddingGateway,
+                properties,
+                jdbcTemplate,
+                null
         );
     }
 
@@ -63,7 +74,8 @@ class DocumentIngestionServiceImplTest {
                 .storageKey("documents/spec.pdf")
                 .originalFilename("spec.pdf")
                 .contentType("application/pdf")
-                .status(DocumentStatus.UPLOADING)
+                .status(DocumentStatus.PROCESSING)
+                .processingVersion(1)
                 .build();
 
         when(documentRepository.findById(1L)).thenReturn(Optional.of(doc));
@@ -78,13 +90,15 @@ class DocumentIngestionServiceImplTest {
         float[] vec2 = new float[768];
         vec1[0] = 0.5f;
         vec2[0] = 0.8f;
-        when(embeddingService.embedBatch(List.of("chunk 1", "chunk 2")))
+        when(embeddingGateway.embedForIngestion(List.of("chunk 1", "chunk 2")))
                 .thenReturn(List.of(vec1, vec2));
 
-        ingestionService.ingestDocument(1L);
+        // Mock JDBC finalization lock and update
+        when(jdbcTemplate.query(anyString(), any(PreparedStatementSetter.class), any(RowMapper.class)))
+                .thenReturn(List.of(1));
+        when(jdbcTemplate.update(anyString(), eq(1L), eq(1))).thenReturn(1);
 
-        assertThat(doc.getStatus()).isEqualTo(DocumentStatus.READY);
-        assertThat(doc.getErrorMessage()).isNull();
+        ingestionService.ingestDocument(1L, 1);
 
         verify(documentChunkRepository).deleteByDocumentId(1L);
 
@@ -102,28 +116,36 @@ class DocumentIngestionServiceImplTest {
     }
 
     @Test
-    @DisplayName("Verify ingestion failure transitions document to FAILED status and cleans up partial chunks")
-    void testIngestDocumentFailureHandling() throws IOException {
+    @DisplayName("Verify ingestion retryable failure triggers conditional retry wait SQL update")
+    void testIngestDocumentRetryableFailureHandling() throws IOException {
         DocumentEntity doc = DocumentEntity.builder()
                 .id(2L)
                 .projectId(10L)
                 .storageKey("documents/corrupt.docx")
                 .originalFilename("corrupt.docx")
                 .contentType("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-                .status(DocumentStatus.UPLOADING)
+                .status(DocumentStatus.PROCESSING)
+                .processingVersion(2)
+                .retryCount(1)
                 .build();
 
         when(documentRepository.findById(2L)).thenReturn(Optional.of(doc));
         when(storageService.downloadFile("documents", "documents/corrupt.docx"))
                 .thenThrow(new IOException("S3 connection timeout"));
 
-        assertThatThrownBy(() -> ingestionService.ingestDocument(2L))
-                .isInstanceOf(RuntimeException.class)
-                .hasMessageContaining("S3 connection timeout");
+        ingestionService.ingestDocument(2L, 2);
 
-        assertThat(doc.getStatus()).isEqualTo(DocumentStatus.FAILED);
-        assertThat(doc.getErrorMessage()).contains("S3 connection timeout");
-        verify(documentChunkRepository).deleteByDocumentId(2L);
+        // Verify conditional SQL update was executed for retry wait
+        verify(jdbcTemplate).update(
+                contains("RETRY_WAIT"),
+                eq(properties.getMaxRetryAttempts()),
+                eq(properties.getMaxRetryAttempts()),
+                eq(properties.getMaxRetryAttempts()),
+                anyLong(),
+                contains("S3 connection timeout"),
+                eq(2L),
+                eq(2)
+        );
     }
 
     @Test
@@ -149,57 +171,35 @@ class DocumentIngestionServiceImplTest {
     void testIngestDocumentNotFound() {
         when(documentRepository.findById(999L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> ingestionService.ingestDocument(999L))
+        assertThatThrownBy(() -> ingestionService.ingestDocument(999L, 1))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Document not found: 999");
     }
 
     @Test
-    @DisplayName("Verify recoverStuckDocuments transitions stale PROCESSING documents to FAILED with cleanup")
-    void testRecoverStuckDocuments() {
-        DocumentEntity stuck1 = DocumentEntity.builder()
-                .id(10L)
-                .projectId(1L)
-                .originalFilename("spec.pdf")
-                .status(DocumentStatus.PROCESSING)
-                .build();
+    @DisplayName("Verify isRetryable correctly classifies 429, timeouts, and quota exceptions")
+    void testErrorClassification() {
+        assertThat(DocumentIngestionServiceImpl.isRetryable(new QuotaExceededException("Quota exhausted"))).isTrue();
+        assertThat(DocumentIngestionServiceImpl.isRetryable(new IOException("Read timed out"))).isTrue();
+        assertThat(DocumentIngestionServiceImpl.isRetryable(new RuntimeException("HTTP 429 Too Many Requests"))).isTrue();
+        assertThat(DocumentIngestionServiceImpl.isRetryable(new RuntimeException("RESOURCE_EXHAUSTED"))).isTrue();
 
-        DocumentEntity stuck2 = DocumentEntity.builder()
-                .id(11L)
-                .projectId(1L)
-                .originalFilename("notes.docx")
-                .status(DocumentStatus.PROCESSING)
-                .build();
-
-        when(documentRepository.findByStatusAndUpdatedAtBefore(eq(DocumentStatus.PROCESSING), any(java.time.Instant.class)))
-                .thenReturn(List.of(stuck1, stuck2));
-
-        int recoveredCount = ingestionService.recoverStuckDocuments(java.time.Duration.ofMinutes(15));
-
-        assertThat(recoveredCount).isEqualTo(2);
-
-        assertThat(stuck1.getStatus()).isEqualTo(DocumentStatus.FAILED);
-        assertThat(stuck1.getErrorMessage()).contains("Processing timed out or was interrupted by system restart. Please retry.");
-
-        assertThat(stuck2.getStatus()).isEqualTo(DocumentStatus.FAILED);
-        assertThat(stuck2.getErrorMessage()).contains("Processing timed out or was interrupted by system restart. Please retry.");
-
-        verify(documentChunkRepository).deleteByDocumentId(10L);
-        verify(documentChunkRepository).deleteByDocumentId(11L);
-        verify(documentRepository).save(stuck1);
-        verify(documentRepository).save(stuck2);
+        // Permanent non-retryable
+        assertThat(DocumentIngestionServiceImpl.isRetryable(new IllegalStateException("Empty text"))).isFalse();
+        assertThat(DocumentIngestionServiceImpl.isRetryable(new IllegalArgumentException("Invalid format"))).isFalse();
     }
 
     @Test
-    @DisplayName("Verify recoverStuckDocuments returns 0 when no stale documents found")
-    void testRecoverStuckDocumentsNoneFound() {
-        when(documentRepository.findByStatusAndUpdatedAtBefore(eq(DocumentStatus.PROCESSING), any(java.time.Instant.class)))
-                .thenReturn(List.of());
+    @DisplayName("Verify calculateBackoff produces bounded exponential values")
+    void testCalculateBackoff() {
+        long backoff0 = DocumentIngestionServiceImpl.calculateBackoff(0, new IOException("timeout"));
+        assertThat(backoff0).isBetween(5L, 10L);
 
-        int recoveredCount = ingestionService.recoverStuckDocuments(java.time.Duration.ofMinutes(15));
+        long backoff3 = DocumentIngestionServiceImpl.calculateBackoff(3, new IOException("timeout"));
+        assertThat(backoff3).isBetween(40L, 50L);
 
-        assertThat(recoveredCount).isEqualTo(0);
-        verifyNoInteractions(documentChunkRepository);
+        // Capped at 300 seconds
+        long backoff10 = DocumentIngestionServiceImpl.calculateBackoff(10, new IOException("timeout"));
+        assertThat(backoff10).isLessThanOrEqualTo(300L);
     }
 }
-

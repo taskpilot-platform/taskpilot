@@ -81,7 +81,7 @@ class ProjectDocumentServiceImplTest {
                 .originalFilename("architecture.pdf")
                 .contentType("application/pdf")
                 .fileSize((long) file.getBytes().length)
-                .status(DocumentStatus.UPLOADING)
+                .status(DocumentStatus.QUEUED)
                 .createdBy(userId)
                 .createdAt(Instant.now())
                 .build();
@@ -95,9 +95,7 @@ class ProjectDocumentServiceImplTest {
         assertThat(response.id()).isEqualTo(1L);
         assertThat(response.projectId()).isEqualTo(projectId);
         assertThat(response.originalFilename()).isEqualTo("architecture.pdf");
-        assertThat(response.status()).isEqualTo(DocumentStatus.UPLOADING);
-
-        verify(documentIngestionService).ingestDocumentAsync(1L);
+        assertThat(response.status()).isEqualTo(DocumentStatus.QUEUED);
     }
 
     @Test
@@ -244,9 +242,8 @@ class ProjectDocumentServiceImplTest {
 
         DocumentResponse response = projectDocumentService.retryIngestion(projectId, documentId, userId);
 
-        assertThat(response.status()).isEqualTo(DocumentStatus.PROCESSING);
+        assertThat(response.status()).isEqualTo(DocumentStatus.QUEUED);
         assertThat(response.errorMessage()).isNull();
-        verify(documentIngestionService).ingestDocumentAsync(documentId);
     }
 
     @Test

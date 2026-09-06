@@ -27,7 +27,7 @@ class ProjectKnowledgeServiceImplTest {
     @Mock
     private DocumentChunkRepository documentChunkRepository;
     @Mock
-    private EmbeddingService embeddingService;
+    private EmbeddingGateway embeddingGateway;
 
     private ProjectKnowledgeServiceImpl service;
 
@@ -36,7 +36,7 @@ class ProjectKnowledgeServiceImplTest {
         service = new ProjectKnowledgeServiceImpl(
                 projectMemberPort,
                 documentChunkRepository,
-                embeddingService
+                embeddingGateway
         );
     }
 
@@ -49,7 +49,7 @@ class ProjectKnowledgeServiceImplTest {
 
         when(projectMemberPort.isProjectMember(projectId, userId)).thenReturn(true);
         float[] mockVector = new float[768];
-        when(embeddingService.embedText(query)).thenReturn(mockVector);
+        when(embeddingGateway.embedForSearch(query)).thenReturn(mockVector);
 
         ScoredChunk chunk = new ScoredChunk(1L, 100L, projectId, 0, "OAuth2 flow details", 0.88);
         when(documentChunkRepository.findNearestChunks(projectId, mockVector, 5, 0.50))
@@ -62,7 +62,7 @@ class ProjectKnowledgeServiceImplTest {
         assertThat(results.get(0).similarity()).isEqualTo(0.88);
 
         verify(projectMemberPort).isProjectMember(projectId, userId);
-        verify(embeddingService).embedText(query);
+        verify(embeddingGateway).embedForSearch(query);
         verify(documentChunkRepository).findNearestChunks(projectId, mockVector, 5, 0.50);
     }
 
@@ -80,7 +80,7 @@ class ProjectKnowledgeServiceImplTest {
                 .hasMessageContaining("not authorized to access knowledge for project 10");
 
         // CRITICAL: Ensure neither external embedding nor DB vector search was invoked!
-        verify(embeddingService, never()).embedText(anyString());
+        verify(embeddingGateway, never()).embedForSearch(anyString());
         verify(documentChunkRepository, never()).findNearestChunks(any(), any(), anyInt(), anyDouble());
     }
 
@@ -91,7 +91,7 @@ class ProjectKnowledgeServiceImplTest {
         Long userId = 5L;
 
         when(projectMemberPort.isProjectMember(projectId, userId)).thenReturn(true);
-        when(embeddingService.embedText("requirements")).thenReturn(new float[768]);
+        when(embeddingGateway.embedForSearch("requirements")).thenReturn(new float[768]);
 
         ScoredChunk chunk = new ScoredChunk(1L, 100L, projectId, 0, "Requirement 1: RAG PGVector", 0.91);
         when(documentChunkRepository.findNearestChunks(eq(projectId), any(), eq(3), anyDouble()))
@@ -111,7 +111,7 @@ class ProjectKnowledgeServiceImplTest {
         Long userId = 5L;
 
         when(projectMemberPort.isProjectMember(projectId, userId)).thenReturn(true);
-        when(embeddingService.embedText("unmatched query")).thenReturn(new float[768]);
+        when(embeddingGateway.embedForSearch("unmatched query")).thenReturn(new float[768]);
         when(documentChunkRepository.findNearestChunks(eq(projectId), any(), eq(5), anyDouble()))
                 .thenReturn(List.of());
 

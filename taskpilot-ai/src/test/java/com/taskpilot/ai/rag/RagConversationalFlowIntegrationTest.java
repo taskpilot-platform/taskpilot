@@ -2,7 +2,7 @@ package com.taskpilot.ai.rag;
 
 import com.taskpilot.ai.rag.domain.ScoredChunk;
 import com.taskpilot.ai.rag.repository.DocumentChunkRepository;
-import com.taskpilot.ai.rag.service.EmbeddingService;
+import com.taskpilot.ai.rag.service.EmbeddingGateway;
 import com.taskpilot.ai.rag.service.ProjectKnowledgeService;
 import com.taskpilot.ai.rag.service.ProjectKnowledgeServiceImpl;
 import com.taskpilot.ai.service.SmartRoutingService;
@@ -38,7 +38,7 @@ class RagConversationalFlowIntegrationTest {
     @Mock
     private DocumentChunkRepository documentChunkRepository;
     @Mock
-    private EmbeddingService embeddingService;
+    private EmbeddingGateway embeddingGateway;
     @Mock
     private SmartRoutingService smartRoutingService;
 
@@ -56,7 +56,7 @@ class RagConversationalFlowIntegrationTest {
         projectKnowledgeService = new ProjectKnowledgeServiceImpl(
                 projectMemberPort,
                 documentChunkRepository,
-                embeddingService
+                embeddingGateway
         );
 
         knowledgeAiTools = new KnowledgeAiTools(projectKnowledgeService);
@@ -89,7 +89,7 @@ class RagConversationalFlowIntegrationTest {
 
         float[] mockVector = new float[768];
         mockVector[0] = 0.85f;
-        when(embeddingService.embedText("deadline bàn giao")).thenReturn(mockVector);
+        when(embeddingGateway.embedForSearch("deadline bàn giao")).thenReturn(mockVector);
 
         ScoredChunk deadlineChunk = new ScoredChunk(
                 1L, 10L, PROJECT_ID, 0,
@@ -114,7 +114,7 @@ class RagConversationalFlowIntegrationTest {
         assertThat(toolResult).contains("0.89");
 
         verify(projectMemberPort).isProjectMember(PROJECT_ID, AUTHORIZED_USER_ID);
-        verify(embeddingService).embedText("deadline bàn giao");
+        verify(embeddingGateway).embedForSearch("deadline bàn giao");
         verify(documentChunkRepository).findNearestChunks(eq(PROJECT_ID), eq(mockVector), eq(5), anyDouble());
     }
 
@@ -142,7 +142,7 @@ class RagConversationalFlowIntegrationTest {
 
         // Security Invariant: Zero external embedding API calls and zero vector DB queries
 
-        verifyNoInteractions(embeddingService);
+        verifyNoInteractions(embeddingGateway);
         verifyNoInteractions(documentChunkRepository);
     }
 
@@ -157,7 +157,7 @@ class RagConversationalFlowIntegrationTest {
 
         float[] mockVector = new float[768];
         mockVector[10] = 0.1f;
-        when(embeddingService.embedText("công thức nướng bánh pizza")).thenReturn(mockVector);
+        when(embeddingGateway.embedForSearch("công thức nướng bánh pizza")).thenReturn(mockVector);
 
         // Vector repository returns empty list because all scores are below threshold minScore
         when(documentChunkRepository.findNearestChunks(eq(PROJECT_ID), eq(mockVector), eq(5), anyDouble()))

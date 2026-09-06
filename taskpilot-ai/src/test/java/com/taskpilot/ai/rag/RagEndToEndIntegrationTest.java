@@ -1,5 +1,6 @@
 package com.taskpilot.ai.rag;
 
+import com.taskpilot.ai.rag.config.RagEmbeddingProperties;
 import com.taskpilot.ai.rag.domain.DocumentChunk;
 import com.taskpilot.ai.rag.domain.DocumentStatus;
 import com.taskpilot.ai.rag.domain.ScoredChunk;
@@ -19,6 +20,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.PreparedStatementSetter;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.security.access.AccessDeniedException;
 
 import java.io.ByteArrayInputStream;
@@ -46,13 +50,16 @@ class RagEndToEndIntegrationTest {
     @Mock
     private DocumentChunker chunker;
     @Mock
-    private EmbeddingService embeddingService;
+    private EmbeddingGateway embeddingGateway;
     @Mock
     private ProjectMemberPort projectMemberPort;
+    @Mock
+    private JdbcTemplate jdbcTemplate;
 
     private DocumentIngestionService ingestionService;
     private ProjectKnowledgeService knowledgeService;
     private KnowledgeAiTools knowledgeAiTools;
+    private RagEmbeddingProperties properties;
 
     private static final Long PROJECT_ID = 100L;
     private static final Long MEMBER_USER_ID = 5L;
@@ -60,19 +67,24 @@ class RagEndToEndIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        properties = new RagEmbeddingProperties();
+
         ingestionService = new DocumentIngestionServiceImpl(
                 documentRepository,
                 documentChunkRepository,
                 storageService,
                 textExtractor,
                 chunker,
-                embeddingService
+                embeddingGateway,
+                properties,
+                jdbcTemplate,
+                null
         );
 
         knowledgeService = new ProjectKnowledgeServiceImpl(
                 projectMemberPort,
                 documentChunkRepository,
-                embeddingService
+                embeddingGateway
         );
 
         knowledgeAiTools = new KnowledgeAiTools(knowledgeService);
@@ -94,7 +106,8 @@ class RagEndToEndIntegrationTest {
                 .storageKey("projects/100/architecture.md")
                 .originalFilename("architecture.md")
                 .contentType("text/markdown")
-                .status(DocumentStatus.UPLOADING)
+                .status(DocumentStatus.PROCESSING)
+                .processingVersion(1)
                 .build();
 
         when(documentRepository.findById(1L)).thenReturn(Optional.of(document));
@@ -107,12 +120,16 @@ class RagEndToEndIntegrationTest {
 
         float[] sampleEmbedding = new float[768];
         sampleEmbedding[0] = 0.77f;
-        when(embeddingService.embedBatch(anyList())).thenReturn(List.of(sampleEmbedding));
+        when(embeddingGateway.embedForIngestion(anyList())).thenReturn(List.of(sampleEmbedding));
 
-        ingestionService.ingestDocument(1L);
+        // Mock JDBC finalization
+        when(jdbcTemplate.query(anyString(), any(PreparedStatementSetter.class), any(RowMapper.class)))
+                .thenReturn(List.of(1));
+        when(jdbcTemplate.update(anyString(), eq(1L), eq(1))).thenReturn(1);
 
-        // Verify document is READY and chunks saved
-        assertThat(document.getStatus()).isEqualTo(DocumentStatus.READY);
+        ingestionService.ingestDocument(1L, 1);
+
+        // Verify chunks were saved
         ArgumentCaptor<List<DocumentChunk>> chunksCaptor = ArgumentCaptor.forClass(List.class);
         verify(documentChunkRepository).saveAll(chunksCaptor.capture());
         assertThat(chunksCaptor.getValue()).hasSize(1);
@@ -120,7 +137,7 @@ class RagEndToEndIntegrationTest {
 
         // --- STEP 2: Retrieval via ProjectKnowledgeService ---
         when(projectMemberPort.isProjectMember(PROJECT_ID, MEMBER_USER_ID)).thenReturn(true);
-        when(embeddingService.embedText("How is RAG architected?")).thenReturn(sampleEmbedding);
+        when(embeddingGateway.embedForSearch("How is RAG architected?")).thenReturn(sampleEmbedding);
 
         ScoredChunk retrievedChunk = new ScoredChunk(
                 10L, 1L, PROJECT_ID, 0,
@@ -161,7 +178,7 @@ class RagEndToEndIntegrationTest {
                 .hasMessageContaining("not authorized to access knowledge for project " + PROJECT_ID);
 
         // Verify zero vector search or embedding took place
-        verify(embeddingService, never()).embedText(anyString());
+        verify(embeddingGateway, never()).embedForSearch(anyString());
         verify(documentChunkRepository, never()).findNearestChunks(any(), any(), anyInt(), anyDouble());
     }
 }
