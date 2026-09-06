@@ -40,6 +40,20 @@ public class DocumentEntity {
     @Column(name = "status", nullable = false, length = 32)
     private DocumentStatus status;
 
+    @Builder.Default
+    @Column(name = "processing_version", nullable = false)
+    private int processingVersion = 0;
+
+    @Column(name = "lease_until")
+    private Instant leaseUntil;
+
+    @Builder.Default
+    @Column(name = "retry_count", nullable = false)
+    private int retryCount = 0;
+
+    @Column(name = "next_attempt_at")
+    private Instant nextAttemptAt;
+
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 
