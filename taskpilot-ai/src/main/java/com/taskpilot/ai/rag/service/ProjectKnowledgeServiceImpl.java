@@ -17,7 +17,7 @@ public class ProjectKnowledgeServiceImpl implements ProjectKnowledgeService {
 
     private final ProjectMemberPort projectMemberPort;
     private final DocumentChunkRepository documentChunkRepository;
-    private final EmbeddingService embeddingService;
+    private final EmbeddingGateway embeddingGateway;
 
     @Override
     public List<ScoredChunk> searchKnowledge(Long projectId, Long userId, String query, int limit, double minScore) {
@@ -40,7 +40,7 @@ public class ProjectKnowledgeServiceImpl implements ProjectKnowledgeService {
         }
 
         int fetchLimit = limit > 0 ? limit : 5;
-        float[] queryVector = embeddingService.embedText(query.trim());
+        float[] queryVector = embeddingGateway.embedForSearch(query.trim());
 
         return documentChunkRepository.findNearestChunks(projectId, queryVector, fetchLimit, minScore);
     }

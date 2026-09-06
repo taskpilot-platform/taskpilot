@@ -40,9 +40,10 @@ public class GoogleAiEmbeddingServiceImpl implements EmbeddingService {
                     .apiKey(effectiveKey)
                     .modelName(modelName)
                     .outputDimensionality(dimension)
+                    .maxRetries(0)
                     .timeout(Duration.ofSeconds(60))
                     .build();
-            log.info("Initialized canonical GoogleAiEmbeddingModel: model={}, dimension={}", modelName, dimension);
+            log.info("Initialized canonical GoogleAiEmbeddingModel: model={}, dimension={}, maxRetries=0", modelName, dimension);
         }
     }
 
@@ -50,6 +51,10 @@ public class GoogleAiEmbeddingServiceImpl implements EmbeddingService {
         this.embeddingModel = embeddingModel;
         this.dimension = dimension;
         this.modelName = "gemini-embedding-2";
+    }
+
+    public EmbeddingModel getEmbeddingModel() {
+        return embeddingModel;
     }
 
     @Override
