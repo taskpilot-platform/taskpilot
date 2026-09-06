@@ -15,8 +15,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
@@ -62,15 +60,12 @@ public class ProjectDocumentServiceImpl implements ProjectDocumentService {
                 .originalFilename(originalFilename != null ? originalFilename : "unknown_file")
                 .contentType(file.getContentType())
                 .fileSize(file.getSize())
-                .status(DocumentStatus.UPLOADING)
+                .status(DocumentStatus.QUEUED)
                 .createdBy(userId)
                 .build();
 
         DocumentEntity saved = documentRepository.save(document);
-        log.info("Document registered id={}, project={}, file={}", saved.getId(), projectId, saved.getOriginalFilename());
-
-        // Asynchronously trigger ingestion pipeline after transaction commit (or immediately if autocommit)
-        triggerAsyncIngestion(saved.getId());
+        log.info("Document registered and queued id={}, project={}, file={}", saved.getId(), projectId, saved.getOriginalFilename());
 
         return toResponse(saved);
     }
@@ -111,12 +106,14 @@ public class ProjectDocumentServiceImpl implements ProjectDocumentService {
         DocumentEntity document = documentRepository.findByIdAndProjectId(documentId, projectId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Document not found: " + documentId));
 
-        document.setStatus(DocumentStatus.PROCESSING);
+        document.setStatus(DocumentStatus.QUEUED);
+        document.setRetryCount(0);
+        document.setNextAttemptAt(null);
+        document.setLeaseUntil(null);
         document.setErrorMessage(null);
         DocumentEntity updated = documentRepository.save(document);
 
-        triggerAsyncIngestion(documentId);
-        log.info("Re-ingestion triggered for document id={} in project={}", documentId, projectId);
+        log.info("Re-ingestion queued for document id={} in project={}", documentId, projectId);
 
         return toResponse(updated);
     }
@@ -125,19 +122,6 @@ public class ProjectDocumentServiceImpl implements ProjectDocumentService {
     public List<ScoredChunk> searchDocuments(Long projectId, String query, int limit, double minScore, Long userId) {
         validateProjectMembership(projectId, userId);
         return projectKnowledgeService.searchKnowledge(projectId, userId, query, limit, minScore);
-    }
-
-    private void triggerAsyncIngestion(Long documentId) {
-        if (TransactionSynchronizationManager.isActualTransactionActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    documentIngestionService.ingestDocumentAsync(documentId);
-                }
-            });
-        } else {
-            documentIngestionService.ingestDocumentAsync(documentId);
-        }
     }
 
 

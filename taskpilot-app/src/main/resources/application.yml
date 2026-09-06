@@ -12,6 +12,11 @@ spring:
   threads:
     virtual:
       enabled: true
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: ${SPRING_MULTIPART_MAX_FILE_SIZE:25MB}
+      max-request-size: ${SPRING_MULTIPART_MAX_REQUEST_SIZE:30MB}
   flyway:
     enabled: true
     baseline-on-migrate: true
@@ -177,3 +182,13 @@ supabase:
     bucket: ${SUPABASE_S3_BUCKET:avatars}
     document-bucket: ${SUPABASE_S3_DOCUMENT_BUCKET:documents}
     public-url: ${SUPABASE_S3_PUBLIC_URL:https://xxxx.supabase.co/storage/v1/object/public/avatars}
+
+rag:
+  embedding:
+    max-rpm: ${GEMINI_EMBEDDING_MAX_RPM:12}
+    interactive-headroom: 2
+    max-batch-size: 100
+    lease-duration-minutes: 10
+    max-retry-attempts: 5
+    poll-interval-ms: 3000
+

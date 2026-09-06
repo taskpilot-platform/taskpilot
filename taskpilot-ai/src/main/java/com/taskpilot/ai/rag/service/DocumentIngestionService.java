@@ -2,13 +2,13 @@ package com.taskpilot.ai.rag.service;
 
 public interface DocumentIngestionService {
 
-    void ingestDocument(Long documentId);
-
-    void ingestDocumentAsync(Long documentId);
+    /**
+     * Executes the ingestion pipeline for a claimed document with optimistic fencing check.
+     *
+     * @param documentId document ID to process
+     * @param claimedVersion the fencing token assigned during atomic claim
+     */
+    void ingestDocument(Long documentId, int claimedVersion);
 
     void deleteDocument(Long documentId);
-
-    int recoverStuckDocuments(java.time.Duration staleThreshold);
 }
-
-
