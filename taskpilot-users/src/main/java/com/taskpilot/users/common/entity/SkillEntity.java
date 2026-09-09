@@ -12,7 +12,8 @@ import lombok.*;
 @Builder
 public class SkillEntity {
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "skills_id_seq_gen")
+    @SequenceGenerator(name = "skills_id_seq_gen", sequenceName = "skills_id_seq", allocationSize = 1)
     private Long id;
 
     @Column(unique = true, nullable = false)

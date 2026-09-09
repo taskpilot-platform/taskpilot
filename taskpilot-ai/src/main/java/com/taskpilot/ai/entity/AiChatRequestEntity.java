@@ -8,6 +8,7 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.SequenceGenerator;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import lombok.AllArgsConstructor;
@@ -33,7 +34,8 @@ import java.time.Instant;
 public class AiChatRequestEntity {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "ai_chat_requests_id_seq_gen")
+    @SequenceGenerator(name = "ai_chat_requests_id_seq_gen", sequenceName = "ai_chat_requests_id_seq", allocationSize = 1)
     private Long id;
 
     @Column(name = "session_id", nullable = false)
