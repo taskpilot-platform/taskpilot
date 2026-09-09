@@ -3,7 +3,9 @@ package com.taskpilot.projects.common.repository;
 import java.util.List;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Meta;
 import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.NativeQuery;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -11,7 +13,7 @@ import org.springframework.stereotype.Repository;
 import com.taskpilot.projects.common.entity.TaskEntity;
 import com.taskpilot.projects.common.enums.TaskStatus;
 
-public interface TaskRepository extends JpaRepository<TaskEntity, Long> {
+public interface TaskRepository extends JpaRepository<TaskEntity, Long>, TaskSearchFragment {
     long countByProjectId(Long projectId);
 
     long countByProjectIdAndStatus(Long projectId, TaskStatus status);
@@ -30,11 +32,17 @@ public interface TaskRepository extends JpaRepository<TaskEntity, Long> {
 
     boolean existsBySprintIdAndStatusNot(Long sprintId, TaskStatus status);
 
+    @Meta(comment = "TaskRepository.clearSprintId")
     @Modifying
     @Query("UPDATE TaskEntity t SET t.sprintId = NULL WHERE t.sprintId = :sprintId")
     int clearSprintId(@Param("sprintId") Long sprintId);
 
+    @Meta(comment = "TaskRepository.deleteByProjectId")
     @Modifying
     @Query("DELETE FROM TaskEntity t WHERE t.projectId = :projectId")
     void deleteByProjectId(@Param("projectId") Long projectId);
+
+    @Meta(comment = "TaskRepository.countTasksByStatusNative")
+    @NativeQuery("SELECT status, COUNT(*) FROM tasks WHERE project_id = :projectId GROUP BY status")
+    List<Object[]> countTasksByStatusNative(@Param("projectId") Long projectId);
 }

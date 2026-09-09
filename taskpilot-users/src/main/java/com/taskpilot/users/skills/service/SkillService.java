@@ -78,9 +78,10 @@ public class SkillService {
             throw new BusinessException(HttpStatus.CONFLICT.value(), "User already has this skill");
         }
 
+        UserEntity userRef = userRepository.getReferenceById(user.getId());
         UserSkillEntity userSkill = UserSkillEntity.builder()
                 .id(id)
-                .user(user)
+                .user(userRef)
                 .skill(skill)
                 .level(request.level())
                 .build();
