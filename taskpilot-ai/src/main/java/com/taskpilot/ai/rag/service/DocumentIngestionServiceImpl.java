@@ -1,10 +1,11 @@
 package com.taskpilot.ai.rag.service;
 
 import com.taskpilot.ai.rag.config.RagEmbeddingProperties;
-import com.taskpilot.ai.rag.domain.DocumentChunk;
 import com.taskpilot.ai.rag.domain.DocumentStatus;
+import com.taskpilot.ai.rag.domain.StagedChunk;
 import com.taskpilot.ai.rag.entity.DocumentEntity;
 import com.taskpilot.ai.rag.repository.DocumentChunkRepository;
+import com.taskpilot.ai.rag.repository.DocumentChunkStagingRepository;
 import com.taskpilot.ai.rag.repository.DocumentRepository;
 import com.taskpilot.infrastructure.storage.StorageService;
 import lombok.extern.slf4j.Slf4j;
@@ -16,14 +17,13 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.InputStream;
-import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Executes document text extraction, deterministic chunking, and embedding generation
- * with optimistic fencing tokens (processing_version) and atomic SELECT FOR UPDATE finalization.
+ * with a staging architecture (document_chunk_staging) for resumable embedding,
+ * optimistic fencing tokens (processing_version), and atomic SELECT FOR UPDATE finalization.
  * Network I/O (S3 and Google Gemini) is executed outside database transactions.
  */
 @Slf4j
@@ -32,6 +32,7 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
 
     private final DocumentRepository documentRepository;
     private final DocumentChunkRepository documentChunkRepository;
+    private final DocumentChunkStagingRepository stagingRepository;
     private final StorageService storageService;
     private final DocumentTextExtractor documentTextExtractor;
     private final DocumentChunker documentChunker;
@@ -44,6 +45,7 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
     public DocumentIngestionServiceImpl(
             DocumentRepository documentRepository,
             DocumentChunkRepository documentChunkRepository,
+            DocumentChunkStagingRepository stagingRepository,
             StorageService storageService,
             DocumentTextExtractor documentTextExtractor,
             DocumentChunker documentChunker,
@@ -53,6 +55,7 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
             @Autowired(required = false) PlatformTransactionManager transactionManager) {
         this.documentRepository = documentRepository;
         this.documentChunkRepository = documentChunkRepository;
+        this.stagingRepository = stagingRepository;
         this.storageService = storageService;
         this.documentTextExtractor = documentTextExtractor;
         this.documentChunker = documentChunker;
@@ -79,58 +82,100 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
         }
 
         int currentRetryCount = document.getRetryCount();
+        Long projectId = document.getProjectId();
 
         try {
-            // 2. Non-transactional Network & CPU I/O - ZERO DB locks held
-            String storageKey = document.getStorageKey();
-            String originalFilename = document.getOriginalFilename();
-            String contentType = document.getContentType();
-            Long projectId = document.getProjectId();
+            // 2. Staging text chunks before embedding:
+            // Check if staging rows already exist for this (documentId, claimedVersion)
+            boolean stagingExists = stagingRepository.hasStagedChunks(documentId, claimedVersion);
 
-            // 2a. Download from S3
-            String text;
-            try (InputStream stream = storageService.downloadFile("documents", storageKey)) {
-                text = documentTextExtractor.extractText(stream, originalFilename, contentType);
+            if (!stagingExists) {
+                // Adopt existing staged chunks from prior versions/retries if available
+                int adopted = stagingRepository.adoptOlderStagedChunks(documentId, claimedVersion);
+                if (adopted > 0) {
+                    stagingExists = true;
+                    log.info("Resuming ingestion for doc {} v{}: adopted {} existing staged chunks",
+                            documentId, claimedVersion, adopted);
+                }
             }
 
-            if (text == null || text.isBlank()) {
-                throw new IllegalStateException("Extracted text from document is empty");
+            if (!stagingExists) {
+                // Delete any older staging rows from previous failed attempts/versions
+                stagingRepository.deleteOlderStagedChunks(documentId, claimedVersion);
+
+                String storageKey = document.getStorageKey();
+                String originalFilename = document.getOriginalFilename();
+                String contentType = document.getContentType();
+
+                // 2a. Download from S3
+                String text;
+                try (InputStream stream = storageService.downloadFile("documents", storageKey)) {
+                    text = documentTextExtractor.extractText(stream, originalFilename, contentType);
+                }
+
+                if (text == null || text.isBlank()) {
+                    throw new IllegalStateException("Extracted text from document is empty");
+                }
+
+                // 2b. Recursive deterministic chunking
+                List<String> textChunks = documentChunker.chunkText(text);
+                if (textChunks.isEmpty()) {
+                    throw new IllegalStateException("Chunker produced 0 chunks from extracted text");
+                }
+
+                // 2c. Persist all text chunks into staging with embedding = NULL before embedding
+                stagingRepository.stageInitialChunks(documentId, claimedVersion, textChunks);
+                log.info("Persisted {} text chunks to staging for doc {} v{}", textChunks.size(), documentId, claimedVersion);
+            } else {
+                log.info("Resuming ingestion for doc {} v{}: using existing staged text chunks", documentId, claimedVersion);
             }
 
-            // 2b. Recursive chunking
-            List<String> textChunks = documentChunker.chunkText(text);
-            if (textChunks.isEmpty()) {
-                throw new IllegalStateException("Chunker produced 0 chunks from extracted text");
+            // 3. Resumable embedding: query only remaining chunks where embedding IS NULL
+            List<StagedChunk> pendingChunks = stagingRepository.findPendingChunks(documentId, claimedVersion);
+            log.info("Remaining chunks to embed for doc {} v{}: {}", documentId, claimedVersion, pendingChunks.size());
+
+            if (!pendingChunks.isEmpty()) {
+                int maxBatchSize = properties.getMaxBatchSize();
+                for (int i = 0; i < pendingChunks.size(); i += maxBatchSize) {
+                    int end = Math.min(i + maxBatchSize, pendingChunks.size());
+                    List<StagedChunk> batch = pendingChunks.subList(i, end);
+                    List<String> batchTexts = batch.stream().map(StagedChunk::content).toList();
+
+                    // Canonical Gemini embedding generation via EmbeddingGateway (RPM + TPM admission + normal pacing)
+                    List<float[]> embeddings = embeddingGateway.embedForIngestion(batchTexts);
+                    if (embeddings.size() != batch.size()) {
+                        throw new IllegalStateException(String.format(
+                                "Mismatch between batch chunk count (%d) and embedding count (%d)",
+                                batch.size(), embeddings.size()));
+                    }
+
+                    // Update staging table immediately with the computed embeddings
+                    stagingRepository.updateEmbeddings(batch, embeddings);
+                    log.debug("Updated embeddings for batch of {} chunks in staging for doc {} v{}",
+                            batch.size(), documentId, claimedVersion);
+                }
             }
 
-            // 2c. Canonical Gemini embedding generation via EmbeddingGateway (shared RPM admission)
-            List<float[]> embeddings = embeddingGateway.embedForIngestion(textChunks);
-            if (embeddings.size() != textChunks.size()) {
+            // 4. Verify all chunks are embedded
+            long remainingPending = stagingRepository.countPendingChunks(documentId, claimedVersion);
+            if (remainingPending > 0) {
                 throw new IllegalStateException(String.format(
-                        "Mismatch between chunk count (%d) and embedding count (%d)",
-                        textChunks.size(), embeddings.size()));
+                        "Cannot finalize document %d: %d chunks still lack embeddings", documentId, remainingPending));
             }
 
-            // 2d. Build chunk domain models
-            Instant now = Instant.now();
-            List<DocumentChunk> chunks = new ArrayList<>(textChunks.size());
-            for (int i = 0; i < textChunks.size(); i++) {
-                chunks.add(new DocumentChunk(
-                        null,
-                        documentId,
-                        projectId,
-                        i,
-                        textChunks.get(i),
-                        embeddings.get(i),
-                        now
-                ));
-            }
-
-            // 3. Fenced Atomic Finalization: lock document row, verify version, persist chunks, mark READY
-            boolean finalized = finalizeFencedSuccess(documentId, claimedVersion, chunks);
+            // 5. Fenced Atomic Finalization: lock document row, verify version, copy staged to published, mark READY
+            boolean finalized = finalizeFencedSuccess(documentId, claimedVersion, projectId);
             if (!finalized) {
                 log.warn("Worker v{} for document {} was rejected during finalization (stale claim).",
                         claimedVersion, documentId);
+            } else {
+                // 6. Staging cleanup outside critical publication transaction
+                try {
+                    stagingRepository.deleteStagedChunks(documentId, claimedVersion);
+                } catch (Exception cleanupEx) {
+                    log.warn("Non-fatal error cleaning up staging chunks for doc {} v{}: {}",
+                            documentId, claimedVersion, cleanupEx.getMessage());
+                }
             }
 
         } catch (Exception e) {
@@ -149,33 +194,36 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
             log.info("Deleting document id={}, project={}, storageKey={}",
                     doc.getId(), doc.getProjectId(), doc.getStorageKey());
 
-            // 1. Delete vector chunks
+            // 1. Delete vector chunks from published index
             documentChunkRepository.deleteByDocumentId(documentId);
 
-            // 2. Delete file in S3
+            // 2. Delete any lingering staging rows
+            stagingRepository.deleteAllByDocumentId(documentId);
+
+            // 3. Delete file in S3
             try {
                 storageService.deleteFile("documents", doc.getStorageKey());
             } catch (Exception e) {
                 log.warn("Failed to delete S3 file key={}: {}", doc.getStorageKey(), e.getMessage());
             }
 
-            // 3. Delete document record
+            // 4. Delete document record
             documentRepository.delete(doc);
         });
     }
 
     /**
-     * Atomically locks document, verifies version hasn't changed, replaces chunks, and marks READY.
+     * Atomically locks document, verifies version hasn't changed, copies staged chunks to published, and marks READY.
      * Prevents TOCTOU races and zombie worker overwrite.
      */
-    boolean finalizeFencedSuccess(Long documentId, int claimedVersion, List<DocumentChunk> chunks) {
+    boolean finalizeFencedSuccess(Long documentId, int claimedVersion, Long projectId) {
         if (transactionTemplate == null) {
-            return performFinalizationSql(documentId, claimedVersion, chunks);
+            return performFinalizationSql(documentId, claimedVersion, projectId);
         }
-        return Boolean.TRUE.equals(transactionTemplate.execute(status -> performFinalizationSql(documentId, claimedVersion, chunks)));
+        return Boolean.TRUE.equals(transactionTemplate.execute(status -> performFinalizationSql(documentId, claimedVersion, projectId)));
     }
 
-    private boolean performFinalizationSql(Long documentId, int claimedVersion, List<DocumentChunk> chunks) {
+    private boolean performFinalizationSql(Long documentId, int claimedVersion, Long projectId) {
         // 1. SELECT FOR UPDATE to lock row and check active version
         List<Integer> versions = jdbcTemplate.query(
                 "SELECT processing_version FROM documents WHERE id = ? AND status = 'PROCESSING' FOR UPDATE",
@@ -189,9 +237,9 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
             return false;
         }
 
-        // 2. Replace chunks atomically while holding row lock
+        // 2. Replace published chunks atomically while holding row lock
         documentChunkRepository.deleteByDocumentId(documentId);
-        documentChunkRepository.saveAll(chunks);
+        int publishedCount = stagingRepository.copyStagedToPublished(documentId, claimedVersion, projectId);
 
         // 3. Mark document READY and reset retry/lease hygiene
         int updated = jdbcTemplate.update("""
@@ -209,6 +257,8 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
                 documentId, claimedVersion
         );
 
+        log.info("Published {} chunks and marked document {} READY for version {}",
+                publishedCount, documentId, claimedVersion);
         return updated > 0;
     }
 
@@ -250,8 +300,8 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
                         lease_until = NULL,
                         updated_at = NOW()
                     WHERE id = ?
-                      AND processing_version = ?
-                      AND status = 'PROCESSING'
+                        AND processing_version = ?
+                        AND status = 'PROCESSING'
                     """,
                     maxRetries, maxRetries, maxRetries, backoffSeconds, errorMsg, documentId, claimedVersion
             );
@@ -272,8 +322,8 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
                         error_message = ?,
                         updated_at = NOW()
                     WHERE id = ?
-                      AND processing_version = ?
-                      AND status = 'PROCESSING'
+                        AND processing_version = ?
+                        AND status = 'PROCESSING'
                     """,
                     errorMsg, documentId, claimedVersion
             );
@@ -284,6 +334,7 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
             } else {
                 try {
                     documentChunkRepository.deleteByDocumentId(documentId);
+                    stagingRepository.deleteAllByDocumentId(documentId);
                 } catch (Exception cleanupEx) {
                     log.warn("Failed to clean up chunks on permanent failure for doc {}: {}", documentId, cleanupEx.getMessage());
                 }
