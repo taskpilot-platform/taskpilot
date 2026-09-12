@@ -71,6 +71,7 @@ class ProjectDocumentServiceImplTest {
         );
 
         when(projectMemberPort.isProjectMember(projectId, userId)).thenReturn(true);
+        when(projectMemberPort.isProjectManager(projectId, userId)).thenReturn(true);
         when(storageService.uploadFile(eq(file), eq("projects/100/documents"), eq("documents")))
                 .thenReturn("projects/100/documents/arch.pdf");
 
@@ -96,6 +97,26 @@ class ProjectDocumentServiceImplTest {
         assertThat(response.projectId()).isEqualTo(projectId);
         assertThat(response.originalFilename()).isEqualTo("architecture.pdf");
         assertThat(response.status()).isEqualTo(DocumentStatus.QUEUED);
+    }
+
+    @Test
+    @DisplayName("Verify document upload throws 403 Forbidden when user is MEMBER but not MANAGER")
+    void testUploadDocumentForbiddenForNonManagerMember() {
+        Long projectId = 100L;
+        Long userId = 42L;
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "plan.md", "text/markdown", "# Plan".getBytes()
+        );
+
+        when(projectMemberPort.isProjectMember(projectId, userId)).thenReturn(true);
+        when(projectMemberPort.isProjectManager(projectId, userId)).thenReturn(false);
+
+        assertThatThrownBy(() -> projectDocumentService.uploadDocument(projectId, file, userId))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Only Project Manager can perform this action");
+
+        verifyNoInteractions(storageService);
+        verifyNoInteractions(documentRepository);
     }
 
     @Test
@@ -126,6 +147,7 @@ class ProjectDocumentServiceImplTest {
         MockMultipartFile emptyFile = new MockMultipartFile("file", "empty.txt", "text/plain", new byte[0]);
 
         when(projectMemberPort.isProjectMember(projectId, userId)).thenReturn(true);
+        when(projectMemberPort.isProjectManager(projectId, userId)).thenReturn(true);
 
         assertThatThrownBy(() -> projectDocumentService.uploadDocument(projectId, emptyFile, userId))
                 .isInstanceOf(BusinessException.class)
@@ -140,6 +162,7 @@ class ProjectDocumentServiceImplTest {
         MockMultipartFile exeFile = new MockMultipartFile("file", "malicious.exe", "application/octet-stream", "bad".getBytes());
 
         when(projectMemberPort.isProjectMember(projectId, userId)).thenReturn(true);
+        when(projectMemberPort.isProjectManager(projectId, userId)).thenReturn(true);
 
         assertThatThrownBy(() -> projectDocumentService.uploadDocument(projectId, exeFile, userId))
                 .isInstanceOf(BusinessException.class)
@@ -218,11 +241,29 @@ class ProjectDocumentServiceImplTest {
                 .id(documentId).projectId(projectId).originalFilename("doc.pdf").build();
 
         when(projectMemberPort.isProjectMember(projectId, userId)).thenReturn(true);
+        when(projectMemberPort.isProjectManager(projectId, userId)).thenReturn(true);
         when(documentRepository.findByIdAndProjectId(documentId, projectId)).thenReturn(Optional.of(doc));
 
         projectDocumentService.deleteDocument(projectId, documentId, userId);
 
         verify(documentIngestionService).deleteDocument(documentId);
+    }
+
+    @Test
+    @DisplayName("Verify delete document throws 403 Forbidden when user is MEMBER but not MANAGER")
+    void testDeleteDocumentForbiddenForNonManagerMember() {
+        Long projectId = 100L;
+        Long documentId = 1L;
+        Long userId = 42L;
+
+        when(projectMemberPort.isProjectMember(projectId, userId)).thenReturn(true);
+        when(projectMemberPort.isProjectManager(projectId, userId)).thenReturn(false);
+
+        assertThatThrownBy(() -> projectDocumentService.deleteDocument(projectId, documentId, userId))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Only Project Manager can perform this action");
+
+        verifyNoInteractions(documentIngestionService);
     }
 
     @Test
@@ -237,6 +278,7 @@ class ProjectDocumentServiceImplTest {
                 .status(DocumentStatus.FAILED).errorMessage("timeout").build();
 
         when(projectMemberPort.isProjectMember(projectId, userId)).thenReturn(true);
+        when(projectMemberPort.isProjectManager(projectId, userId)).thenReturn(true);
         when(documentRepository.findByIdAndProjectId(documentId, projectId)).thenReturn(Optional.of(doc));
         when(documentRepository.save(any(DocumentEntity.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -244,6 +286,21 @@ class ProjectDocumentServiceImplTest {
 
         assertThat(response.status()).isEqualTo(DocumentStatus.QUEUED);
         assertThat(response.errorMessage()).isNull();
+    }
+
+    @Test
+    @DisplayName("Verify retryIngestion throws 403 Forbidden when user is MEMBER but not MANAGER")
+    void testRetryIngestionForbiddenForNonManagerMember() {
+        Long projectId = 100L;
+        Long documentId = 1L;
+        Long userId = 42L;
+
+        when(projectMemberPort.isProjectMember(projectId, userId)).thenReturn(true);
+        when(projectMemberPort.isProjectManager(projectId, userId)).thenReturn(false);
+
+        assertThatThrownBy(() -> projectDocumentService.retryIngestion(projectId, documentId, userId))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Only Project Manager can perform this action");
     }
 
     @Test

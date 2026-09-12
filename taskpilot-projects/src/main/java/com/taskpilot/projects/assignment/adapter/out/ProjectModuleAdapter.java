@@ -12,6 +12,7 @@ import com.taskpilot.contracts.assignment.dto.ProjectDueDto;
 import com.taskpilot.contracts.assignment.dto.ProjectMemberDto;
 import com.taskpilot.contracts.assignment.port.out.ProjectMemberPort;
 import com.taskpilot.contracts.assignment.port.out.ProjectPort;
+import com.taskpilot.projects.common.enums.MemberRole;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
 import com.taskpilot.projects.common.repository.ProjectRepository;
 
@@ -71,5 +72,15 @@ public class ProjectModuleAdapter implements ProjectMemberPort, ProjectPort {
         @Override
         public boolean isProjectMember(Long projectId, Long userId) {
                 return projectMemberRepository.existsByProjectIdAndUserId(projectId, userId);
+        }
+
+        @Override
+        public boolean isProjectManager(Long projectId, Long userId) {
+                if (projectId == null || userId == null) {
+                        return false;
+                }
+                return projectMemberRepository.findByProjectIdAndUserId(projectId, userId)
+                                .map(member -> member.getRole() == MemberRole.MANAGER)
+                                .orElse(false);
         }
 }

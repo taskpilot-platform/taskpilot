@@ -40,7 +40,7 @@ public class ProjectDocumentServiceImpl implements ProjectDocumentService {
 
     @Override
     public DocumentResponse uploadDocument(Long projectId, MultipartFile file, Long userId) {
-        validateProjectMembership(projectId, userId);
+        validateProjectManager(projectId, userId);
         validateFile(file);
 
         String originalFilename = file.getOriginalFilename();
@@ -91,7 +91,7 @@ public class ProjectDocumentServiceImpl implements ProjectDocumentService {
     @Override
     @Transactional
     public void deleteDocument(Long projectId, Long documentId, Long userId) {
-        validateProjectMembership(projectId, userId);
+        validateProjectManager(projectId, userId);
         DocumentEntity document = documentRepository.findByIdAndProjectId(documentId, projectId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Document not found: " + documentId));
 
@@ -102,7 +102,7 @@ public class ProjectDocumentServiceImpl implements ProjectDocumentService {
     @Override
     @Transactional
     public DocumentResponse retryIngestion(Long projectId, Long documentId, Long userId) {
-        validateProjectMembership(projectId, userId);
+        validateProjectManager(projectId, userId);
         DocumentEntity document = documentRepository.findByIdAndProjectId(documentId, projectId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Document not found: " + documentId));
 
@@ -124,6 +124,13 @@ public class ProjectDocumentServiceImpl implements ProjectDocumentService {
         return projectKnowledgeService.searchKnowledge(projectId, userId, query, limit, minScore);
     }
 
+    private void validateProjectManager(Long projectId, Long userId) {
+        validateProjectMembership(projectId, userId);
+        if (!projectMemberPort.isProjectManager(projectId, userId)) {
+            log.warn("Manager action rejected: user {} is not MANAGER of project {}", userId, projectId);
+            throw new BusinessException(HttpStatus.FORBIDDEN.value(), "Only Project Manager can perform this action");
+        }
+    }
 
     private void validateProjectMembership(Long projectId, Long userId) {
         if (projectId == null || userId == null || !projectMemberPort.isProjectMember(projectId, userId)) {

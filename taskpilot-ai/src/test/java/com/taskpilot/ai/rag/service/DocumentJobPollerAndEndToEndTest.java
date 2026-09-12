@@ -105,6 +105,7 @@ class DocumentJobPollerAndEndToEndTest {
 
         // 1. Upload flow: produces QUEUED document
         when(projectMemberPort.isProjectMember(projectId, userId)).thenReturn(true);
+        when(projectMemberPort.isProjectManager(projectId, userId)).thenReturn(true);
         when(storageService.uploadFile(any(), eq("projects/100/documents"), eq("documents")))
                 .thenReturn("projects/100/documents/requirements.pdf");
 
