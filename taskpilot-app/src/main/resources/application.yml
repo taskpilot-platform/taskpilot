@@ -12,6 +12,11 @@ spring:
   threads:
     virtual:
       enabled: true
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: ${SPRING_MULTIPART_MAX_FILE_SIZE:25MB}
+      max-request-size: ${SPRING_MULTIPART_MAX_REQUEST_SIZE:30MB}
   flyway:
     enabled: true
     baseline-on-migrate: true
@@ -107,6 +112,8 @@ ai:
     waterfall-max-attempts: ${AI_GEMINI_WATERFALL_MAX_ATTEMPTS:2}
     use-for-tools: ${AI_GEMINI_USE_FOR_TOOLS:true}
     timeout-seconds: ${AI_GEMINI_TIMEOUT_SECONDS:180}
+    embedding-model: ${AI_GEMINI_EMBEDDING_MODEL:gemini-embedding-2}
+    embedding-dimension: ${AI_GEMINI_EMBEDDING_DIMENSION:768}
 
   github:
     token: ${GITHUB_TOKEN:}
@@ -176,4 +183,18 @@ supabase:
     secret-key: ${SUPABASE_S3_SECRET_KEY:secret}
     region: ${SUPABASE_S3_REGION:ap-southeast-1}
     bucket: ${SUPABASE_S3_BUCKET:avatars}
+    document-bucket: ${SUPABASE_S3_DOCUMENT_BUCKET:documents}
     public-url: ${SUPABASE_S3_PUBLIC_URL:https://xxxx.supabase.co/storage/v1/object/public/avatars}
+
+rag:
+  embedding:
+    max-rpm: ${GEMINI_EMBEDDING_MAX_RPM:80}
+    interactive-headroom: 10
+    max-tpm: ${GEMINI_EMBEDDING_MAX_TPM:30000}
+    interactive-tpm-headroom: 2000
+    pacing-wait-ms: 10000
+    max-batch-size: ${GEMINI_EMBEDDING_MAX_BATCH_SIZE:20}
+    lease-duration-minutes: 10
+    max-retry-attempts: 5
+    poll-interval-ms: 3000
+

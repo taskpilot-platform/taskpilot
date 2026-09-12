@@ -42,6 +42,8 @@ public class TaskPilotAiTools {
     private final SkillAiTools skillAiTools;
     private final AhpAssignmentAiTools ahpAssignmentAiTools;
     private final SystemAiTools systemAiTools;
+    @Nullable
+    private final KnowledgeAiTools knowledgeAiTools;
 
     @Autowired
     public TaskPilotAiTools(
@@ -52,7 +54,8 @@ public class TaskPilotAiTools {
             NotificationAiTools notificationAiTools,
             SkillAiTools skillAiTools,
             AhpAssignmentAiTools ahpAssignmentAiTools,
-            SystemAiTools systemAiTools) {
+            SystemAiTools systemAiTools,
+            @Autowired(required = false) @Nullable KnowledgeAiTools knowledgeAiTools) {
         this.projectAiTools = projectAiTools;
         this.taskAiTools = taskAiTools;
         this.sprintAiTools = sprintAiTools;
@@ -61,6 +64,20 @@ public class TaskPilotAiTools {
         this.skillAiTools = skillAiTools;
         this.ahpAssignmentAiTools = ahpAssignmentAiTools;
         this.systemAiTools = systemAiTools;
+        this.knowledgeAiTools = knowledgeAiTools;
+    }
+
+    public TaskPilotAiTools(
+            ProjectAiTools projectAiTools,
+            TaskAiTools taskAiTools,
+            SprintAiTools sprintAiTools,
+            CommentAiTools commentAiTools,
+            NotificationAiTools notificationAiTools,
+            SkillAiTools skillAiTools,
+            AhpAssignmentAiTools ahpAssignmentAiTools,
+            SystemAiTools systemAiTools) {
+        this(projectAiTools, taskAiTools, sprintAiTools, commentAiTools, notificationAiTools,
+                skillAiTools, ahpAssignmentAiTools, systemAiTools, null);
     }
 
     public TaskPilotAiTools(
@@ -641,5 +658,16 @@ public class TaskPilotAiTools {
         List<java.util.Map> chains
     ) {
         return systemAiTools.smartQuery(chains);
+    }
+
+    @Tool("Search project knowledge base and uploaded documentation (RAG). Retrieves relevant semantic excerpts from project documents (specifications, requirements, architecture, guidelines, etc.). User must be a member of the project.")
+    public Object searchProjectKnowledge(
+            @P("The project ID to search documentation within") Long projectId,
+            @P("The natural language search query or topic to search for in project documents") String query,
+            @P("Optional. Maximum number of document excerpts to return (default 5, max 10)") Integer limit) {
+        if (knowledgeAiTools == null) {
+            return "Project knowledge search tool is currently unavailable";
+        }
+        return knowledgeAiTools.searchProjectKnowledge(projectId, query, limit);
     }
 }

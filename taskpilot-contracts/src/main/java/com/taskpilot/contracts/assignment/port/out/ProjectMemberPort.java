@@ -13,4 +13,8 @@ public interface ProjectMemberPort {
     List<Double> findRecentPerformanceScores(Long userId, int limit);
 
     List<ProjectDueDto> findUpcomingProjects(Long userId, LocalDate fromDate, LocalDate toDate, int limit);
+
+    boolean isProjectMember(Long projectId, Long userId);
+
+    boolean isProjectManager(Long projectId, Long userId);
 }

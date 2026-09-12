@@ -55,7 +55,7 @@ public class ProfileService {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "File must be an image");
         }
         try {
-            String avatarUrl = storageService.uploadFile(file, "avatars");
+            String avatarUrl = storageService.uploadFile(file, "avatars", "avatars");
             UserEntity user = getCurrentUser();
             user.setAvatarUrl(avatarUrl);
             userRepository.save(user);
