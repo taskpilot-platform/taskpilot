@@ -1,33 +1,82 @@
-# TaskPilot RAG Key Architectural Decisions Quick Reference
+# TaskPilot RAG Architectural Decisions
 
-For full detail, refer to `docs/implementation/rag/DECISIONS.md`.
+This document records the finalized architectural decisions for TaskPilot RAG Ingestion and Retrieval.
 
-1. **Canonical Embedding Model**:
-   - Model: `gemini-embedding-2` (Google AI Gemini API).
-   - Dimensions: 768 (`vector(768)`).
-   - Distance Metric: Cosine Distance (`<=>`).
-   - Consistency Rule: Ingestion and query embedding must use the exact same model. No LLM fallbacks allowed for embeddings.
-   - Verification: Verified live with `GoogleAiEmbeddingModelVerificationTest` that `outputDimensionality = 768` returns 768-dim vectors.
+---
 
-2. **Database Schema & Multi-Tenancy**:
-   - PostgreSQL 15+ with `pgvector` extension.
-   - Tables: `documents` and `document_chunks`.
-   - `project_id` is denormalized directly on `document_chunks` and strictly set by the application layer from the parent document.
-   - Rationale: Provides a direct filtering predicate at the chunk/vector table and simplifies the authorization/data-isolation boundary.
-   - Indexing: B-tree on `project_id` + HNSW index on `embedding` with `vector_cosine_ops`.
+### Decision 1: TaskPilot Remains a Modular Monolith
+- **Context**: Document ingestion requires reliable queues, leasing, retries, and rate limiting.
+- **Decision**: Keep all components inside the existing modular monolith. Do NOT introduce Kafka, RabbitMQ, Redis, external distributed locks, or separate microservices.
+- **Rationale**: PostgreSQL provides atomic row locks (`FOR UPDATE SKIP LOCKED`), MVCC isolation, transactions, and vector indexing within a single deployment unit, avoiding unnecessary distributed operational complexity.
 
-3. **Repository Pattern**:
-   - Custom `DocumentChunkRepository` using JDBC/native PostgreSQL SQL.
-   - Avoid generic `PgVectorEmbeddingStore` to preserve domain models, transaction lifecycles, and direct tenant isolation.
+---
 
-4. **Storage Reuse**:
-   - Extend existing `StorageService` / `S3StorageServiceImpl` with `InputStream downloadFile(String key)` using existing AWS SDK v2 client.
+### Decision 2: PostgreSQL as Durable Queue & Coordination Layer
+- **Context**: Asynchronous ingestion needs durable persistence across application restarts.
+- **Decision**: Persist document states directly in the `documents` table using `status`, `processing_version`, `lease_until`, `retry_count`, and `next_attempt_at`. Claim jobs via `DocumentJobClaimer`.
+- **Rationale**: Do not rely on Spring `@Async` as a job queue. PostgreSQL provides durable FIFO ordering, zero message loss on restarts, and atomic concurrency safety.
 
-5. **Authorization Boundary**:
-   - Always validate `ProjectSecurityService.validateMember(projectId, userId)` before executing retrieval or document management.
-   - Reject with `403 Forbidden` before vector search or query embedding occurs.
-   - Chat sessions are user-scoped; never assume project authorization from chat ownership.
+---
 
-6. **Text Processing**:
-   - Extraction: Apache Tika for PDF, DOCX, TXT, MD, CSV.
-   - Chunking: Recursive text chunking using `DocumentSplitters.recursive(700, 100)` (700 characters max, 100 characters overlap) as an initial baseline heuristic.
+### Decision 3: Canonical 768-Dim Gemini Embedding (`gemini-embedding-2`)
+- **Context**: Need high-quality semantic retrieval while operating under free-tier / API quotas (100 RPM, 30,000 TPM).
+- **Decision**: Retain Google's `gemini-embedding-2` configured with `outputDimensionality = 768`. Do not switch to local `multilingual-e5-small` or local ONNX models merely to avoid API quotas.
+- **Rationale**: The 768-dim representation provides superior cross-lingual accuracy and semantic matching for software artifacts and technical documentation. Quota constraints are safely managed through admission control rather than degrading model quality.
+
+---
+
+### Decision 4: Staging Table Separation (`document_chunk_staging`)
+- **Context**: Ingestion of large documents can be interrupted by network timeouts or API quotas (429).
+- **Decision**: Separate active work in progress (`document_chunk_staging`) from the queryable RAG index (`document_chunks`).
+- **Rationale**: The published index must never contain partial or corrupted generations. By persisting chunk text into staging before invoking embedding APIs, resume operations do not need to re-download files from S3 or re-parse them with Apache Tika.
+
+---
+
+### Decision 5: `embedding IS NULL` as Source of Truth for Resumability
+- **Context**: Tracking completion of chunks in multi-batch ingestion.
+- **Decision**: Query `WHERE document_id = ? AND processing_version = ? AND embedding IS NULL` to identify remaining work.
+- **Rationale**: Do not use `last_chunk_index` as a coarse cursor. Explicit null checks at the database row level guarantee fine-grained, batch-level idempotence and survive arbitrary worker interruptions without duplicate API calls.
+
+---
+
+### Decision 6: Processing Version Fencing Against Zombie Workers
+- **Context**: If a worker node encounters a long garbage collection pause or network lag, its lease may expire and another worker may claim the document.
+- **Decision**: Each claim increments `processing_version`. All database updates (failure, retry, and publication) require `processing_version = claimedVersion`.
+- **Rationale**: Fencing guarantees that an expired or zombie worker cannot overwrite newer work or corrupt state transitions.
+
+---
+
+### Decision 7: Atomic Publication with Row-Lock Verification
+- **Context**: Publishing completed embeddings into the queryable `document_chunks` table.
+- **Decision**: Wrap publication in a single database transaction holding `SELECT ... FOR UPDATE` on `documents`, verify version and status, delete old chunks, copy staged chunks to published table via `INSERT INTO ... SELECT`, and update document status to `READY`.
+- **Rationale**: Readers querying RAG never observe partially ingested documents. Stale workers are rejected atomically.
+
+---
+
+### Decision 8: Distinction Between Normal Pacing and `RETRY_WAIT`
+- **Context**: Quota admission under 100 RPM and 30,000 TPM.
+- **Decision**:
+  - **Normal Pacing**: When the local sliding window limit is temporarily saturated, the worker waits up to `pacingWaitMs` (default: 5000ms) on a `Condition.await()`. The document remains in `PROCESSING` status.
+  - **RETRY_WAIT**: Transitioned only when the external provider actually returns HTTP 429, quota exhaustion, network timeouts, or when pacing times out. The worker thread is released immediately and `next_attempt_at` is scheduled with exponential backoff.
+- **Rationale**: Avoids state-machine thrashing and excessive database updates during normal ingestion rate limiting, while preventing worker threads from blocking during multi-minute backoffs.
+
+---
+
+### Decision 9: Dual-Dimension Admission Limiter (RPM + TPM) with Protected Headroom
+- **Context**: Gemini enforces both 100 RPM and 30,000 TPM.
+- **Decision**: Implement a sliding 60-second window in `RpmRateLimiter` that records `AdmissionRecord(timestamp, tokens)`. Heuristically estimate tokens (`chars / 3`). Reserve dedicated headroom (`interactiveHeadroom`, `interactiveTpmHeadroom`) for user-facing chat queries.
+- **Rationale**: Concurrency semaphores or fixed sleeps alone do not guard against token burst limits. Reserving headroom guarantees interactive search is never starved by background document ingestion.
+
+---
+
+### Decision 10: Provider SDK Retries Disabled (`maxRetries = 0`)
+- **Context**: LangChain4j `GoogleAiEmbeddingModel` defaults to internal retries with fixed delays.
+- **Decision**: Explicitly configure `GoogleAiEmbeddingModel.builder().maxRetries(0)`.
+- **Rationale**: Silent SDK-level retries undermine application-level quota admission and can cause rapid quota exhaustion. All retries must be governed by TaskPilot's state machine.
+
+---
+
+### Decision 11: Preserve HNSW Index without Drop/Recreate
+- **Context**: Batch inserting vectors into `document_chunks`.
+- **Decision**: Keep the existing PostgreSQL HNSW index on `document_chunks` intact. Do NOT drop and rebuild the index per document publication.
+- **Rationale**: Incremental HNSW insertions in PostgreSQL pgvector are fast and preserve continuous read availability for concurrently executing user queries.

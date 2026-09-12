@@ -5,74 +5,65 @@ description: Comprehensive workflow guide and rules for developing, maintaining,
 
 # TaskPilot RAG Subsystem Skill
 
-## 1. Overview & Architecture Rules
+## 1. Overview & Purpose
 
-TaskPilot RAG empowers the AI assistant to ground its reasoning on project-specific documents (specifications, requirements, tickets, documentation) while maintaining strict tenant isolation.
+TaskPilot RAG empowers the AI assistant to ground its reasoning on project-specific documents (specifications, requirements, tickets, documentation) while maintaining strict tenant isolation, quota safety, and ingestion reliability.
 
-### 1.1 Core Flow
+### When to Use This Skill
+- Working on document ingestion, parsing (Apache Tika), chunking, or embedding.
+- Modifying vector search, nearest-neighbor retrieval, or pgvector indexes.
+- Tuning or debugging rate limiting, embedding quota admission, or Gemini API limits.
+- Managing document states, queue claiming, lease fencing, or worker concurrency.
+- Verifying end-to-end RAG flows, security boundaries, or tenant data isolation.
+
+---
+
+## 2. High-Level Architecture & Invariants
+
+### 2.1 Modular Monolith Constraint
+- **Strict Invariant**: TaskPilot is a modular monolith. Do NOT introduce Kafka, RabbitMQ, Redis, external distributed locks, or microservice architectures.
+- PostgreSQL serves as the single durable queue, lease coordinator, staging area, and vector store.
+
+### 2.2 Core Ingestion Flow
 ```text
-User
-  ↓
-Existing AI / StreamingChatEngine (LLM: Gemini 3.8 Flash)
-  ↓
-TaskPilotAiTools (searchProjectKnowledge)
-  ↓
-ProjectKnowledgeService
-  ↓
-Authorization (validateMember - rejected with 403 before vector search or query embedding)
-  ↓
-EmbeddingService (canonical gemini-embedding-2 with outputDimensionality=768)
-  ↓
-DocumentChunkRepository
-  ↓
-PostgreSQL + pgvector (cosine distance HNSW)
-  ↓
-Relevant project-scoped chunks
-  ↓
-Tool result
-  ↓
-Existing LLM (Gemini 3.8 Flash)
+Client Upload -> S3 Storage -> DocumentEntity(QUEUED) -> DB Queue Commit -> HTTP 201
+                                                                    │
+Scheduled DocumentJobPoller (every 2s) ◄────────────────────────────┘
+         │
+DocumentJobClaimer (SELECT FOR UPDATE SKIP LOCKED, version++, lease_until, PROCESSING)
+         │
+DocumentIngestionService:
+  1. Check staging: if empty, download from S3, extract text (Apache Tika), chunk deterministically
+  2. Persist all text chunks into document_chunk_staging (embedding = NULL)
+  3. Query pending chunks: SELECT WHERE embedding IS NULL (enables zero-loss resumability)
+  4. Embed in batches (<= 100) via EmbeddingGateway (RPM + TPM sliding window + normal pacing)
+  5. Update embeddings in document_chunk_staging per batch
+  6. Fenced Atomic Finalization (SELECT FOR UPDATE, verify version, copy staging to document_chunks, mark READY)
+  7. Post-commit cleanup of staging records
 ```
 
-### 1.2 Non-Negotiable Architecture Rules
-1. **Project-Scoped Retrieval**: Every query and document chunk is explicitly bounded by `project_id`. Global searches without project scoping are strictly forbidden.
-2. **Authorization Before Retrieval**: Always validate that the authenticated user (`ToolExecutionContext.requireUserId()`) is an active member of `projectId` prior to executing any embedding or vector search. Reject with 403 before external embedding calls occur.
-3. **Session Independence**: Never infer project access from chat session ownership alone. Chat sessions are user-scoped; project authorization must be checked explicitly per request.
-4. **Canonical Embedding Model**: Ingestion and retrieval must use the exact same canonical embedding model and configuration (`gemini-embedding-2`, 768 dimensions). Never use LLM fallback models for embedding.
-5. **Document Lifecycle**: Documents must track state (`UPLOADING`, `PROCESSING`, `READY`, `FAILED`). Ingestion errors must set status to `FAILED` and clean up partial chunks.
-6. **Preserve Existing AI Infrastructure**: Do not modify `StreamingChatEngine`, `SmartRoutingService`, `TimeoutFallbackHandler`, or model fallback mechanisms. RAG is exposed cleanly through the existing tool architecture.
+### 2.3 Non-Negotiable Invariants
+1. **Tenant Isolation**: Every document chunk and vector query is bounded strictly by `project_id`. Global cross-project vector search is forbidden.
+2. **Authorization Gate**: Authenticated user (`userId`) membership in `projectId` must be verified via `ProjectMemberPort` before executing any external embedding API call or vector search (reject with 403).
+3. **Canonical 768-Dim Embedding**: Both ingestion and search must use canonical `gemini-embedding-2` configured with `outputDimensionality = 768`. Internal SDK retries are disabled (`maxRetries = 0`) to preserve application-level quota control.
+4. **Single Ingestion/Query Choke Point**: All embedding traffic passes through `EmbeddingGateway`, sharing rate and token quota admission (`RpmRateLimiter`).
+5. **Interactive Headroom Protection**: Interactive chat searches have priority and dedicated quota headroom (`interactiveHeadroom`, `interactiveTpmHeadroom`). Background ingestion cannot starve interactive queries.
+6. **Zero Zombie Corruption**: Every processing attempt increments `processing_version`. All database mutations, failure transitions, and atomic publications are fenced by `processing_version = claimedVersion`.
+7. **Staging Before Publishing**: Chunk text is persisted in `document_chunk_staging` before calling embedding APIs. Partial embedding progress survives crashes. `document_chunks` is only updated via atomic publication when all chunks are embedded.
+8. **Normal Pacing vs RETRY_WAIT**: Quota pacing waits inside the worker up to `pacingWaitMs`. Only genuine provider throttles (429, timeouts, quota exhaustion) yield the worker to `RETRY_WAIT` with exponential backoff.
 
 ---
 
-## 2. Coding Rules
+## 3. Engineering & Verification Workflow
 
-1. **Inspect Before Modifying**: Never write code assuming outdated dependencies or abstractions. Always check current pom.xml, entities, repositories, and ports.
-2. **Reuse Existing Storage**: Use `StorageService` / `S3StorageServiceImpl` backed by AWS SDK v2. Extend with `InputStream downloadFile(String key)`. Do not add secondary S3 SDKs.
-3. **Reuse Existing Security**: Reuse `ProjectSecurityService` / `ProjectMemberPort` for validating project membership.
-4. **Reuse LangChain4j Version**: Use the project's pinned LangChain4j version (`1.0.0` core / `1.0.0-beta5` integrations). Verify exact API compatibility before writing integration code.
-5. **No Unnecessary Dependencies**: Keep external additions focused (e.g. Apache Tika for parsing). Avoid adding heavyweight frameworks.
-6. **No Leaky Tool Implementations**: Keep `TaskPilotAiTools` a thin delegation layer. Business logic, parsing, chunking, and SQL belong in domain services and repositories.
+1. **Inspect Before Changing**: Check Flyway migrations, entities, repositories, and dependency versions before modifying code.
+2. **Database Migrations**: Add incremental, forward-only Flyway migrations (e.g., `V26__add_document_queue_support.sql`, `V27__create_document_chunk_staging.sql`). Never alter applied migrations.
+3. **Execution-First Verification**: Never claim a test passed without running it. Run focused tests, then module tests, then full regression suite.
+4. **Preserve Skill Consistency**: Update `references/architecture.md`, `references/decisions.md`, and `references/verification.md` whenever the system evolves.
 
 ---
 
-## 3. Database & pgvector Rules
-
-1. **Flyway Migrations**: All schema modifications must use versioned Flyway migration scripts (e.g., `V22__create_rag_tables.sql`).
-2. **Schema Invariant**: `document_chunks.project_id` must match `documents.project_id`. The application derives this strictly from the parent document.
-3. **Vector Dimension**: `vector(768)` corresponding to Google's canonical `gemini-embedding-2` configured with `outputDimensionality = 768`.
-4. **Indexes**:
-   - B-tree index on `project_id` for fast tenant filtering.
-   - HNSW index on `embedding` with `vector_cosine_ops` (`m = 16, ef_construction = 64`) for fast approximate nearest neighbor search.
-5. **Custom Repository over Generic Store**: Implement `DocumentChunkRepository` using native PostgreSQL JDBC/SQL (`CAST(:queryVector AS vector)` and cosine distance operator `<=>`) to preserve domain isolation and transaction consistency.
-
----
-
-## 4. Verification Rules
-
-1. **Execute Every Step**: **Never claim a verification step passed unless it was actually executed.**
-2. **Standard Checkpoints**:
-   - Compile/build: `.\mvnw.cmd test-compile`
-   - Unit tests: `.\mvnw.cmd test -pl taskpilot-ai`
-   - Security tests: Verify 403 Forbidden for non-members and cross-project queries.
-   - Full regression: `.\mvnw.cmd test`
-3. **Persistent Records**: Update `docs/implementation/rag/STATUS.md` and `docs/implementation/rag/VERIFICATION.md` after every phase with exact commands, timestamps, and outputs.
+## 4. References to Detailed Documentation
+- [Architecture Reference](references/architecture.md): Topology, state machine, job queue, leasing, fencing, staging, admission limiter, and atomic publication.
+- [Key Decisions Reference](references/decisions.md): Architectural decisions and rationales.
+- [Verification Protocol](references/verification.md): Exact test suites, database invariants, and verification commands.
