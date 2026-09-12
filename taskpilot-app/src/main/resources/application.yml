@@ -185,9 +185,12 @@ supabase:
 
 rag:
   embedding:
-    max-rpm: ${GEMINI_EMBEDDING_MAX_RPM:12}
-    interactive-headroom: 2
-    max-batch-size: 100
+    max-rpm: ${GEMINI_EMBEDDING_MAX_RPM:80}
+    interactive-headroom: 10
+    max-tpm: ${GEMINI_EMBEDDING_MAX_TPM:30000}
+    interactive-tpm-headroom: 2000
+    pacing-wait-ms: 10000
+    max-batch-size: ${GEMINI_EMBEDDING_MAX_BATCH_SIZE:20}
     lease-duration-minutes: 10
     max-retry-attempts: 5
     poll-interval-ms: 3000
