@@ -6,6 +6,8 @@ import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Meta;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -16,9 +18,11 @@ import com.taskpilot.projects.common.enums.MemberRole;
 
 public interface ProjectMemberRepository extends JpaRepository<ProjectMemberEntity, ProjectMemberId> {
 
+        @Meta(comment = "ProjectMemberRepository.findProjectsByUserId")
         @Query("SELECT pm FROM ProjectMemberEntity pm WHERE pm.userId = :userId")
         Page<ProjectMemberEntity> findProjectsByUserId(@Param("userId") Long userId, Pageable pageable);
 
+        @Meta(comment = "ProjectMemberRepository.findProjectsByUserIdAndKeyword")
         @Query("SELECT pm FROM ProjectMemberEntity pm WHERE pm.userId = :userId "
                         + "AND (:keyword IS NULL OR LOWER(pm.project.name) LIKE LOWER(CONCAT('%', :keyword, '%')) "
                         + "OR LOWER(pm.project.description) LIKE LOWER(CONCAT('%', :keyword, '%')))")
@@ -27,6 +31,7 @@ public interface ProjectMemberRepository extends JpaRepository<ProjectMemberEnti
                         @Param("keyword") String keyword,
                         Pageable pageable);
 
+        @Meta(comment = "ProjectMemberRepository.findMembers")
         @Query("SELECT pm FROM ProjectMemberEntity pm WHERE pm.projectId = :projectId")
         List<ProjectMemberEntity> findMembers(@Param("projectId") Long projectId);
 
@@ -38,14 +43,17 @@ public interface ProjectMemberRepository extends JpaRepository<ProjectMemberEnti
 
         boolean existsByProjectIdAndUserId(Long projectId, Long userId);
 
+        @Meta(comment = "ProjectMemberRepository.countMembers")
         @Query("SELECT COUNT(pm) FROM ProjectMemberEntity pm WHERE pm.projectId = :projectId")
         long countMembers(@Param("projectId") Long projectId);
 
+        @Meta(comment = "ProjectMemberRepository.findRecentPerformanceScores")
         @Query("SELECT pm.performanceScore FROM ProjectMemberEntity pm "
                         + "WHERE pm.userId = :userId AND pm.performanceScore IS NOT NULL "
                         + "ORDER BY pm.joinedAt DESC")
         List<Double> findRecentPerformanceScores(@Param("userId") Long userId, Pageable pageable);
 
+        @Meta(comment = "ProjectMemberRepository.findUpcomingProjects")
         @Query("SELECT pm.project FROM ProjectMemberEntity pm "
                         + "WHERE pm.userId = :userId "
                         + "AND pm.project.endDate IS NOT NULL "
@@ -57,7 +65,8 @@ public interface ProjectMemberRepository extends JpaRepository<ProjectMemberEnti
                         @Param("toDate") java.time.LocalDate toDate,
                         Pageable pageable);
 
-        @org.springframework.data.jpa.repository.Modifying
+        @Meta(comment = "ProjectMemberRepository.deleteByProjectId")
+        @Modifying
         @Query("DELETE FROM ProjectMemberEntity pm WHERE pm.projectId = :projectId")
         void deleteByProjectId(@Param("projectId") Long projectId);
 }

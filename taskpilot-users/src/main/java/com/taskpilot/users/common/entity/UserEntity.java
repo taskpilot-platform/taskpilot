@@ -16,6 +16,11 @@ import org.hibernate.type.SqlTypes;
 @AllArgsConstructor
 @Builder
 public class UserEntity extends BaseEntity {
+    @Id
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "users_id_seq_gen")
+    @SequenceGenerator(name = "users_id_seq_gen", sequenceName = "users_id_seq", allocationSize = 1)
+    private Long id;
+
     @Column(unique = true, nullable = false)
     private String email;
 

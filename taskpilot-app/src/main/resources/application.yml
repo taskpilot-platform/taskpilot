@@ -46,6 +46,9 @@ spring:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         jdbc:
           "[time_zone]": UTC
+          batch_size: ${HIBERNATE_BATCH_SIZE:25}
+        order_inserts: true
+        order_updates: true
 
   data:
     redis:

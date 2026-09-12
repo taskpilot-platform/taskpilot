@@ -2,6 +2,7 @@ package com.taskpilot.users.common.repository;
 
 import com.taskpilot.users.common.entity.SystemSettingEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Meta;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -10,6 +11,7 @@ import java.util.List;
 
 public interface SystemSettingRepository extends JpaRepository<SystemSettingEntity, String> {
 
+      @Meta(comment = "SystemSettingRepository.findByKeyword")
       @Query("SELECT s FROM SystemSettingEntity s WHERE " +
                   "(:keyword IS NULL OR LOWER(s.keyName) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
                   "OR LOWER(s.description) LIKE LOWER(CONCAT('%', :keyword, '%')))")

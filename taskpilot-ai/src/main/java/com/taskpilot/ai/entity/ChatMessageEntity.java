@@ -19,7 +19,8 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 @EntityListeners(AuditingEntityListener.class)
 public class ChatMessageEntity {
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "chat_messages_id_seq_gen")
+    @SequenceGenerator(name = "chat_messages_id_seq_gen", sequenceName = "chat_messages_id_seq", allocationSize = 1)
     private Long id;
 
     @CreatedDate

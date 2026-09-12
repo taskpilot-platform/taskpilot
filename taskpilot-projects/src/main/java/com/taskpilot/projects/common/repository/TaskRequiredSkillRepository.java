@@ -4,6 +4,7 @@ import java.util.Collection;
 import java.util.List;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Meta;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -16,6 +17,7 @@ public interface TaskRequiredSkillRepository
 
     void deleteByTaskId(Long taskId);
 
+    @Meta(comment = "TaskRequiredSkillRepository.findByTaskIdIn")
     @Query("SELECT t FROM TaskRequiredSkillEntity t WHERE t.taskId IN :taskIds")
     List<TaskRequiredSkillEntity> findByTaskIdIn(@Param("taskIds") Collection<Long> taskIds);
 }

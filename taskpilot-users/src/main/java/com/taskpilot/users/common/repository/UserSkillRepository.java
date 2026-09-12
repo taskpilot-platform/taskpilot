@@ -3,6 +3,7 @@ package com.taskpilot.users.common.repository;
 import com.taskpilot.users.common.entity.UserSkillEntity;
 import com.taskpilot.users.common.entity.UserSkillId;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Meta;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -18,6 +19,7 @@ public interface UserSkillRepository extends JpaRepository<UserSkillEntity, User
      * Eager fetch skills (JOIN FETCH) for AI AutoAssignment scoring — avoids
      * LazyInitializationException
      */
+    @Meta(comment = "UserSkillRepository.findByIdUserIdWithSkill")
     @Query("SELECT us FROM UserSkillEntity us JOIN FETCH us.skill WHERE us.id.userId = :userId")
     List<UserSkillEntity> findByIdUserIdWithSkill(@Param("userId") Long userId);
 }

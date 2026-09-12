@@ -6,6 +6,10 @@ import com.taskpilot.infrastructure.base.BaseEntity;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.SequenceGenerator;
 import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -21,6 +25,11 @@ import lombok.Setter;
 @AllArgsConstructor
 @Builder
 public class CommentEntity extends BaseEntity {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "comments_id_seq_gen")
+    @SequenceGenerator(name = "comments_id_seq_gen", sequenceName = "comments_id_seq", allocationSize = 1)
+    private Long id;
 
     @Column(name = "task_id", nullable = false)
     private Long taskId;

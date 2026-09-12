@@ -19,7 +19,8 @@ import java.time.Instant;
 public class AiLogEntity {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "ai_logs_id_seq_gen")
+    @SequenceGenerator(name = "ai_logs_id_seq_gen", sequenceName = "ai_logs_id_seq", allocationSize = 1)
     private Long id;
 
     @CreatedDate

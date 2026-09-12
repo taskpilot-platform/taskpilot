@@ -7,6 +7,7 @@ import java.util.Set;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Meta;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -19,9 +20,11 @@ public interface CommentRepository extends JpaRepository<CommentEntity, Long> {
 
   Optional<CommentEntity> findByIdAndTaskId(Long id, Long taskId);
 
+  @Meta(comment = "CommentRepository.findParticipantUserIdsByTaskId")
   @Query("SELECT DISTINCT c.userId FROM CommentEntity c WHERE c.taskId = :taskId")
   Set<Long> findParticipantUserIdsByTaskId(@Param("taskId") Long taskId);
 
+  @Meta(comment = "CommentRepository.searchAccessibleComments")
   @Query(value = """
       SELECT c FROM CommentEntity c
       JOIN TaskEntity t ON t.id = c.taskId

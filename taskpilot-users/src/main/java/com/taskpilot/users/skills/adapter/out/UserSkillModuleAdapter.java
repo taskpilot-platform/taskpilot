@@ -119,8 +119,9 @@ public class UserSkillModuleAdapter implements SkillPort {
     @Override
     @Transactional
     public UserSkillSummaryDto addMySkill(Long skillId, Integer level, Long requesterUserId) {
-        UserEntity user = userRepository.findById(requesterUserId)
-                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
+        if (!userRepository.existsById(requesterUserId)) {
+            throw new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found");
+        }
         SkillEntity skill = skillRepository.findByIdAndIsActiveTrue(skillId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(),
                         "Skill does not exist in system directory"));
@@ -128,6 +129,7 @@ public class UserSkillModuleAdapter implements SkillPort {
         if (userSkillRepository.existsById(id)) {
             throw new BusinessException(HttpStatus.CONFLICT.value(), "User already has this skill");
         }
+        UserEntity user = userRepository.getReferenceById(requesterUserId);
         UserSkillEntity userSkill = UserSkillEntity.builder()
                 .id(id)
                 .user(user)

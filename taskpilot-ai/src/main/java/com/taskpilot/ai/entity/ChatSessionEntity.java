@@ -10,6 +10,11 @@ import lombok.*;
 @AllArgsConstructor
 @Builder
 public class ChatSessionEntity extends BaseEntity {
+    @Id
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "chat_sessions_id_seq_gen")
+    @SequenceGenerator(name = "chat_sessions_id_seq_gen", sequenceName = "chat_sessions_id_seq", allocationSize = 1)
+    private Long id;
+
     @Column(name = "user_id", nullable = false)
     private Long userId;
     @Column(name = "title")
