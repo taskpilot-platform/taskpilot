@@ -32,7 +32,7 @@ class EmbeddingGatewayAndBatchTest {
 
     @BeforeEach
     void setUp() {
-        properties = new RagEmbeddingProperties(12, 2, 100, 10, 5, 3000L);
+        properties = new RagEmbeddingProperties(500, 10, 100, 10, 5, 3000L);
         rateLimiter = new RpmRateLimiter(properties);
         embeddingGateway = new EmbeddingGateway(embeddingService, rateLimiter, properties);
     }
@@ -104,40 +104,45 @@ class EmbeddingGatewayAndBatchTest {
     @DisplayName("Shared RPM Invariant: Background quota is capped at (maxRpm - interactiveHeadroom) while interactive can use headroom")
     void testSharedRpmQuotaAccounting() {
         // Properties: maxRpm = 12, interactiveHeadroom = 2 -> backgroundLimit = 10
-        rateLimiter.reset();
+        RagEmbeddingProperties quotaProps = new RagEmbeddingProperties(12, 2, 100, 10, 5, 3000L);
+        RpmRateLimiter limiter = new RpmRateLimiter(quotaProps);
 
         // 10 background requests succeed
         for (int i = 0; i < 10; i++) {
-            boolean acquired = rateLimiter.tryAcquireBackground();
+            boolean acquired = limiter.tryAcquireBackground();
             assertThat(acquired).as("Background request %d should be admitted", i + 1).isTrue();
         }
 
         // 11th background request is REJECTED because interactive headroom (2 slots) is reserved
-        boolean backgroundBlocked = rateLimiter.tryAcquireBackground();
+        boolean backgroundBlocked = limiter.tryAcquireBackground();
         assertThat(backgroundBlocked).as("11th background request must be rejected to protect headroom").isFalse();
 
         // But INTERACTIVE search can still be admitted into the reserved headroom!
-        boolean interactive1 = rateLimiter.tryAcquireInteractive();
+        boolean interactive1 = limiter.tryAcquireInteractive();
         assertThat(interactive1).as("Interactive request 1 into headroom must succeed").isTrue();
 
-        boolean interactive2 = rateLimiter.tryAcquireInteractive();
+        boolean interactive2 = limiter.tryAcquireInteractive();
         assertThat(interactive2).as("Interactive request 2 into headroom must succeed").isTrue();
 
         // Now total 12 RPM reached: both background and interactive are rejected
-        assertThat(rateLimiter.tryAcquireInteractive()).as("13th total request must be rejected").isFalse();
-        assertThat(rateLimiter.tryAcquireBackground()).as("Background request after quota filled must be rejected").isFalse();
+        assertThat(limiter.tryAcquireInteractive()).as("13th total request must be rejected").isFalse();
+        assertThat(limiter.tryAcquireBackground()).as("Background request after quota filled must be rejected").isFalse();
     }
 
     @Test
     @DisplayName("EmbeddingGateway rejects background requests with QuotaExceededException when RPM limit reached")
     void testGatewayQuotaExceededBehavior() {
+        RagEmbeddingProperties quotaProps = new RagEmbeddingProperties(12, 2, 100, 10, 5, 3000L);
+        RpmRateLimiter limiter = new RpmRateLimiter(quotaProps);
+        EmbeddingGateway gateway = new EmbeddingGateway(embeddingService, limiter, quotaProps);
+
         // Exhaust background capacity (10 slots)
         for (int i = 0; i < 10; i++) {
-            assertThat(rateLimiter.tryAcquireBackground()).isTrue();
+            assertThat(limiter.tryAcquireBackground()).isTrue();
         }
 
         // Next background call throws QuotaExceededException
-        assertThatThrownBy(() -> embeddingGateway.embedForIngestion(List.of("text 1")))
+        assertThatThrownBy(() -> gateway.embedForIngestion(List.of("text 1")))
                 .isInstanceOf(QuotaExceededException.class)
                 .hasMessageContaining("quota limit reached for background ingestion");
 

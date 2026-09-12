@@ -4,6 +4,7 @@ import com.taskpilot.ai.rag.config.RagEmbeddingProperties;
 import com.taskpilot.ai.rag.domain.DocumentStatus;
 import com.taskpilot.ai.rag.entity.DocumentEntity;
 import com.taskpilot.ai.rag.repository.DocumentChunkRepository;
+import com.taskpilot.ai.rag.repository.DocumentChunkStagingRepository;
 import com.taskpilot.ai.rag.repository.DocumentRepository;
 import com.taskpilot.infrastructure.storage.StorageService;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,6 +36,8 @@ class DocumentIngestionRetryStateTest {
     @Mock
     private DocumentChunkRepository documentChunkRepository;
     @Mock
+    private DocumentChunkStagingRepository stagingRepository;
+    @Mock
     private StorageService storageService;
     @Mock
     private DocumentTextExtractor textExtractor;
@@ -54,6 +57,7 @@ class DocumentIngestionRetryStateTest {
         ingestionService = new DocumentIngestionServiceImpl(
                 documentRepository,
                 documentChunkRepository,
+                stagingRepository,
                 storageService,
                 textExtractor,
                 chunker,
@@ -62,6 +66,11 @@ class DocumentIngestionRetryStateTest {
                 jdbcTemplate,
                 null
         );
+
+        lenient().when(stagingRepository.findPendingChunks(anyLong(), anyInt()))
+                .thenAnswer(inv -> List.of(new com.taskpilot.ai.rag.domain.StagedChunk(
+                        1L, inv.getArgument(0), inv.getArgument(1), 0, "chunk", null, java.time.Instant.now()
+                )));
     }
 
     @Test
@@ -161,6 +170,13 @@ class DocumentIngestionRetryStateTest {
         when(textExtractor.extractText(any(), any(), any())).thenReturn("valid text");
         when(chunker.chunkText(anyString())).thenReturn(List.of("chunk"));
         when(embeddingGateway.embedForIngestion(anyList())).thenReturn(List.of(new float[768]));
+
+        com.taskpilot.ai.rag.domain.StagedChunk staged = new com.taskpilot.ai.rag.domain.StagedChunk(
+                1L, 30L, 2, 0, "chunk", null, java.time.Instant.now()
+        );
+        when(stagingRepository.findPendingChunks(30L, 2)).thenReturn(List.of(staged));
+        when(stagingRepository.countPendingChunks(30L, 2)).thenReturn(0L);
+        when(stagingRepository.copyStagedToPublished(30L, 2, 100L)).thenReturn(1);
 
         when(jdbcTemplate.query(anyString(), any(PreparedStatementSetter.class), any(RowMapper.class)))
                 .thenReturn(List.of(2));

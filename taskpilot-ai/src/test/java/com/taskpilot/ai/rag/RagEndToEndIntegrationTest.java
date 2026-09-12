@@ -6,6 +6,7 @@ import com.taskpilot.ai.rag.domain.DocumentStatus;
 import com.taskpilot.ai.rag.domain.ScoredChunk;
 import com.taskpilot.ai.rag.entity.DocumentEntity;
 import com.taskpilot.ai.rag.repository.DocumentChunkRepository;
+import com.taskpilot.ai.rag.repository.DocumentChunkStagingRepository;
 import com.taskpilot.ai.rag.repository.DocumentRepository;
 import com.taskpilot.ai.rag.service.*;
 import com.taskpilot.ai.tools.ToolExecutionContext;
@@ -44,6 +45,8 @@ class RagEndToEndIntegrationTest {
     @Mock
     private DocumentChunkRepository documentChunkRepository;
     @Mock
+    private DocumentChunkStagingRepository stagingRepository;
+    @Mock
     private StorageService storageService;
     @Mock
     private DocumentTextExtractor textExtractor;
@@ -72,6 +75,7 @@ class RagEndToEndIntegrationTest {
         ingestionService = new DocumentIngestionServiceImpl(
                 documentRepository,
                 documentChunkRepository,
+                stagingRepository,
                 storageService,
                 textExtractor,
                 chunker,
@@ -122,6 +126,13 @@ class RagEndToEndIntegrationTest {
         sampleEmbedding[0] = 0.77f;
         when(embeddingGateway.embedForIngestion(anyList())).thenReturn(List.of(sampleEmbedding));
 
+        com.taskpilot.ai.rag.domain.StagedChunk staged = new com.taskpilot.ai.rag.domain.StagedChunk(
+                1L, 1L, 1, 0, "Chunk 1: RAG PGVector Architecture", null, java.time.Instant.now()
+        );
+        when(stagingRepository.findPendingChunks(1L, 1)).thenReturn(List.of(staged));
+        when(stagingRepository.countPendingChunks(1L, 1)).thenReturn(0L);
+        when(stagingRepository.copyStagedToPublished(1L, 1, PROJECT_ID)).thenReturn(1);
+
         // Mock JDBC finalization
         when(jdbcTemplate.query(anyString(), any(PreparedStatementSetter.class), any(RowMapper.class)))
                 .thenReturn(List.of(1));
@@ -129,11 +140,9 @@ class RagEndToEndIntegrationTest {
 
         ingestionService.ingestDocument(1L, 1);
 
-        // Verify chunks were saved
-        ArgumentCaptor<List<DocumentChunk>> chunksCaptor = ArgumentCaptor.forClass(List.class);
-        verify(documentChunkRepository).saveAll(chunksCaptor.capture());
-        assertThat(chunksCaptor.getValue()).hasSize(1);
-        assertThat(chunksCaptor.getValue().get(0).projectId()).isEqualTo(PROJECT_ID);
+        // Verify chunks were published atomically from staging
+        verify(stagingRepository).copyStagedToPublished(1L, 1, PROJECT_ID);
+        verify(stagingRepository).deleteStagedChunks(1L, 1);
 
         // --- STEP 2: Retrieval via ProjectKnowledgeService ---
         when(projectMemberPort.isProjectMember(PROJECT_ID, MEMBER_USER_ID)).thenReturn(true);
