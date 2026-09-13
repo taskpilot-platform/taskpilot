@@ -71,7 +71,7 @@ class DocumentIngestionServiceImplTest {
     }
 
     @Test
-    @DisplayName("Verify successful document ingestion lifecycle, staging, and atomic vector publication")
+    @DisplayName("Step 5 Test J — Atomic publication: SELECT FOR UPDATE, completeness verification, delete published, insert staging chunks, READY, and post-commit staging cleanup")
     void testIngestDocumentSuccess() throws IOException {
         DocumentEntity doc = DocumentEntity.builder()
                 .id(1L)
@@ -125,7 +125,7 @@ class DocumentIngestionServiceImplTest {
     }
 
     @Test
-    @DisplayName("Verify resume ingestion skips Tika parsing/chunking and only embeds chunks where embedding IS NULL")
+    @DisplayName("Step 5 Test I — Staging lifecycle: resume ingestion skips Tika parsing/chunking and only embeds pending chunks from staging")
     void testResumeIngestionFromPendingChunksWithoutReparsing() {
         DocumentEntity doc = DocumentEntity.builder()
                 .id(5L)

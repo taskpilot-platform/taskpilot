@@ -197,4 +197,5 @@ rag:
     lease-duration-minutes: 10
     max-retry-attempts: 5
     poll-interval-ms: 3000
+    daily-quota-reset-buffer: ${RAG_EMBEDDING_DAILY_RESET_BUFFER:5m}
 

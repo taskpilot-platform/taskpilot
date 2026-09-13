@@ -273,4 +273,162 @@ class DocumentIngestionRetryStateTest {
         assertThat(sql).contains("lease_until = NULL");
         assertThat(sql).contains("next_attempt_at = NULL");
     }
+
+    @Test
+    @DisplayName("Step 5 Test E — Local quota backpressure: yields to RETRY_WAIT, lease_until=NULL, retry_count unchanged, next_attempt_at populated")
+    void testE_localQuotaBackpressure() throws Exception {
+        DocumentEntity doc = DocumentEntity.builder()
+                .id(60L)
+                .projectId(100L)
+                .storageKey("key.pdf")
+                .originalFilename("key.pdf")
+                .status(DocumentStatus.PROCESSING)
+                .processingVersion(1)
+                .retryCount(2)
+                .build();
+
+        when(documentRepository.findById(60L)).thenReturn(Optional.of(doc));
+        when(storageService.downloadFile(anyString(), anyString())).thenReturn(new ByteArrayInputStream("data".getBytes()));
+        when(textExtractor.extractText(any(), any(), any())).thenReturn("valid text");
+        when(chunker.chunkText(anyString())).thenReturn(List.of("chunk"));
+        when(embeddingGateway.embedForIngestion(anyList())).thenThrow(new QuotaBackpressureException(15000L));
+
+        ingestionService.ingestDocument(60L, 1);
+
+        // Verify conditional SQL update for RETRY_WAIT with next_attempt_at populated and retry_count UNCHANGED (not incremented)
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).update(
+                sqlCaptor.capture(),
+                eq(15000L),
+                contains("yielding for 15s"),
+                eq(60L),
+                eq(1)
+        );
+
+        String sql = sqlCaptor.getValue();
+        assertThat(sql).contains("status = 'RETRY_WAIT'");
+        assertThat(sql).contains("lease_until = NULL");
+        assertThat(sql).contains("next_attempt_at = NOW() + (? * INTERVAL '1 millisecond')");
+        // Verify retry_count was NOT updated or incremented
+        assertThat(sql).doesNotContain("retry_count = ?");
+    }
+
+    @Test
+    @DisplayName("Step 5 Test F — Daily quota exhaustion: transitions to RETRY_WAIT at next Pacific reset + buffer, retry_count unchanged, staging preserved")
+    void testF_dailyQuotaExhaustion() throws Exception {
+        DocumentEntity doc = DocumentEntity.builder()
+                .id(70L)
+                .projectId(100L)
+                .storageKey("key.pdf")
+                .originalFilename("key.pdf")
+                .status(DocumentStatus.PROCESSING)
+                .processingVersion(2)
+                .retryCount(3)
+                .build();
+
+        when(documentRepository.findById(70L)).thenReturn(Optional.of(doc));
+        when(stagingRepository.hasStagedChunks(70L)).thenReturn(true);
+        when(stagingRepository.findPendingChunks(eq(70L), anyInt()))
+                .thenReturn(List.of(new com.taskpilot.ai.rag.domain.StagedChunk(1L, 70L, 0, "chunk", null, java.time.Instant.now())));
+        when(jdbcTemplate.query(contains("SELECT retry_count FROM documents"), any(PreparedStatementSetter.class), any(RowMapper.class)))
+                .thenReturn(List.of(3));
+        when(embeddingGateway.embedForIngestion(anyList()))
+                .thenThrow(new RuntimeException("GoogleGenerativeAIException: 429 RESOURCE_EXHAUSTED - Quota exceeded for quota metric 'EmbedContentRequestsPerDay'"));
+
+        ingestionService.ingestDocument(70L, 2);
+
+        // Verify update to RETRY_WAIT with retry_count UNCHANGED (3), lease_until = NULL, next_attempt_at set
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<java.sql.Timestamp> timestampCaptor = ArgumentCaptor.forClass(java.sql.Timestamp.class);
+        verify(jdbcTemplate).update(
+                sqlCaptor.capture(),
+                eq(3), // retry_count unchanged!
+                timestampCaptor.capture(), // next_attempt_at
+                contains("EmbedContentRequestsPerDay"),
+                eq(70L),
+                eq(2)
+        );
+
+        String sql = sqlCaptor.getValue();
+        assertThat(sql).contains("status = 'RETRY_WAIT'");
+        assertThat(sql).contains("lease_until = NULL");
+        assertThat(sql).contains("retry_count = ?");
+
+        // Verify next_attempt_at is in the future in Pacific timezone
+        java.sql.Timestamp scheduledTime = timestampCaptor.getValue();
+        assertThat(scheduledTime.toInstant()).isAfter(java.time.Instant.now());
+
+        // Staging was NEVER deleted!
+        verify(stagingRepository, never()).deleteAllByDocumentId(70L);
+        verify(stagingRepository, never()).deleteStagedChunks(70L);
+    }
+
+    @Test
+    @DisplayName("Step 5 Test G — Transient 429: increments retry_count, bounded backoff, preserves staging")
+    void testG_transient429() throws Exception {
+        DocumentEntity doc = DocumentEntity.builder()
+                .id(80L)
+                .projectId(100L)
+                .storageKey("key.pdf")
+                .originalFilename("key.pdf")
+                .status(DocumentStatus.PROCESSING)
+                .processingVersion(1)
+                .retryCount(1)
+                .build();
+
+        when(documentRepository.findById(80L)).thenReturn(Optional.of(doc));
+        when(stagingRepository.hasStagedChunks(80L)).thenReturn(true);
+        when(stagingRepository.findPendingChunks(eq(80L), anyInt()))
+                .thenReturn(List.of(new com.taskpilot.ai.rag.domain.StagedChunk(1L, 80L, 0, "chunk", null, java.time.Instant.now())));
+        when(jdbcTemplate.query(contains("SELECT retry_count FROM documents"), any(PreparedStatementSetter.class), any(RowMapper.class)))
+                .thenReturn(List.of(1));
+        when(embeddingGateway.embedForIngestion(anyList()))
+                .thenThrow(new RuntimeException("429 RESOURCE_EXHAUSTED: Rate limit exceeded, please retry in 15s"));
+
+        ingestionService.ingestDocument(80L, 1);
+
+        // Verify retry_count incremented from 1 to 2, delay >= 15s
+        verify(jdbcTemplate).update(
+                contains("status = 'RETRY_WAIT'"),
+                eq(2), // newRetryCount
+                longThat(delay -> delay >= 15L && delay <= 300L),
+                contains("Rate limit exceeded"),
+                eq(80L),
+                eq(1)
+        );
+
+        // Staging was NEVER deleted!
+        verify(stagingRepository, never()).deleteAllByDocumentId(80L);
+        verify(stagingRepository, never()).deleteStagedChunks(80L);
+    }
+
+    @Test
+    @DisplayName("Step 5 Test H — Successful batch resets retry count to 0 only after successful persistence")
+    void testH_successfulBatchResetsRetryCount() throws Exception {
+        DocumentEntity doc = DocumentEntity.builder()
+                .id(90L)
+                .projectId(100L)
+                .storageKey("key.pdf")
+                .originalFilename("key.pdf")
+                .status(DocumentStatus.PROCESSING)
+                .processingVersion(1)
+                .retryCount(2)
+                .build();
+
+        when(documentRepository.findById(90L)).thenReturn(Optional.of(doc));
+        when(storageService.downloadFile(anyString(), anyString())).thenReturn(new ByteArrayInputStream("data".getBytes()));
+        when(textExtractor.extractText(any(), any(), any())).thenReturn("valid text");
+        when(chunker.chunkText(anyString())).thenReturn(List.of("chunk"));
+        when(embeddingGateway.embedForIngestion(anyList())).thenReturn(List.of(new float[768]));
+        when(stagingRepository.updateEmbeddingsFenced(eq(90L), eq(1), anyList(), anyList())).thenReturn(1);
+        when(stagingRepository.findPendingChunks(eq(90L), anyInt()))
+                .thenReturn(List.of(new com.taskpilot.ai.rag.domain.StagedChunk(1L, 90L, 0, "chunk", null, java.time.Instant.now())), java.util.Collections.emptyList());
+
+        ingestionService.ingestDocument(90L, 1);
+
+        // Verify reset retry_count SQL was called after updateEmbeddingsFenced
+        org.mockito.InOrder inOrder = inOrder(stagingRepository, jdbcTemplate);
+        inOrder.verify(stagingRepository).updateEmbeddingsFenced(eq(90L), eq(1), anyList(), anyList());
+        inOrder.verify(jdbcTemplate).update(contains("SET retry_count = 0"), eq(90L), eq(1));
+    }
 }

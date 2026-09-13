@@ -17,6 +17,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.InputStream;
+import java.sql.Timestamp;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -352,11 +358,9 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
             errorMsg = errorMsg.substring(0, 1000);
         }
 
-        // 1. Detect explicit permanent/daily quota exhaustion (P1 Requirement 15)
+        // 1. Detect explicit daily quota exhaustion (P0 Step 3)
         if (isDailyQuotaExhausted(e)) {
-            log.error("Provider explicitly reported daily quota exhaustion for doc {} v{}: {}. Marking FAILED immediately.",
-                    documentId, claimedVersion, errorMsg);
-            markPermanentFailure(documentId, claimedVersion, "Daily quota exhausted: " + errorMsg);
+            handleDailyQuotaExhaustion(documentId, claimedVersion, currentRetryCount, e);
             return;
         }
 
@@ -416,6 +420,46 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
         }
     }
 
+    void handleDailyQuotaExhaustion(Long documentId, int claimedVersion, int currentRetryCount, Exception e) {
+        ZoneId pacificZone = ZoneId.of("America/Los_Angeles");
+        ZonedDateTime nextResetPacific = ZonedDateTime.now(pacificZone)
+                .truncatedTo(ChronoUnit.DAYS)
+                .plusDays(1);
+        Duration buffer = properties.getDailyQuotaResetBuffer() != null
+                ? properties.getDailyQuotaResetBuffer()
+                : Duration.ofMinutes(5);
+        Instant nextAttemptAt = nextResetPacific.plus(buffer).toInstant();
+
+        String errorMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+        if (errorMsg.length() > 1000) {
+            errorMsg = errorMsg.substring(0, 1000);
+        }
+
+        // P0 Step 3: Transition to RETRY_WAIT, retry_count UNCHANGED, lease_until = NULL, staging PRESERVED
+        int updated = jdbcTemplate.update("""
+                UPDATE documents
+                SET status = 'RETRY_WAIT',
+                    retry_count = ?,
+                    lease_until = NULL,
+                    next_attempt_at = ?,
+                    error_message = ?,
+                    updated_at = NOW()
+                WHERE id = ?
+                  AND processing_version = ?
+                  AND status = 'PROCESSING'
+                """,
+                currentRetryCount, Timestamp.from(nextAttemptAt), "Daily quota exhausted: " + errorMsg, documentId, claimedVersion
+        );
+
+        if (updated > 0) {
+            log.warn("Daily embedding quota exhausted for document {}. Provider quota metric={} nextAttemptAt={} leaseReleased=true stagingPreserved=true",
+                    documentId, errorMsg, nextAttemptAt);
+        } else {
+            log.warn("Worker v{} lost ownership for document {} during daily quota exhaustion handling",
+                    claimedVersion, documentId);
+        }
+    }
+
     private void markPermanentFailure(Long documentId, int claimedVersion, String errorMsg) {
         int updated = jdbcTemplate.update("""
                 UPDATE documents
@@ -468,8 +512,9 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
         String msg = t.getMessage() != null ? t.getMessage().toLowerCase() : "";
         if (msg.contains("requests_per_day") || msg.contains("tokens_per_day")
                 || msg.contains("requestsperday") || msg.contains("tokensperday")
-                || msg.contains("daily quota exhausted") || msg.contains("per_day")
-                || msg.contains("perday")) {
+                || msg.contains("embedcontentrequestsperday") || msg.contains("embed_content_requests_per_day")
+                || msg.contains("daily quota exhausted") || msg.contains("queries per day")
+                || msg.contains("per_day") || msg.contains("perday")) {
             return true;
         }
         if (t.getCause() != null && t.getCause() != t) {

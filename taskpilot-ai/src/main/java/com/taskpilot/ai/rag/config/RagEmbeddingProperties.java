@@ -65,7 +65,16 @@ public class RagEmbeddingProperties {
      */
     private long pollIntervalMs = 3000;
 
+    /**
+     * Safety buffer added to Pacific midnight when scheduling retry after daily quota exhaustion.
+     */
+    private java.time.Duration dailyQuotaResetBuffer = java.time.Duration.ofMinutes(5);
+
     public RagEmbeddingProperties(int maxRpm, int interactiveHeadroom, int maxBatchSize, int leaseDurationMinutes, int maxRetryAttempts, long pollIntervalMs) {
+        this(maxRpm, interactiveHeadroom, maxBatchSize, leaseDurationMinutes, maxRetryAttempts, pollIntervalMs, java.time.Duration.ofMinutes(5));
+    }
+
+    public RagEmbeddingProperties(int maxRpm, int interactiveHeadroom, int maxBatchSize, int leaseDurationMinutes, int maxRetryAttempts, long pollIntervalMs, java.time.Duration dailyQuotaResetBuffer) {
         this.maxRpm = maxRpm;
         this.interactiveHeadroom = interactiveHeadroom;
         this.maxTpm = 30000;
@@ -75,6 +84,7 @@ public class RagEmbeddingProperties {
         this.leaseDurationMinutes = leaseDurationMinutes;
         this.maxRetryAttempts = maxRetryAttempts;
         this.pollIntervalMs = pollIntervalMs;
+        this.dailyQuotaResetBuffer = dailyQuotaResetBuffer;
     }
 
     @PostConstruct
@@ -116,6 +126,9 @@ public class RagEmbeddingProperties {
         }
         if (pollIntervalMs <= 0) {
             throw new IllegalStateException("rag.embedding.poll-interval-ms must be greater than 0, got: " + pollIntervalMs);
+        }
+        if (dailyQuotaResetBuffer == null || dailyQuotaResetBuffer.isNegative()) {
+            throw new IllegalStateException("rag.embedding.daily-quota-reset-buffer must be non-null and non-negative, got: " + dailyQuotaResetBuffer);
         }
     }
 }
