@@ -117,3 +117,51 @@ Kiểm tra trực tiếp bảng `documents` và `document_chunk_staging` trên P
 - **Tốc độ cho phép an toàn:** 28.000 TPM (tương đương ~6 batches / phút).
 - **Tổng số batch:** $3.397 / 20 = 170$ batches.
 - **Thời gian xử lý dự kiến:** **`28 đến 32 phút`** (chạy nền hoàn toàn tự động, phân bổ đều đặn qua các phút, không gây nghẽn thread pool).
+
+---
+
+## 7. Sự Cố 3: Độc Chiếm Kết Quả Truy Vấn RAG Đa Tài Liệu (Multi-Document Retrieval Crowding)
+
+### 7.1. Hiện Tượng & Phát Hiện Thực Tế
+- **Môi trường**: Project 4 chứa nhiều tài liệu, gồm `Sommerville_Software_Engineering_10ed.pdf`, `A Decision-Support Tool for Maintenance Task Prioritization.pdf` (Document 3), và `OOAD PROJECT REPORT _ MD.docx` (Document 9 - báo cáo đồ án thực tế ~543 chunks).
+- **Hiện tượng**: Người dùng truy vấn AI về chủ đề:
+  > *"Data Security and Privacy"* hoặc *"Role-Based Access Control (RBAC)"*
+- **Kỳ vọng**: AI phải trích xuất được chunk 517 của Document 9 (nội dung cụ thể về việc triển khai RBAC và EMR cho ứng dụng phòng khám).
+- **Thực tế trước khi sửa**: Chunk 517 bị biến mất hoàn toàn khỏi context đưa vào LLM!
+- **Nguyên nhân định vị**:
+  - Naive vector search chỉ lấy top $K=5$ kết quả có độ tương đồng cosine cao nhất toàn project (`LIMIT 5`).
+  - Document 3 (bài báo Maintenance DSS) có mật độ từ khóa kỹ thuật tương đồng dày đặc, chiếm trọn **cả 5 vị trí đầu bảng** (Rank #1 đến #5, similarity từ 0.6720 đến 0.7195).
+  - Target Chunk 517 của Document 9 đạt similarity rất cao ($0.6603$, đứng top #1 trong Document 9), nhưng đứng thứ **#6** toàn project.
+  - Do đó, câu lệnh `LIMIT 5` cắt đứt ngay trước chunk 517, khiến tri thức độc nhất và giá trị nhất từ Document 9 bị loại bỏ.
+
+### 7.2. Phân Tích Kỹ Thuật & Quyết Định Thiết Kế
+Không thay đổi embedding model, index HNSW, ngưỡng điểm hay thuật toán re-ranking phức tạp (MMR). Thay vào đó, áp dụng cơ chế **Retrieval Policy Diversification** ở tầng Application/Service:
+1. **Mở rộng Candidate Pool**: Tăng số lượng candidate ban đầu từ database lên $20$ chunks với ngưỡng lọc cơ sở $\text{minScore} = 0.40$.
+2. **Thuật toán Two-Pass Soft-Cap Context Selection (`DocumentDiversityContextSelector`)**:
+   - **Pass 1 (Ưu tiên đa dạng hóa)**: Duyệt các candidate theo thứ tự độ tương đồng giảm dần. Với mỗi chunk, nếu document tương ứng chưa vượt quá `maxPerDocument = 2`, chọn chunk đó vào context (tối đa `maxContext = 6`). Các chunk vượt quá cap tạm thời đưa vào danh sách `overflow`.
+   - **Pass 2 (Chống bỏ trống context / Backfill)**: Nếu sau Pass 1 số lượng chunk đã chọn chưa đủ `maxContext = 6` (do project có ít document), duyệt tiếp danh sách `overflow` theo thứ tự độ tương đồng ban đầu để lấp đầy context slots.
+3. **Phân định rõ RAG Context vs UI Search**:
+   - **Project-wide RAG (`documentId == null`)**: Áp dụng candidate pool $20 \to$ soft-cap $2 \to$ tối đa $6$ chunks cho LLM.
+   - **Document-focused RAG (`documentId != null`)**: Khi truy vấn một tài liệu cụ thể, lấy trực tiếp top $6$ chunks của tài liệu đó, không áp dụng diversity cap.
+   - **UI Search (`/projects/{id}/documents/search`)**: Giữ nguyên thuần similarity ranking để người dùng tìm kiếm tự nhiên.
+
+### 7.3. Kết Quả Kiểm Chứng Thực Tế (Empirical Verification)
+Chạy kiểm chứng thực nghiệm trực tiếp trên database thật:
+- **Candidate Pool (20 candidates, query: *"data security and privacy"*):**
+  - Ranks #1 – #5: Document 3 (similarity 0.7195, 0.7144, 0.6964, 0.6726, 0.6720)
+  - Rank #6: Document 9, Chunk 517 (similarity 0.6603)
+  - Ranks #7 – #12: Document 3
+  - Rank #13 – #14: Document 9, Chunk 30, Chunk 29
+- **Sau khi qua `DocumentDiversityContextSelector` (maxContext=6, maxPerDocument=2):**
+  ```text
+  Slot  ChunkId   DocId   DocChunkIdx   Similarity  Document Name
+  --------------------------------------------------------------------------------
+  [1]   107       3       75            0.7195      Doc 3 (Pass 1: slot 1/2)
+  [2]   109       3       77            0.7144      Doc 3 (Pass 1: slot 2/2)
+  [3]   1270      9       517           0.6603      Doc 9 (Pass 1: slot 1/2) <=== CỨU THÀNH CÔNG VÀO CONTEXT!
+  [4]   783       9       30            0.6355      Doc 9 (Pass 1: slot 2/2)
+  [5]   108       3       76            0.6964      Doc 3 (Pass 2: Backfill từ overflow)
+  [6]   106       3       74            0.6726      Doc 3 (Pass 2: Backfill từ overflow)
+  ```
+- **Kết luận**: Chunk 517 được đẩy lên ngay **Slot [3]**, context vừa bảo đảm tính đa dạng tài liệu, vừa tận dụng triệt để dung lượng 6 chunks chất lượng cao cho mô hình ngôn ngữ lớn.
+
