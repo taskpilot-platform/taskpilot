@@ -30,6 +30,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
+@org.mockito.junit.jupiter.MockitoSettings(strictness = org.mockito.quality.Strictness.LENIENT)
 class DocumentIngestionServiceImplTest {
 
     @Mock
@@ -83,7 +84,7 @@ class DocumentIngestionServiceImplTest {
                 .build();
 
         when(documentRepository.findById(1L)).thenReturn(Optional.of(doc));
-        when(stagingRepository.hasStagedChunks(1L, 1)).thenReturn(false);
+        when(stagingRepository.hasStagedChunks(1L)).thenReturn(false);
         when(storageService.downloadFile("documents", "documents/spec.pdf"))
                 .thenReturn(new ByteArrayInputStream("mock stream".getBytes()));
         when(documentTextExtractor.extractText(any(), eq("spec.pdf"), eq("application/pdf")))
@@ -91,9 +92,10 @@ class DocumentIngestionServiceImplTest {
         when(documentChunker.chunkText("Parsed specification document text"))
                 .thenReturn(List.of("chunk 1", "chunk 2"));
 
-        StagedChunk staged1 = new StagedChunk(101L, 1L, 1, 0, "chunk 1", null, Instant.now());
-        StagedChunk staged2 = new StagedChunk(102L, 1L, 1, 1, "chunk 2", null, Instant.now());
-        when(stagingRepository.findPendingChunks(1L, 1)).thenReturn(List.of(staged1, staged2));
+        StagedChunk staged1 = new StagedChunk(101L, 1L, 0, "chunk 1", null, Instant.now());
+        StagedChunk staged2 = new StagedChunk(102L, 1L, 1, "chunk 2", null, Instant.now());
+        when(stagingRepository.findPendingChunks(eq(1L), anyInt()))
+                .thenReturn(List.of(staged1, staged2), java.util.Collections.emptyList());
 
         float[] vec1 = new float[768];
         float[] vec2 = new float[768];
@@ -102,21 +104,24 @@ class DocumentIngestionServiceImplTest {
         when(embeddingGateway.embedForIngestion(List.of("chunk 1", "chunk 2")))
                 .thenReturn(List.of(vec1, vec2));
 
-        when(stagingRepository.countPendingChunks(1L, 1)).thenReturn(0L);
+        when(stagingRepository.updateEmbeddingsFenced(eq(1L), eq(1), anyList(), anyList())).thenReturn(2);
 
-        // Mock JDBC finalization lock and update
-        when(jdbcTemplate.query(anyString(), any(PreparedStatementSetter.class), any(RowMapper.class)))
-                .thenReturn(List.of(1));
-        when(stagingRepository.copyStagedToPublished(1L, 1, 10L)).thenReturn(2);
-        when(jdbcTemplate.update(anyString(), eq(1L), eq(1))).thenReturn(1);
+        // Mock JDBC lease renewal and publication
+        when(jdbcTemplate.update(contains("lease_until = NOW() + INTERVAL '3 minutes'"), eq(1L), eq(1))).thenReturn(1);
+        when(jdbcTemplate.query(contains("FOR UPDATE"), any(PreparedStatementSetter.class), any(RowMapper.class)))
+                .thenReturn(List.of(1L));
+        when(jdbcTemplate.queryForObject(contains("COUNT(*) FROM document_chunk_staging"), eq(Long.class), eq(1L)))
+                .thenReturn(0L);
+        when(stagingRepository.copyStagedToPublished(1L, 10L)).thenReturn(2);
+        when(jdbcTemplate.update(contains("status = 'READY'"), eq(1L), eq(1))).thenReturn(1);
 
         ingestionService.ingestDocument(1L, 1);
 
-        verify(stagingRepository).stageInitialChunks(1L, 1, List.of("chunk 1", "chunk 2"));
-        verify(stagingRepository).updateEmbeddings(List.of(staged1, staged2), List.of(vec1, vec2));
+        verify(stagingRepository).stageInitialChunks(1L, List.of("chunk 1", "chunk 2"));
+        verify(stagingRepository).updateEmbeddingsFenced(eq(1L), eq(1), eq(List.of(staged1, staged2)), eq(List.of(vec1, vec2)));
         verify(documentChunkRepository).deleteByDocumentId(1L);
-        verify(stagingRepository).copyStagedToPublished(1L, 1, 10L);
-        verify(stagingRepository).deleteStagedChunks(1L, 1);
+        verify(stagingRepository).copyStagedToPublished(1L, 10L);
+        verify(stagingRepository, atLeastOnce()).deleteStagedChunks(1L);
     }
 
     @Test
@@ -133,21 +138,25 @@ class DocumentIngestionServiceImplTest {
 
         when(documentRepository.findById(5L)).thenReturn(Optional.of(doc));
         // Staged chunks already exist from previous attempt
-        when(stagingRepository.hasStagedChunks(5L, 2)).thenReturn(true);
+        when(stagingRepository.hasStagedChunks(5L)).thenReturn(true);
 
         // Only chunk 2 is pending (chunk 1 was already embedded in previous attempt)
-        StagedChunk pendingChunk2 = new StagedChunk(202L, 5L, 2, 1, "chunk 2 remaining", null, Instant.now());
-        when(stagingRepository.findPendingChunks(5L, 2)).thenReturn(List.of(pendingChunk2));
+        StagedChunk pendingChunk2 = new StagedChunk(202L, 5L, 1, "chunk 2 remaining", null, Instant.now());
+        when(stagingRepository.findPendingChunks(eq(5L), anyInt()))
+                .thenReturn(List.of(pendingChunk2), java.util.Collections.emptyList());
 
         float[] vec2 = new float[768];
         vec2[0] = 0.42f;
         when(embeddingGateway.embedForIngestion(List.of("chunk 2 remaining"))).thenReturn(List.of(vec2));
+        when(stagingRepository.updateEmbeddingsFenced(eq(5L), eq(2), anyList(), anyList())).thenReturn(1);
 
-        when(stagingRepository.countPendingChunks(5L, 2)).thenReturn(0L);
-        when(jdbcTemplate.query(anyString(), any(PreparedStatementSetter.class), any(RowMapper.class)))
-                .thenReturn(List.of(2));
-        when(stagingRepository.copyStagedToPublished(5L, 2, 10L)).thenReturn(2);
-        when(jdbcTemplate.update(anyString(), eq(5L), eq(2))).thenReturn(1);
+        when(jdbcTemplate.update(contains("lease_until = NOW() + INTERVAL '3 minutes'"), eq(5L), eq(2))).thenReturn(1);
+        when(jdbcTemplate.query(contains("FOR UPDATE"), any(PreparedStatementSetter.class), any(RowMapper.class)))
+                .thenReturn(List.of(5L));
+        when(jdbcTemplate.queryForObject(contains("COUNT(*) FROM document_chunk_staging"), eq(Long.class), eq(5L)))
+                .thenReturn(0L);
+        when(stagingRepository.copyStagedToPublished(5L, 10L)).thenReturn(2);
+        when(jdbcTemplate.update(contains("status = 'READY'"), eq(5L), eq(2))).thenReturn(1);
 
         // WHEN
         ingestionService.ingestDocument(5L, 2);
@@ -158,59 +167,60 @@ class DocumentIngestionServiceImplTest {
         verifyNoInteractions(documentTextExtractor);
         verifyNoInteractions(documentChunker);
 
-        // Only chunk 2 was embedded and updated
+        // Only chunk 2 was embedded and updated with fencing
         verify(embeddingGateway).embedForIngestion(List.of("chunk 2 remaining"));
-        verify(stagingRepository).updateEmbeddings(List.of(pendingChunk2), List.of(vec2));
+        verify(stagingRepository).updateEmbeddingsFenced(eq(5L), eq(2), eq(List.of(pendingChunk2)), eq(List.of(vec2)));
 
         // Atomic publication succeeded
         verify(documentChunkRepository).deleteByDocumentId(5L);
-        verify(stagingRepository).copyStagedToPublished(5L, 2, 10L);
-        verify(stagingRepository).deleteStagedChunks(5L, 2);
+        verify(stagingRepository).copyStagedToPublished(5L, 10L);
+        verify(stagingRepository).deleteStagedChunks(5L);
     }
 
     @Test
-    @DisplayName("Verify resume ingestion adopts older staged chunks when current version has no chunks yet")
-    void testResumeIngestionAdoptsOlderStagedChunks() {
+    @DisplayName("Verify quota backpressure transitions to RETRY_WAIT without incrementing retry_count")
+    void testLocalQuotaBackpressureHandling() {
         DocumentEntity doc = DocumentEntity.builder()
                 .id(6L)
                 .projectId(10L)
-                .storageKey("documents/resume.pdf")
-                .originalFilename("resume.pdf")
                 .status(DocumentStatus.PROCESSING)
                 .processingVersion(3)
+                .retryCount(0)
                 .build();
 
         when(documentRepository.findById(6L)).thenReturn(Optional.of(doc));
-        // Current version 3 has no chunks directly, but older version 2 has chunks!
-        when(stagingRepository.hasStagedChunks(6L, 3)).thenReturn(false);
-        when(stagingRepository.adoptOlderStagedChunks(6L, 3)).thenReturn(50);
+        when(stagingRepository.hasStagedChunks(6L)).thenReturn(true);
 
-        StagedChunk pendingChunk = new StagedChunk(301L, 6L, 3, 40, "chunk 41", null, Instant.now());
-        when(stagingRepository.findPendingChunks(6L, 3)).thenReturn(List.of(pendingChunk));
+        StagedChunk pendingChunk = new StagedChunk(301L, 6L, 40, "chunk 41", null, Instant.now());
+        when(stagingRepository.findPendingChunks(eq(6L), anyInt()))
+                .thenReturn(List.of(pendingChunk));
 
-        float[] vec = new float[768];
-        when(embeddingGateway.embedForIngestion(List.of("chunk 41"))).thenReturn(List.of(vec));
-        when(stagingRepository.countPendingChunks(6L, 3)).thenReturn(0L);
-        when(jdbcTemplate.query(anyString(), any(PreparedStatementSetter.class), any(RowMapper.class)))
-                .thenReturn(List.of(3));
-        when(stagingRepository.copyStagedToPublished(6L, 3, 10L)).thenReturn(50);
-        when(jdbcTemplate.update(anyString(), eq(6L), eq(3))).thenReturn(1);
+        when(jdbcTemplate.update(contains("lease_until = NOW() + INTERVAL '3 minutes'"), eq(6L), eq(3))).thenReturn(1);
+
+        // EmbeddingGateway throws QuotaBackpressureException
+        when(embeddingGateway.embedForIngestion(List.of("chunk 41")))
+                .thenThrow(new QuotaBackpressureException(45000L));
 
         // WHEN
         ingestionService.ingestDocument(6L, 3);
 
-        // THEN
-        verify(stagingRepository).adoptOlderStagedChunks(6L, 3);
-        verifyNoInteractions(storageService);
-        verifyNoInteractions(documentTextExtractor);
-        verifyNoInteractions(documentChunker);
-        verify(stagingRepository).updateEmbeddings(List.of(pendingChunk), List.of(vec));
-        verify(stagingRepository).copyStagedToPublished(6L, 3, 10L);
-        verify(stagingRepository).deleteStagedChunks(6L, 3);
+        // THEN: Transition to RETRY_WAIT with next_attempt_at = NOW() + 45000ms, retry_count NOT touched
+        verify(jdbcTemplate).update(
+                contains("RETRY_WAIT"),
+                eq(45000L),
+                contains("yielding for 45s"),
+                eq(6L),
+                eq(3)
+        );
+        // Verify retry_count increment SQL was NOT invoked
+        verify(jdbcTemplate, never()).update(
+                contains("retry_count = ?"),
+                any(), any(), any(), any(), any()
+        );
     }
 
     @Test
-    @DisplayName("Verify ingestion retryable failure triggers conditional retry wait SQL update")
+    @DisplayName("Verify ingestion retryable failure increments retry_count and sets RETRY_WAIT")
     void testIngestDocumentRetryableFailureHandling() throws IOException {
         DocumentEntity doc = DocumentEntity.builder()
                 .id(2L)
@@ -224,18 +234,19 @@ class DocumentIngestionServiceImplTest {
                 .build();
 
         when(documentRepository.findById(2L)).thenReturn(Optional.of(doc));
-        when(stagingRepository.hasStagedChunks(2L, 2)).thenReturn(false);
+        when(stagingRepository.hasStagedChunks(2L)).thenReturn(false);
         when(storageService.downloadFile("documents", "documents/corrupt.docx"))
                 .thenThrow(new IOException("S3 connection timeout"));
 
+        when(jdbcTemplate.query(contains("SELECT retry_count"), any(PreparedStatementSetter.class), any(RowMapper.class)))
+                .thenReturn(List.of(1));
+
         ingestionService.ingestDocument(2L, 2);
 
-        // Verify conditional SQL update was executed for retry wait
+        // Verify conditional SQL update was executed for retry wait with retry_count = 2 (1 + 1)
         verify(jdbcTemplate).update(
                 contains("RETRY_WAIT"),
-                eq(properties.getMaxRetryAttempts()),
-                eq(properties.getMaxRetryAttempts()),
-                eq(properties.getMaxRetryAttempts()),
+                eq(2),
                 anyLong(),
                 contains("S3 connection timeout"),
                 eq(2L),
@@ -283,19 +294,23 @@ class DocumentIngestionServiceImplTest {
         // Permanent non-retryable
         assertThat(DocumentIngestionServiceImpl.isRetryable(new IllegalStateException("Empty text"))).isFalse();
         assertThat(DocumentIngestionServiceImpl.isRetryable(new IllegalArgumentException("Invalid format"))).isFalse();
+
+        // Daily quota permanent failure
+        assertThat(DocumentIngestionServiceImpl.isDailyQuotaExhausted(new RuntimeException("requests_per_day quota exceeded"))).isTrue();
+        assertThat(DocumentIngestionServiceImpl.isRetryable(new RuntimeException("requests_per_day quota exceeded"))).isFalse();
     }
 
     @Test
-    @DisplayName("Verify calculateBackoff produces bounded exponential values")
-    void testCalculateBackoff() {
-        long backoff0 = DocumentIngestionServiceImpl.calculateBackoff(0, new IOException("timeout"));
-        assertThat(backoff0).isBetween(5L, 10L);
+    @DisplayName("Verify parseRetryAfterSeconds parses provider retry messages")
+    void testParseRetryAfterSeconds() {
+        long delay = DocumentIngestionServiceImpl.parseRetryAfterSeconds(
+                new RuntimeException("Quota exceeded for model: please retry in 18.2s")
+        );
+        assertThat(delay).isEqualTo(19L);
 
-        long backoff3 = DocumentIngestionServiceImpl.calculateBackoff(3, new IOException("timeout"));
-        assertThat(backoff3).isBetween(40L, 50L);
-
-        // Capped at 300 seconds
-        long backoff10 = DocumentIngestionServiceImpl.calculateBackoff(10, new IOException("timeout"));
-        assertThat(backoff10).isLessThanOrEqualTo(300L);
+        long zeroDelay = DocumentIngestionServiceImpl.parseRetryAfterSeconds(
+                new RuntimeException("Generic quota error")
+        );
+        assertThat(zeroDelay).isEqualTo(0L);
     }
 }

@@ -243,8 +243,8 @@ class LargeDocumentIngestionAndRetrievalTest {
         ingestionService.ingestDocument(DOC_ID, 1);
 
         // Verify partial staging state
-        long totalStaged = stagingRepository.findAllStagedChunks(DOC_ID, 1).size();
-        long pendingRemaining = stagingRepository.countPendingChunks(DOC_ID, 1);
+        long totalStaged = stagingRepository.findAllStagedChunks(DOC_ID).size();
+        long pendingRemaining = stagingRepository.countPendingChunks(DOC_ID);
         long alreadyEmbedded = totalStaged - pendingRemaining;
 
         assertThat(totalStaged).isGreaterThan(60);
@@ -255,17 +255,23 @@ class LargeDocumentIngestionAndRetrievalTest {
         assertThat(publishedRepository.findByDocumentId(DOC_ID)).isEmpty();
 
         // Phase 2: Resume attempt
+        // Simulate poller / claimer reclaiming document into PROCESSING with version 2
+        doc.setStatus(DocumentStatus.PROCESSING);
+        doc.setProcessingVersion(2);
+        documentRepository.save(doc);
+        setupMockJdbcTemplate(DOC_ID, 2);
+
         // Reset gateway mock to succeed
         when(embeddingGateway.embedForIngestion(anyList())).thenAnswer(inv -> {
             List<String> texts = inv.getArgument(0);
             return texts.stream().map(this::deterministicVectorForText).toList();
         });
 
-        // Second ingestion run (resumes)
-        ingestionService.ingestDocument(DOC_ID, 1);
+        // Second ingestion run (resumes under version 2)
+        ingestionService.ingestDocument(DOC_ID, 2);
 
         // Verify all chunks are now embedded and published
-        assertThat(stagingRepository.countPendingChunks(DOC_ID, 1)).isEqualTo(0);
+        assertThat(stagingRepository.countPendingChunks(DOC_ID)).isEqualTo(0);
         List<DocumentChunk> published = publishedRepository.findByDocumentId(DOC_ID);
         assertThat(published).hasSize((int) totalStaged);
 
@@ -274,15 +280,39 @@ class LargeDocumentIngestionAndRetrievalTest {
     }
 
     private void setupMockJdbcTemplate(Long docId, int claimedVersion) {
+        when(jdbcTemplate.update(contains("lease_until = NOW() + INTERVAL '3 minutes'"), eq(docId), eq(claimedVersion)))
+                .thenReturn(1);
+
+        when(jdbcTemplate.update(contains("retry_count = 0"), eq(docId), eq(claimedVersion)))
+                .thenReturn(1);
+
         when(jdbcTemplate.query(
-                contains("SELECT processing_version FROM documents WHERE id = ?"),
+                contains("FOR UPDATE"),
                 any(PreparedStatementSetter.class),
                 any(RowMapper.class)
-        )).thenAnswer(inv -> List.of(claimedVersion));
+        )).thenAnswer(inv -> List.of(docId));
 
-        when(jdbcTemplate.update(contains("UPDATE documents"), eq(docId), eq(claimedVersion)))
+        when(jdbcTemplate.queryForObject(
+                contains("COUNT(*) FROM document_chunk_staging"),
+                eq(Long.class),
+                eq(docId)
+        )).thenAnswer(inv -> stagingRepository.countPendingChunks(docId));
+
+        when(jdbcTemplate.update(contains("status = 'READY'"), eq(docId), eq(claimedVersion)))
                 .thenAnswer(inv -> {
                     documentRepository.findById(docId).ifPresent(d -> d.setStatus(DocumentStatus.READY));
+                    return 1;
+                });
+
+        when(jdbcTemplate.query(
+                contains("SELECT retry_count FROM documents"),
+                any(PreparedStatementSetter.class),
+                any(RowMapper.class)
+        )).thenAnswer(inv -> List.of(0));
+
+        when(jdbcTemplate.update(contains("RETRY_WAIT"), any(), any(), any(), eq(docId), eq(claimedVersion)))
+                .thenAnswer(inv -> {
+                    documentRepository.findById(docId).ifPresent(d -> d.setStatus(DocumentStatus.RETRY_WAIT));
                     return 1;
                 });
     }
@@ -465,60 +495,64 @@ class LargeDocumentIngestionAndRetrievalTest {
         private final AtomicLong idSeq = new AtomicLong(1);
 
         @Override
-        public void stageInitialChunks(Long documentId, int processingVersion, List<String> contents) {
+        public void stageInitialChunks(Long documentId, List<String> contents) {
             for (int i = 0; i < contents.size(); i++) {
                 long id = idSeq.getAndIncrement();
-                stageStore.put(id, new StagedChunk(id, documentId, processingVersion, i, contents.get(i), null, Instant.now()));
+                stageStore.put(id, new StagedChunk(id, documentId, i, contents.get(i), null, Instant.now()));
             }
         }
 
         @Override
-        public boolean hasStagedChunks(Long documentId, int processingVersion) {
+        public boolean hasStagedChunks(Long documentId) {
             return stageStore.values().stream()
-                    .anyMatch(c -> Objects.equals(c.documentId(), documentId) && c.processingVersion() == processingVersion);
+                    .anyMatch(c -> Objects.equals(c.documentId(), documentId));
         }
 
         @Override
-        public List<StagedChunk> findPendingChunks(Long documentId, int processingVersion) {
+        public List<StagedChunk> findPendingChunks(Long documentId, int limit) {
             return stageStore.values().stream()
                     .filter(c -> Objects.equals(c.documentId(), documentId)
-                            && c.processingVersion() == processingVersion
                             && c.embedding() == null)
                     .sorted(Comparator.comparingInt(StagedChunk::chunkIndex))
+                    .limit(limit)
                     .toList();
         }
 
         @Override
-        public List<StagedChunk> findAllStagedChunks(Long documentId, int processingVersion) {
+        public List<StagedChunk> findAllStagedChunks(Long documentId) {
             return stageStore.values().stream()
-                    .filter(c -> Objects.equals(c.documentId(), documentId) && c.processingVersion() == processingVersion)
+                    .filter(c -> Objects.equals(c.documentId(), documentId))
                     .sorted(Comparator.comparingInt(StagedChunk::chunkIndex))
                     .toList();
         }
 
         @Override
-        public long countPendingChunks(Long documentId, int processingVersion) {
+        public long countPendingChunks(Long documentId) {
             return stageStore.values().stream()
                     .filter(c -> Objects.equals(c.documentId(), documentId)
-                            && c.processingVersion() == processingVersion
                             && c.embedding() == null)
                     .count();
         }
 
         @Override
-        public void updateEmbeddings(List<StagedChunk> chunks, List<float[]> embeddings) {
+        public int updateEmbeddingsFenced(Long documentId, int workerVersion, List<StagedChunk> chunks, List<float[]> embeddings) {
+            DocumentEntity doc = documentRepository.findById(documentId).orElse(null);
+            if (doc != null && (doc.getProcessingVersion() != workerVersion || doc.getStatus() != DocumentStatus.PROCESSING)) {
+                return 0;
+            }
             for (int i = 0; i < chunks.size(); i++) {
                 StagedChunk chunk = chunks.get(i);
                 float[] vec = embeddings.get(i);
                 stageStore.put(chunk.id(), new StagedChunk(
-                        chunk.id(), chunk.documentId(), chunk.processingVersion(), chunk.chunkIndex(), chunk.content(), vec, chunk.createdAt()
+                        chunk.id(), chunk.documentId(), chunk.chunkIndex(), chunk.content(), vec, chunk.createdAt()
                 ));
             }
+            return chunks.size();
         }
 
         @Override
-        public int copyStagedToPublished(Long documentId, int processingVersion, Long projectId) {
-            List<StagedChunk> matching = findAllStagedChunks(documentId, processingVersion);
+        public int copyStagedToPublished(Long documentId, Long projectId) {
+            List<StagedChunk> matching = findAllStagedChunks(documentId);
             List<DocumentChunk> toPublish = matching.stream()
                     .map(s -> new DocumentChunk(s.id(), documentId, projectId, s.chunkIndex(), s.content(), s.embedding(), s.createdAt()))
                     .toList();
@@ -527,26 +561,8 @@ class LargeDocumentIngestionAndRetrievalTest {
         }
 
         @Override
-        public void deleteStagedChunks(Long documentId, int processingVersion) {
-            stageStore.values().removeIf(c -> Objects.equals(c.documentId(), documentId) && c.processingVersion() == processingVersion);
-        }
-
-        @Override
-        public int adoptOlderStagedChunks(Long documentId, int currentVersion) {
-            int count = 0;
-            for (Map.Entry<Long, StagedChunk> e : stageStore.entrySet()) {
-                StagedChunk c = e.getValue();
-                if (Objects.equals(c.documentId(), documentId) && c.processingVersion() < currentVersion) {
-                    e.setValue(new StagedChunk(c.id(), c.documentId(), currentVersion, c.chunkIndex(), c.content(), c.embedding(), c.createdAt()));
-                    count++;
-                }
-            }
-            return count;
-        }
-
-        @Override
-        public void deleteOlderStagedChunks(Long documentId, int currentVersion) {
-            stageStore.values().removeIf(c -> Objects.equals(c.documentId(), documentId) && c.processingVersion() < currentVersion);
+        public void deleteStagedChunks(Long documentId) {
+            stageStore.values().removeIf(c -> Objects.equals(c.documentId(), documentId));
         }
 
         @Override

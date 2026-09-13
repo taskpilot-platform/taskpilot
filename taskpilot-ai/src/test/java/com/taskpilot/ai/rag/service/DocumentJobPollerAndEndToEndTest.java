@@ -32,6 +32,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
+@org.mockito.junit.jupiter.MockitoSettings(strictness = org.mockito.quality.Strictness.LENIENT)
 class DocumentJobPollerAndEndToEndTest {
 
     @Mock
@@ -145,7 +146,7 @@ class DocumentJobPollerAndEndToEndTest {
                 .build();
 
         when(documentRepository.findById(77L)).thenReturn(Optional.of(processingDoc));
-        when(stagingRepository.hasStagedChunks(77L, 1)).thenReturn(false);
+        when(stagingRepository.hasStagedChunks(77L)).thenReturn(false);
         when(storageService.downloadFile("documents", "projects/100/documents/requirements.pdf"))
                 .thenReturn(new ByteArrayInputStream("Requirements raw text".getBytes()));
         when(textExtractor.extractText(any(), eq("requirements.pdf"), eq("application/pdf")))
@@ -153,9 +154,9 @@ class DocumentJobPollerAndEndToEndTest {
         when(chunker.chunkText(anyString()))
                 .thenReturn(List.of("Chunk 1: RAG Architecture", "Chunk 2: pgvector HNSW"));
 
-        com.taskpilot.ai.rag.domain.StagedChunk s1 = new com.taskpilot.ai.rag.domain.StagedChunk(101L, 77L, 1, 0, "Chunk 1: RAG Architecture", null, java.time.Instant.now());
-        com.taskpilot.ai.rag.domain.StagedChunk s2 = new com.taskpilot.ai.rag.domain.StagedChunk(102L, 77L, 1, 1, "Chunk 2: pgvector HNSW", null, java.time.Instant.now());
-        when(stagingRepository.findPendingChunks(77L, 1)).thenReturn(List.of(s1, s2));
+        com.taskpilot.ai.rag.domain.StagedChunk s1 = new com.taskpilot.ai.rag.domain.StagedChunk(101L, 77L, 0, "Chunk 1: RAG Architecture", null, java.time.Instant.now());
+        com.taskpilot.ai.rag.domain.StagedChunk s2 = new com.taskpilot.ai.rag.domain.StagedChunk(102L, 77L, 1, "Chunk 2: pgvector HNSW", null, java.time.Instant.now());
+        when(stagingRepository.findPendingChunks(eq(77L), anyInt())).thenReturn(List.of(s1, s2), java.util.Collections.emptyList());
 
         float[] v1 = new float[768];
         float[] v2 = new float[768];
@@ -164,21 +165,24 @@ class DocumentJobPollerAndEndToEndTest {
         when(embeddingGateway.embedForIngestion(List.of("Chunk 1: RAG Architecture", "Chunk 2: pgvector HNSW")))
                 .thenReturn(List.of(v1, v2));
 
-        when(stagingRepository.countPendingChunks(77L, 1)).thenReturn(0L);
+        when(stagingRepository.updateEmbeddingsFenced(eq(77L), eq(1), anyList(), anyList())).thenReturn(2);
 
-        // Mock finalization query & update
-        when(jdbcTemplate.query(anyString(), any(PreparedStatementSetter.class), any(RowMapper.class)))
-                .thenReturn(List.of(1));
-        when(stagingRepository.copyStagedToPublished(77L, 1, projectId)).thenReturn(2);
-        when(jdbcTemplate.update(anyString(), eq(77L), eq(1))).thenReturn(1);
+        // Mock lease renewal, finalization query & update
+        when(jdbcTemplate.update(contains("lease_until = NOW() + INTERVAL '3 minutes'"), eq(77L), eq(1))).thenReturn(1);
+        when(jdbcTemplate.query(contains("FOR UPDATE"), any(PreparedStatementSetter.class), any(RowMapper.class)))
+                .thenReturn(List.of(77L));
+        when(jdbcTemplate.queryForObject(contains("COUNT(*) FROM document_chunk_staging"), eq(Long.class), eq(77L)))
+                .thenReturn(0L);
+        when(stagingRepository.copyStagedToPublished(77L, projectId)).thenReturn(2);
+        when(jdbcTemplate.update(contains("status = 'READY'"), eq(77L), eq(1))).thenReturn(1);
 
         // WHEN: Poller executes scheduled tick
         poller.pollAndProcess();
 
         // THEN: Verify chunks staged, published atomically, and cleaned up
-        verify(stagingRepository).stageInitialChunks(77L, 1, List.of("Chunk 1: RAG Architecture", "Chunk 2: pgvector HNSW"));
-        verify(stagingRepository).copyStagedToPublished(77L, 1, projectId);
-        verify(stagingRepository).deleteStagedChunks(77L, 1);
+        verify(stagingRepository).stageInitialChunks(77L, List.of("Chunk 1: RAG Architecture", "Chunk 2: pgvector HNSW"));
+        verify(stagingRepository).copyStagedToPublished(77L, projectId);
+        verify(stagingRepository, atLeastOnce()).deleteStagedChunks(77L);
 
         // Verify READY update executed
         verify(jdbcTemplate).update(

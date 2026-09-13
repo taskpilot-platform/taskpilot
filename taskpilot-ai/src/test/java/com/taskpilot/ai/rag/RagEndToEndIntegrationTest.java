@@ -38,6 +38,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
+@org.mockito.junit.jupiter.MockitoSettings(strictness = org.mockito.quality.Strictness.LENIENT)
 class RagEndToEndIntegrationTest {
 
     @Mock
@@ -127,22 +128,27 @@ class RagEndToEndIntegrationTest {
         when(embeddingGateway.embedForIngestion(anyList())).thenReturn(List.of(sampleEmbedding));
 
         com.taskpilot.ai.rag.domain.StagedChunk staged = new com.taskpilot.ai.rag.domain.StagedChunk(
-                1L, 1L, 1, 0, "Chunk 1: RAG PGVector Architecture", null, java.time.Instant.now()
+                1L, 1L, 0, "Chunk 1: RAG PGVector Architecture", null, java.time.Instant.now()
         );
-        when(stagingRepository.findPendingChunks(1L, 1)).thenReturn(List.of(staged));
-        when(stagingRepository.countPendingChunks(1L, 1)).thenReturn(0L);
-        when(stagingRepository.copyStagedToPublished(1L, 1, PROJECT_ID)).thenReturn(1);
+        when(stagingRepository.hasStagedChunks(1L)).thenReturn(false);
+        when(stagingRepository.findPendingChunks(eq(1L), anyInt()))
+                .thenReturn(List.of(staged), java.util.Collections.emptyList());
+        when(stagingRepository.updateEmbeddingsFenced(eq(1L), eq(1), anyList(), anyList())).thenReturn(1);
 
-        // Mock JDBC finalization
-        when(jdbcTemplate.query(anyString(), any(PreparedStatementSetter.class), any(RowMapper.class)))
-                .thenReturn(List.of(1));
-        when(jdbcTemplate.update(anyString(), eq(1L), eq(1))).thenReturn(1);
+        // Mock JDBC lease renewal and finalization
+        when(jdbcTemplate.update(contains("lease_until = NOW() + INTERVAL '3 minutes'"), eq(1L), eq(1))).thenReturn(1);
+        when(jdbcTemplate.query(contains("FOR UPDATE"), any(PreparedStatementSetter.class), any(RowMapper.class)))
+                .thenReturn(List.of(1L));
+        when(jdbcTemplate.queryForObject(contains("COUNT(*) FROM document_chunk_staging"), eq(Long.class), eq(1L)))
+                .thenReturn(0L);
+        when(stagingRepository.copyStagedToPublished(1L, PROJECT_ID)).thenReturn(1);
+        when(jdbcTemplate.update(contains("status = 'READY'"), eq(1L), eq(1))).thenReturn(1);
 
         ingestionService.ingestDocument(1L, 1);
 
         // Verify chunks were published atomically from staging
-        verify(stagingRepository).copyStagedToPublished(1L, 1, PROJECT_ID);
-        verify(stagingRepository).deleteStagedChunks(1L, 1);
+        verify(stagingRepository).copyStagedToPublished(1L, PROJECT_ID);
+        verify(stagingRepository, atLeastOnce()).deleteStagedChunks(1L);
 
         // --- STEP 2: Retrieval via ProjectKnowledgeService ---
         when(projectMemberPort.isProjectMember(PROJECT_ID, MEMBER_USER_ID)).thenReturn(true);

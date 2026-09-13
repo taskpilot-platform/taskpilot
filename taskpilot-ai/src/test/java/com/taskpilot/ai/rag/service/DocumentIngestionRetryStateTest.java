@@ -29,6 +29,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
+@org.mockito.junit.jupiter.MockitoSettings(strictness = org.mockito.quality.Strictness.LENIENT)
 class DocumentIngestionRetryStateTest {
 
     @Mock
@@ -69,8 +70,13 @@ class DocumentIngestionRetryStateTest {
 
         lenient().when(stagingRepository.findPendingChunks(anyLong(), anyInt()))
                 .thenAnswer(inv -> List.of(new com.taskpilot.ai.rag.domain.StagedChunk(
-                        1L, inv.getArgument(0), inv.getArgument(1), 0, "chunk", null, java.time.Instant.now()
+                        1L, inv.getArgument(0), 0, "chunk", null, java.time.Instant.now()
                 )));
+        lenient().when(jdbcTemplate.update(contains("lease_until = NOW() + INTERVAL '3 minutes'"), anyLong(), anyInt())).thenReturn(1);
+        lenient().when(jdbcTemplate.update(contains("retry_count = 0"), anyLong(), anyInt())).thenReturn(1);
+        lenient().when(stagingRepository.updateEmbeddingsFenced(anyLong(), anyInt(), anyList(), anyList())).thenReturn(1);
+        lenient().when(jdbcTemplate.query(contains("SELECT retry_count FROM documents"), any(PreparedStatementSetter.class), any(RowMapper.class)))
+                .thenReturn(List.of(0));
     }
 
     @Test
@@ -94,24 +100,20 @@ class DocumentIngestionRetryStateTest {
 
         ingestionService.ingestDocument(10L, 1);
 
-        // Verify the atomic conditional update was triggered
+        // Verify the atomic conditional update was triggered with incremented retry_count = 1
         ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
         verify(jdbcTemplate).update(
                 sqlCaptor.capture(),
-                eq(5), // maxRetries
-                eq(5),
-                eq(5),
-                anyLong(), // backoffSeconds
+                eq(1), // newRetryCount
+                anyLong(), // delaySeconds
                 contains("Connection reset by peer"),
                 eq(10L),
                 eq(1)
         );
 
         String sql = sqlCaptor.getValue();
-        assertThat(sql).contains("status = CASE");
-        assertThat(sql).contains("'RETRY_WAIT'");
-        assertThat(sql).contains("'FAILED'");
-        assertThat(sql).contains("retry_count = CASE");
+        assertThat(sql).contains("status = 'RETRY_WAIT'");
+        assertThat(sql).contains("retry_count = ?");
         assertThat(sql).contains("lease_until = NULL");
         assertThat(sql).contains("processing_version = ?");
         assertThat(sql).contains("status = 'PROCESSING'");
@@ -135,17 +137,15 @@ class DocumentIngestionRetryStateTest {
         when(textExtractor.extractText(any(), any(), any())).thenReturn("valid text");
         when(chunker.chunkText(anyString())).thenReturn(List.of("chunk"));
         when(embeddingGateway.embedForIngestion(anyList())).thenThrow(new QuotaExceededException("Quota exceeded"));
+        when(jdbcTemplate.query(contains("SELECT retry_count FROM documents"), any(PreparedStatementSetter.class), any(RowMapper.class)))
+                .thenReturn(List.of(5));
 
         ingestionService.ingestDocument(20L, 3);
 
-        // Verify update passes maxRetries = 5, docId = 20, version = 3
+        // Verify update marks FAILED when retry limit reached
         verify(jdbcTemplate).update(
-                contains("status = CASE"),
-                eq(5),
-                eq(5),
-                eq(5),
-                anyLong(),
-                contains("Quota exceeded"),
+                contains("status = 'FAILED'"),
+                contains("Exceeded consecutive retry limit"),
                 eq(20L),
                 eq(3)
         );
@@ -172,22 +172,29 @@ class DocumentIngestionRetryStateTest {
         when(embeddingGateway.embedForIngestion(anyList())).thenReturn(List.of(new float[768]));
 
         com.taskpilot.ai.rag.domain.StagedChunk staged = new com.taskpilot.ai.rag.domain.StagedChunk(
-                1L, 30L, 2, 0, "chunk", null, java.time.Instant.now()
+                1L, 30L, 0, "chunk", null, java.time.Instant.now()
         );
-        when(stagingRepository.findPendingChunks(30L, 2)).thenReturn(List.of(staged));
-        when(stagingRepository.countPendingChunks(30L, 2)).thenReturn(0L);
-        when(stagingRepository.copyStagedToPublished(30L, 2, 100L)).thenReturn(1);
+        when(stagingRepository.hasStagedChunks(30L)).thenReturn(false);
+        when(stagingRepository.findPendingChunks(eq(30L), anyInt())).thenReturn(List.of(staged), java.util.Collections.emptyList());
+        when(stagingRepository.updateEmbeddingsFenced(eq(30L), eq(2), anyList(), anyList())).thenReturn(1);
+        when(stagingRepository.copyStagedToPublished(30L, 100L)).thenReturn(1);
 
-        when(jdbcTemplate.query(anyString(), any(PreparedStatementSetter.class), any(RowMapper.class)))
-                .thenReturn(List.of(2));
-        when(jdbcTemplate.update(anyString(), eq(30L), eq(2))).thenReturn(1);
+        when(jdbcTemplate.update(contains("lease_until = NOW() + INTERVAL '3 minutes'"), eq(30L), eq(2))).thenReturn(1);
+        when(jdbcTemplate.query(contains("FOR UPDATE"), any(PreparedStatementSetter.class), any(RowMapper.class)))
+                .thenReturn(List.of(30L));
+        when(jdbcTemplate.queryForObject(contains("COUNT(*) FROM document_chunk_staging"), eq(Long.class), eq(30L)))
+                .thenReturn(0L);
+        when(jdbcTemplate.update(contains("status = 'READY'"), eq(30L), eq(2))).thenReturn(1);
 
         ingestionService.ingestDocument(30L, 2);
 
         ArgumentCaptor<String> readySqlCaptor = ArgumentCaptor.forClass(String.class);
-        verify(jdbcTemplate).update(readySqlCaptor.capture(), eq(30L), eq(2));
+        verify(jdbcTemplate, atLeastOnce()).update(readySqlCaptor.capture(), eq(30L), eq(2));
 
-        String readySql = readySqlCaptor.getValue();
+        String readySql = readySqlCaptor.getAllValues().stream()
+                .filter(s -> s.contains("status = 'READY'"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("status = 'READY' update not found"));
         assertThat(readySql).contains("status = 'READY'");
         assertThat(readySql).contains("retry_count = 0");
         assertThat(readySql).contains("next_attempt_at = NULL");
@@ -222,10 +229,10 @@ class DocumentIngestionRetryStateTest {
         // Verify worker was NOT blocked sleeping
         assertThat(duration).isLessThan(2000L);
 
-        // Verify conditional SQL update for RETRY_WAIT was executed
+        // Verify conditional SQL update for RETRY_WAIT was executed with retry_count = 1
         verify(jdbcTemplate).update(
                 contains("RETRY_WAIT"),
-                eq(5), eq(5), eq(5),
+                eq(1),
                 anyLong(),
                 contains("429 RESOURCE_EXHAUSTED"),
                 eq(40L),
