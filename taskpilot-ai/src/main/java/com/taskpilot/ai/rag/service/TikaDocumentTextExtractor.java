@@ -16,6 +16,7 @@ public class TikaDocumentTextExtractor implements DocumentTextExtractor {
 
     public TikaDocumentTextExtractor() {
         this.tika = new Tika();
+        this.tika.setMaxStringLength(-1);
     }
 
     @Override

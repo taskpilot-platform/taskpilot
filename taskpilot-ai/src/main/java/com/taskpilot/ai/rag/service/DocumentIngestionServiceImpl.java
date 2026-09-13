@@ -116,16 +116,23 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
                 if (text == null || text.isBlank()) {
                     throw new IllegalStateException("Extracted text from document is empty");
                 }
+                int extractedChars = text.length();
+                log.info("Extracted text from document: documentId={}, processingVersion={}, extractedCharacters={}",
+                        documentId, claimedVersion, extractedChars);
 
                 // 2b. Recursive deterministic chunking
                 List<String> textChunks = documentChunker.chunkText(text);
                 if (textChunks.isEmpty()) {
                     throw new IllegalStateException("Chunker produced 0 chunks from extracted text");
                 }
+                int chunkCount = textChunks.size();
+                int firstChunkIndex = 0;
+                int lastChunkIndex = chunkCount - 1;
 
                 // 2c. Persist all text chunks into staging with embedding = NULL before embedding
                 stagingRepository.stageInitialChunks(documentId, claimedVersion, textChunks);
-                log.info("Persisted {} text chunks to staging for doc {} v{}", textChunks.size(), documentId, claimedVersion);
+                log.info("Persisted {} text chunks to staging: documentId={}, processingVersion={}, extractedCharacters={}, chunkCount={}, firstChunkIndex={}, lastChunkIndex={}",
+                        chunkCount, documentId, claimedVersion, extractedChars, chunkCount, firstChunkIndex, lastChunkIndex);
             } else {
                 log.info("Resuming ingestion for doc {} v{}: using existing staged text chunks", documentId, claimedVersion);
             }
