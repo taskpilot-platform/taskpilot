@@ -1,0 +1,167 @@
+# Báo Cáo Sự Cố Kỹ Thuật Hệ Thống RAG TaskPilot (Incident Report)
+**Ngày ghi nhận:** 13/09/2026  
+**Hệ thống:** TaskPilot — Subsystem RAG Document Ingestion & Vector Retrieval  
+**Trạng thái xử lý mã nguồn:** Đã khoanh vùng 100% nguyên nhân, **chưa triển khai code sửa chữa** (chờ duyệt kế hoạch).
+
+---
+
+## 1. Tóm Tắt Tổng Quan (Executive Summary)
+
+Trong ngày 13/09/2026, quá trình vận hành và kiểm thử thực tế trên tài liệu kỹ thuật lớn (~800 trang PDF) đã phát hiện **hai sự cố nghiêm trọng** trong pipeline xử lý dữ liệu RAG:
+
+1. **Sự cố 1 (Data Truncation Bug):** Thư viện Apache Tika âm thầm cắt ngắn toàn bộ văn bản sau mốc 100.000 ký tự (khoảng trang 46) do giá trị mặc định của `BodyContentHandler()`, khiến ~94% nội dung phía sau tài liệu không bao giờ được đưa vào chunking.
+2. **Sự cố 2 (Premature Failure on Large Document Ingestion):** Khi thử nghiệm tài liệu thực tế `Sommerville_Software_Engineering_10ed.pdf` (Document ID 14, 2,23 triệu ký tự, 3.397 chunks), tài liệu chỉ xử lý được 300 chunks đầu tiên (8,83%), sau đó liên tục rơi vào `RETRY_WAIT` và nhanh chóng chuyển hẳn sang `FAILED` sau 7 phút 41 giây.
+
+---
+
+## 2. Chi Tiết Sự Cố 1: Cắt Ngắn Văn Bản Tại Mốc 100.000 Ký Tự (Apache Tika Write Limit)
+
+### 2.1. Hiện Tượng & Phát Hiện
+- Người dùng tải lên một tài liệu PDF lớn (~800 trang).
+- Quá trình ingestion hoàn tất bất thường chỉ sau vài giây.
+- Khi truy vấn RAG qua AI Chat / Knowledge Search, hệ thống chỉ trả về kết quả thuộc các phần đầu (đến khoảng trang 46), các chương/trang về sau hoàn toàn không tồn tại trong kết quả tìm kiếm.
+
+### 2.2. Phân Tích Kỹ Thuật & Nguyên Nhân Gốc Rễ
+- **Vị trí mã nguồn:** `TikaDocumentTextExtractor.java`
+- **Cơ chế lỗi:** 
+  Trong Apache Tika 3.1.0, hàm khởi tạo `new Tika()` mặc định gán `maxStringLength = 100000`. Khi gọi `tika.parseToString(...)`, Tika sử dụng `WriteOutContentHandler(this.maxStringLength)`.
+  Khi tài liệu vượt quá 100.000 ký tự, Tika ném ra `WriteLimitReachedException`. Tuy nhiên, bên trong phương thức `parseToString`, Tika **tự bắt (catch) exception này và âm thầm trả về phần chuỗi đã ghi được tính đến thời điểm chạm giới hạn**, không hề có log cảnh báo hoặc ném exception ra ngoài.
+- **Hậu quả:** Semantic Chunker chỉ nhận được 100.000 ký tự đầu tiên, sinh ra khoảng ~150 chunks và bỏ rơi toàn bộ nội dung từ trang 47 đến trang 800.
+
+### 2.3. Trạng Thái Khắc Phục Của Sự Cố 1
+- Đã sửa trong `TikaDocumentTextExtractor.java` bằng việc cấu hình `this.tika.setMaxStringLength(-1)` (chỉ thị cho `WriteOutContentHandler` không giới hạn dung lượng văn bản ghi nhận).
+- Đã kiểm chứng qua unit test `TikaDocumentTextExtractorTest` với tài liệu tổng hợp 120 trang PDF (251.840 ký tự), các marker đầu, giữa, mốc 46 và cuối trang đều được trích xuất đầy đủ 100%.
+
+---
+
+## 3. Chi Tiết Sự Cố 2: Tài Liệu 800 Trang Bị `FAILED` Trong Môi Trường Chạy Thật
+
+### 3.1. Dữ Liệu Thực Tế Từ Cơ Sở Dữ Liệu (Document ID 14)
+Kiểm tra trực tiếp bảng `documents` và `document_chunk_staging` trên PostgreSQL (AWS Supabase):
+
+```json
+{
+  "id": "14",
+  "project_id": "4",
+  "original_filename": "Sommerville_Software_Engineering_10ed.pdf",
+  "status": "FAILED",
+  "processing_version": 6,
+  "retry_count": 5,
+  "error_message": "Embedding quota limit reached for background ingestion (batch size: 20, estimated tokens: 4317). Yielding for backoff.",
+  "created_at": "2026-09-13T10:15:16.811Z",
+  "updated_at": "2026-09-13T10:22:57.296Z"
+}
+```
+
+**Thống kê bảng Staging (`document_chunk_staging`):**
+- Tổng số ký tự trích xuất (`total_chars`): **`2.226.645` ký tự**.
+- Tổng số chunk sinh ra (`total_chunks`): **`3.397` chunks** (từ `chunk_index = 0` đến `3396`).
+- Số chunk đã embed thành công (`embedded_chunks`): **`300` chunks** (từ chunk `0` đến `299`).
+- Số chunk chưa embed (`pending_chunks`): **`3.097` chunks** (từ chunk `300` đến `3396`, `embedding IS NULL`).
+- Tỷ lệ hoàn thành trước khi chết: **`8,83%`**.
+
+### 3.2. Trình Tự Diễn Biến Thất Bại (Timeline of Failure)
+1. **10:15:16Z (Initial Attempt - Version 1):**
+   - Tải file từ storage, trích xuất thành công 2.226.645 ký tự.
+   - Chunker sinh 3.397 chunks, lưu toàn bộ vào `document_chunk_staging` với `processing_version = 1`.
+   - Vòng lặp embedding chạy thành công qua **15 batches** (mỗi batch 20 chunks = 300 chunks).
+   - Đến **Batch 15 (chunks 300–319, ước tính 4.317 tokens)**: Cửa sổ trượt 60 giây của `RpmRateLimiter` chạm ngưỡng trần 28.000 TPM.
+   - `RpmRateLimiter` kích hoạt cơ chế pacing và chờ dung lượng trống trong `pacing-wait-ms = 10000` (10 giây).
+   - Sau 10 giây chờ đợi, các batch cũ (nạp lúc 0s, 3s, 6s, 9s...) vẫn chưa vượt qua mốc 60 giây, do đó cửa sổ chưa có chỗ trống.
+   - `RpmRateLimiter` trả về `false`, `EmbeddingGateway` ném `QuotaExceededException`.
+   - `DocumentIngestionServiceImpl` bắt exception và coi đây là lỗi thất bại của job -> cập nhật `status = 'RETRY_WAIT'`, `retry_count = 1`, đặt lịch retry sau ~12 giây (`calculateBackoff(0)`).
+
+2. **10:15:30Z (Retry 1 - Version 2):**
+   - Sau 12 giây, Poller nhặt lại job, claim thành công và tăng `processing_version = 2`.
+   - Chunks được adopt sang v2, lọc ra 3.097 chunks pending bắt đầu từ chunk 300.
+   - Lập tức gửi Batch 15 vào `EmbeddingGateway`.
+   - **Vấn đề xuất hiện:** Lúc này mới trôi qua ~22 giây kể từ khi bắt đầu. Cửa sổ 60s của `RpmRateLimiter` vẫn đang chứa nguyên vẹn ~26.000 tokens của các batch trước.
+   - Batch 15 (4.317 tokens) lại bị từ chối, đợi 10 giây pacing và tiếp tục timeout.
+   - `retry_count` tăng lên **2**. Lịch retry tiếp sau ~22 giây.
+
+3. **10:16:00Z -> 10:22:57Z (Retries 2, 3, 4, 5):**
+   - Quá trình lặp lại tương tự: Batch 15 liên tục bị va vào trần quota khi cửa sổ trượt chưa đủ thời gian xả sạch.
+   - Mỗi lần timeout 10 giây lại đốt thêm 1 lượt retry.
+   - Đến lần thử thứ 6 (`processing_version = 6`, `retry_count = 5`): Điều kiện SQL `WHEN retry_count >= 5 THEN 'FAILED'` kích hoạt.
+   - Tài liệu bị đánh dấu vĩnh viễn là `FAILED`.
+
+---
+
+## 4. Ba Lỗ Hổng Kiến Trúc Được Xác Định (Root Cause Breakdown)
+
+| STT | Lỗ hổng kiến trúc | Phân tích chi tiết |
+| :--- | :--- | :--- |
+| **1** | **Đánh đồng "Chờ Quota (Pacing Wait)" với "Lỗi hệ thống (Job Failure)"** | Một tài liệu 800 trang (~742.000 tokens) dưới trần 28.000 TPM về mặt toán học **bắt buộc phải mất ít nhất 27 phút** mới có thể embed xong. Trong 27 phút đó, tài liệu sẽ chạm trần quota ít nhất 26 lần. Việc giới hạn `maxRetryAttempts = 5` và coi mỗi lần tạm dừng chờ quota là 1 lần hỏng khiến tài liệu không thể hoàn thành. |
+| **2** | **Lệch pha giữa Cửa sổ trượt (60s) và Thời gian Backoff (12s, 22s)** | Khi dính nghẽn quota cửa sổ trượt, thời gian lùi (`next_attempt_at`) của các lần retry đầu chỉ là 12s và 22s. Khi worker tỉnh dậy, cửa sổ 60s trong RAM vẫn chưa giải phóng các batch cũ, kết hợp với `pacingWaitMs` ngắn (10s) dẫn tới việc job tự timeout liên tục mà không tiến thêm được chunk nào. |
+| **3** | **Cơ chế tính Quota của Google Gemini: Tính theo từng input text chứ không theo HTTP request** | *(Cập nhật kết quả thực nghiệm ngày 13/09)*: Ban đầu giả định việc truyền `batch.size()` (20) là lạm phát quota. Tuy nhiên, qua bài kiểm thử cô lập `GeminiBatchQuotaExperimentTest`, dashboard Google AI Studio xác nhận: 1 HTTP batch (20 texts) tăng **chính xác +20 đơn vị RPD** (từ 3/1K lên 23/1K) và **+20 đơn vị RPM** (từ 1/100 lên 20/100). Do đó, việc limiter tính `batch.size()` là hoàn toàn chính xác với cơ chế của Google. Nguyên nhân khiến Document 14 thất bại sau 2.680 chunks là do chạm trần **1.000 RPD (Requests Per Day)** của gói Free Tier trên 1 API key. |
+
+---
+
+## 5. Phương Án Khắc Phục Triệt Để & Đã Thực Hiện (Implementation & Resolution)
+
+1. **Bảo tồn Dữ liệu Staging Tuyệt Đối (Zero Staging Loss on Failure):**
+   - Đã khắc phục lỗi nghiêm trọng trong `markPermanentFailure()`: Khi cạn quota hoặc gặp lỗi không thể hồi phục, hệ thống **chỉ dọn dẹp các chunk publish dở dang (`document_chunks`), tuyệt đối không xóa staging (`document_chunk_staging`)**. Nhờ đó, 2.680 vector đã tính toán được giữ nguyên vẹn.
+2. **Hỗ trợ Đa Khóa Dự Phòng (Multi-Key Rotation & Failover):**
+   - Hỗ trợ cấu hình `GEMINI_API_KEYS` trong `.env` và `application.yml`. Tự động luân chuyển khóa khi một khóa chạm ngưỡng 1.000 RPD ngày.
+3. **Đồng bộ Schema Database (Flyway Migration V30):**
+   - Xóa bỏ cột `processing_version` khỏi bảng `document_chunk_staging` (`V30__remove_processing_version_from_staging.sql`), giải quyết triệt để lỗi `null value in column "processing_version"` khi nạp tài liệu mới.
+4. **Nguyên tắc "Tiến độ không bị phạt" (Progress-aware Retry Management):**
+   - Khi gặp `QuotaExceededException`, nếu worker đã embed thành công ít nhất $\ge 1$ batch, hệ thống chuyển sang `RETRY_WAIT` nhưng không phạt cạn lượt retry.
+5. **Đồng bộ thời gian chờ Quota với Cửa sổ trượt:**
+   - Khi tạm dừng vì quota cạn kiệt, thời gian lùi tối thiểu $\ge 60$ giây để cửa sổ trượt xả sạch token cũ trước khi phiên tiếp theo bắt đầu.
+
+---
+
+## 6. Ước Tính Thời Gian Xử Lý Sau Khi Khắc Phục
+- **Tài liệu 800 trang:** 3.397 chunks, ~742.000 tokens.
+- **Tốc độ cho phép an toàn:** 28.000 TPM (tương đương ~6 batches / phút).
+- **Tổng số batch:** $3.397 / 20 = 170$ batches.
+- **Thời gian xử lý dự kiến:** **`28 đến 32 phút`** (chạy nền hoàn toàn tự động, phân bổ đều đặn qua các phút, không gây nghẽn thread pool).
+
+---
+
+## 7. Sự Cố 3: Độc Chiếm Kết Quả Truy Vấn RAG Đa Tài Liệu (Multi-Document Retrieval Crowding)
+
+### 7.1. Hiện Tượng & Phát Hiện Thực Tế
+- **Môi trường**: Project 4 chứa nhiều tài liệu, gồm `Sommerville_Software_Engineering_10ed.pdf`, `A Decision-Support Tool for Maintenance Task Prioritization.pdf` (Document 3), và `OOAD PROJECT REPORT _ MD.docx` (Document 9 - báo cáo đồ án thực tế ~543 chunks).
+- **Hiện tượng**: Người dùng truy vấn AI về chủ đề:
+  > *"Data Security and Privacy"* hoặc *"Role-Based Access Control (RBAC)"*
+- **Kỳ vọng**: AI phải trích xuất được chunk 517 của Document 9 (nội dung cụ thể về việc triển khai RBAC và EMR cho ứng dụng phòng khám).
+- **Thực tế trước khi sửa**: Chunk 517 bị biến mất hoàn toàn khỏi context đưa vào LLM!
+- **Nguyên nhân định vị**:
+  - Naive vector search chỉ lấy top $K=5$ kết quả có độ tương đồng cosine cao nhất toàn project (`LIMIT 5`).
+  - Document 3 (bài báo Maintenance DSS) có mật độ từ khóa kỹ thuật tương đồng dày đặc, chiếm trọn **cả 5 vị trí đầu bảng** (Rank #1 đến #5, similarity từ 0.6720 đến 0.7195).
+  - Target Chunk 517 của Document 9 đạt similarity rất cao ($0.6603$, đứng top #1 trong Document 9), nhưng đứng thứ **#6** toàn project.
+  - Do đó, câu lệnh `LIMIT 5` cắt đứt ngay trước chunk 517, khiến tri thức độc nhất và giá trị nhất từ Document 9 bị loại bỏ.
+
+### 7.2. Phân Tích Kỹ Thuật & Quyết Định Thiết Kế
+Không thay đổi embedding model, index HNSW, ngưỡng điểm hay thuật toán re-ranking phức tạp (MMR). Thay vào đó, áp dụng cơ chế **Retrieval Policy Diversification** ở tầng Application/Service:
+1. **Mở rộng Candidate Pool**: Tăng số lượng candidate ban đầu từ database lên $20$ chunks với ngưỡng lọc cơ sở $\text{minScore} = 0.40$.
+2. **Thuật toán Two-Pass Soft-Cap Context Selection (`DocumentDiversityContextSelector`)**:
+   - **Pass 1 (Ưu tiên đa dạng hóa)**: Duyệt các candidate theo thứ tự độ tương đồng giảm dần. Với mỗi chunk, nếu document tương ứng chưa vượt quá `maxPerDocument = 2`, chọn chunk đó vào context (tối đa `maxContext = 6`). Các chunk vượt quá cap tạm thời đưa vào danh sách `overflow`.
+   - **Pass 2 (Chống bỏ trống context / Backfill)**: Nếu sau Pass 1 số lượng chunk đã chọn chưa đủ `maxContext = 6` (do project có ít document), duyệt tiếp danh sách `overflow` theo thứ tự độ tương đồng ban đầu để lấp đầy context slots.
+3. **Phân định rõ RAG Context vs UI Search**:
+   - **Project-wide RAG (`documentId == null`)**: Áp dụng candidate pool $20 \to$ soft-cap $2 \to$ tối đa $6$ chunks cho LLM.
+   - **Document-focused RAG (`documentId != null`)**: Khi truy vấn một tài liệu cụ thể, lấy trực tiếp top $6$ chunks của tài liệu đó, không áp dụng diversity cap.
+   - **UI Search (`/projects/{id}/documents/search`)**: Giữ nguyên thuần similarity ranking để người dùng tìm kiếm tự nhiên.
+
+### 7.3. Kết Quả Kiểm Chứng Thực Tế (Empirical Verification)
+Chạy kiểm chứng thực nghiệm trực tiếp trên database thật:
+- **Candidate Pool (20 candidates, query: *"data security and privacy"*):**
+  - Ranks #1 – #5: Document 3 (similarity 0.7195, 0.7144, 0.6964, 0.6726, 0.6720)
+  - Rank #6: Document 9, Chunk 517 (similarity 0.6603)
+  - Ranks #7 – #12: Document 3
+  - Rank #13 – #14: Document 9, Chunk 30, Chunk 29
+- **Sau khi qua `DocumentDiversityContextSelector` (maxContext=6, maxPerDocument=2):**
+  ```text
+  Slot  ChunkId   DocId   DocChunkIdx   Similarity  Document Name
+  --------------------------------------------------------------------------------
+  [1]   107       3       75            0.7195      Doc 3 (Pass 1: slot 1/2)
+  [2]   109       3       77            0.7144      Doc 3 (Pass 1: slot 2/2)
+  [3]   1270      9       517           0.6603      Doc 9 (Pass 1: slot 1/2) <=== CỨU THÀNH CÔNG VÀO CONTEXT!
+  [4]   783       9       30            0.6355      Doc 9 (Pass 1: slot 2/2)
+  [5]   108       3       76            0.6964      Doc 3 (Pass 2: Backfill từ overflow)
+  [6]   106       3       74            0.6726      Doc 3 (Pass 2: Backfill từ overflow)
+  ```
+- **Kết luận**: Chunk 517 được đẩy lên ngay **Slot [3]**, context vừa bảo đảm tính đa dạng tài liệu, vừa tận dụng triệt để dung lượng 6 chunks chất lượng cao cho mô hình ngôn ngữ lớn.
+

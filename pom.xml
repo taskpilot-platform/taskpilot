@@ -26,6 +26,7 @@
         <taskpilot.version>${project.version}</taskpilot.version>
         <langchain4j.core.version>1.0.0</langchain4j.core.version>
         <langchain4j.version>1.0.0-beta5</langchain4j.version>
+        <tika.version>3.1.0</tika.version>
     </properties>
 
     <modules>
@@ -138,6 +139,16 @@
                 <groupId>com.azure</groupId>
                 <artifactId>azure-identity</artifactId>
                 <version>1.18.1</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tika</groupId>
+                <artifactId>tika-core</artifactId>
+                <version>${tika.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tika</groupId>
+                <artifactId>tika-parsers-standard-package</artifactId>
+                <version>${tika.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
