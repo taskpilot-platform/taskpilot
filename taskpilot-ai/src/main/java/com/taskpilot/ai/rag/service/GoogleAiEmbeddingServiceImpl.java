@@ -19,42 +19,57 @@ import java.util.List;
 @Service
 public class GoogleAiEmbeddingServiceImpl implements EmbeddingService {
 
-    private final EmbeddingModel embeddingModel;
+    private final List<EmbeddingModel> embeddingModels;
+    private final java.util.concurrent.atomic.AtomicInteger currentKeyIndex = new java.util.concurrent.atomic.AtomicInteger(0);
     private final int dimension;
     private final String modelName;
 
     @Autowired
     public GoogleAiEmbeddingServiceImpl(
             @Value("${ai.gemini.api-key:}") String apiKey,
+            @Value("${ai.gemini.api-keys:}") String apiKeys,
             @Value("${ai.gemini.embedding-model:gemini-embedding-2}") String modelName,
             @Value("${ai.gemini.embedding-dimension:768}") int dimension) {
         this.modelName = modelName;
         this.dimension = dimension;
 
-        String effectiveKey = resolveApiKey(apiKey);
-        if (effectiveKey == null || effectiveKey.isBlank()) {
+        List<String> effectiveKeys = resolveApiKeys(apiKey, apiKeys);
+        if (effectiveKeys.isEmpty()) {
             log.warn("GEMINI_API_KEY is not configured. GoogleAiEmbeddingModel will fail if invoked.");
-            this.embeddingModel = null;
+            this.embeddingModels = Collections.emptyList();
         } else {
-            this.embeddingModel = GoogleAiEmbeddingModel.builder()
-                    .apiKey(effectiveKey)
-                    .modelName(modelName)
-                    .outputDimensionality(dimension)
-                    .maxRetries(0)
-                    .timeout(Duration.ofSeconds(60))
-                    .build();
-            log.info("Initialized canonical GoogleAiEmbeddingModel: model={}, dimension={}, maxRetries=0", modelName, dimension);
+            List<EmbeddingModel> models = new ArrayList<>();
+            for (String key : effectiveKeys) {
+                models.add(GoogleAiEmbeddingModel.builder()
+                        .apiKey(key)
+                        .modelName(modelName)
+                        .outputDimensionality(dimension)
+                        .maxRetries(0)
+                        .timeout(Duration.ofSeconds(60))
+                        .build());
+            }
+            this.embeddingModels = Collections.unmodifiableList(models);
+            log.info("Initialized canonical GoogleAiEmbeddingModel with {} key(s): model={}, dimension={}, maxRetries=0",
+                    models.size(), modelName, dimension);
         }
     }
 
+    public GoogleAiEmbeddingServiceImpl(String apiKey, String modelName, int dimension) {
+        this(apiKey, null, modelName, dimension);
+    }
+
     public GoogleAiEmbeddingServiceImpl(EmbeddingModel embeddingModel, int dimension) {
-        this.embeddingModel = embeddingModel;
+        this.embeddingModels = List.of(embeddingModel);
         this.dimension = dimension;
         this.modelName = "gemini-embedding-2";
     }
 
     public EmbeddingModel getEmbeddingModel() {
-        return embeddingModel;
+        if (embeddingModels.isEmpty()) {
+            return null;
+        }
+        int idx = Math.abs(currentKeyIndex.get() % embeddingModels.size());
+        return embeddingModels.get(idx);
     }
 
     @Override
@@ -64,20 +79,37 @@ public class GoogleAiEmbeddingServiceImpl implements EmbeddingService {
         }
         ensureModelConfigured();
 
-        try {
-            Response<Embedding> response = embeddingModel.embed(text);
-            if (response == null || response.content() == null) {
-                throw new IllegalStateException("Embedding model returned empty response");
+        int attempts = embeddingModels.size();
+        Exception lastException = null;
+
+        for (int i = 0; i < attempts; i++) {
+            int modelIdx = Math.abs(currentKeyIndex.get() % embeddingModels.size());
+            EmbeddingModel model = embeddingModels.get(modelIdx);
+            try {
+                Response<Embedding> response = model.embed(text);
+                if (response == null || response.content() == null) {
+                    throw new IllegalStateException("Embedding model returned empty response");
+                }
+                float[] vector = response.content().vector();
+                validateDimension(vector);
+                return vector;
+            } catch (IllegalStateException e) {
+                throw e;
+            } catch (Exception e) {
+                lastException = e;
+                if (attempts > 1) {
+                    int nextIdx = Math.abs(currentKeyIndex.incrementAndGet() % embeddingModels.size());
+                    log.warn("Gemini embedding attempt failed on key #{}: {}. Rotating to key #{} (attempt {} of {})",
+                            modelIdx, e.getMessage(), nextIdx, i + 1, attempts);
+                } else {
+                    break;
+                }
             }
-            float[] vector = response.content().vector();
-            validateDimension(vector);
-            return vector;
-        } catch (IllegalStateException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Failed to generate embedding for text: model={}, error={}", modelName, e.getMessage());
-            throw new RuntimeException("Embedding generation failed: " + e.getMessage(), e);
         }
+
+        log.error("Failed to generate embedding for text after {} attempts: model={}, error={}",
+                attempts, modelName, lastException != null ? lastException.getMessage() : "unknown");
+        throw new RuntimeException("Embedding generation failed: " + (lastException != null ? lastException.getMessage() : "unknown"), lastException);
     }
 
     @Override
@@ -87,30 +119,46 @@ public class GoogleAiEmbeddingServiceImpl implements EmbeddingService {
         }
         ensureModelConfigured();
 
-        try {
-            List<TextSegment> segments = texts.stream()
-                    .map(TextSegment::from)
-                    .toList();
+        List<TextSegment> segments = texts.stream()
+                .map(TextSegment::from)
+                .toList();
 
-            Response<List<Embedding>> response = embeddingModel.embedAll(segments);
-            if (response == null || response.content() == null) {
-                throw new IllegalStateException("Batch embedding returned empty response");
-            }
+        int attempts = embeddingModels.size();
+        Exception lastException = null;
 
-            List<float[]> results = new ArrayList<>(response.content().size());
-            for (Embedding emb : response.content()) {
-                float[] vec = emb.vector();
-                validateDimension(vec);
-                results.add(vec);
+        for (int i = 0; i < attempts; i++) {
+            int modelIdx = Math.abs(currentKeyIndex.get() % embeddingModels.size());
+            EmbeddingModel model = embeddingModels.get(modelIdx);
+            try {
+                Response<List<Embedding>> response = model.embedAll(segments);
+                if (response == null || response.content() == null) {
+                    throw new IllegalStateException("Batch embedding returned empty response");
+                }
+
+                List<float[]> results = new ArrayList<>(response.content().size());
+                for (Embedding emb : response.content()) {
+                    float[] vec = emb.vector();
+                    validateDimension(vec);
+                    results.add(vec);
+                }
+                return results;
+            } catch (IllegalStateException e) {
+                throw e;
+            } catch (Exception e) {
+                lastException = e;
+                if (attempts > 1) {
+                    int nextIdx = Math.abs(currentKeyIndex.incrementAndGet() % embeddingModels.size());
+                    log.warn("Gemini batch embedding attempt failed on key #{}: {}. Rotating to key #{} (attempt {} of {})",
+                            modelIdx, e.getMessage(), nextIdx, i + 1, attempts);
+                } else {
+                    break;
+                }
             }
-            return results;
-        } catch (IllegalStateException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Failed to generate batch embeddings: model={}, count={}, error={}",
-                    modelName, texts.size(), e.getMessage());
-            throw new RuntimeException("Batch embedding generation failed: " + e.getMessage(), e);
         }
+
+        log.error("Failed to generate batch embeddings after {} attempts: model={}, count={}, error={}",
+                attempts, modelName, texts.size(), lastException != null ? lastException.getMessage() : "unknown");
+        throw new RuntimeException("Batch embedding generation failed: " + (lastException != null ? lastException.getMessage() : "unknown"), lastException);
     }
 
     @Override
@@ -119,7 +167,7 @@ public class GoogleAiEmbeddingServiceImpl implements EmbeddingService {
     }
 
     private void ensureModelConfigured() {
-        if (embeddingModel == null) {
+        if (embeddingModels.isEmpty()) {
             throw new IllegalStateException("Embedding model is not configured (missing GEMINI_API_KEY)");
         }
     }
@@ -131,14 +179,26 @@ public class GoogleAiEmbeddingServiceImpl implements EmbeddingService {
         }
     }
 
-    private static String resolveApiKey(String primary) {
-        if (primary != null && !primary.isBlank()) {
-            return primary.trim();
+    private static List<String> resolveApiKeys(String primary, String multi) {
+        java.util.LinkedHashSet<String> keySet = new java.util.LinkedHashSet<>();
+        addKeys(keySet, primary);
+        addKeys(keySet, multi);
+        addKeys(keySet, System.getenv("GEMINI_API_KEY"));
+        addKeys(keySet, System.getenv("GEMINI_API_KEYS"));
+        addKeys(keySet, System.getProperty("GEMINI_API_KEY"));
+        addKeys(keySet, System.getProperty("GEMINI_API_KEYS"));
+        return new ArrayList<>(keySet);
+    }
+
+    private static void addKeys(java.util.Set<String> target, String raw) {
+        if (raw == null || raw.isBlank()) {
+            return;
         }
-        String envKey = System.getenv("GEMINI_API_KEY");
-        if (envKey != null && !envKey.isBlank()) {
-            return envKey.trim();
+        for (String part : raw.split(",")) {
+            String trimmed = part.trim();
+            if (!trimmed.isBlank()) {
+                target.add(trimmed);
+            }
         }
-        return System.getProperty("GEMINI_API_KEY");
     }
 }

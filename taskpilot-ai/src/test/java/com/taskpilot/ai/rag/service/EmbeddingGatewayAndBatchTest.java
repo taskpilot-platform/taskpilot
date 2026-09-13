@@ -141,10 +141,10 @@ class EmbeddingGatewayAndBatchTest {
             assertThat(limiter.tryAcquireBackground()).isTrue();
         }
 
-        // Next background call throws QuotaExceededException
+        // Next background call throws QuotaBackpressureException
         assertThatThrownBy(() -> gateway.embedForIngestion(List.of("text 1")))
-                .isInstanceOf(QuotaExceededException.class)
-                .hasMessageContaining("quota limit reached for background ingestion");
+                .isInstanceOf(QuotaBackpressureException.class)
+                .hasMessageContaining("quota capacity exhausted");
 
         verifyNoInteractions(embeddingService);
     }

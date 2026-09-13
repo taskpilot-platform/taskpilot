@@ -59,12 +59,8 @@ public class EmbeddingGateway {
             List<String> batch = texts.subList(i, end);
             int estimatedTokens = RpmRateLimiter.estimateTokens(batch);
 
-            boolean acquired = rpmRateLimiter.acquireBackgroundWithPacing(batch.size(), estimatedTokens, properties.getPacingWaitMs());
-            if (!acquired) {
-                throw new QuotaExceededException(String.format(
-                        "Embedding quota limit reached for background ingestion (batch size: %d, estimated tokens: %d). Yielding for backoff.",
-                        batch.size(), estimatedTokens));
-            }
+            // Pass requestCount = 1 for the single provider HTTP batch request (P0 Requirement 1)
+            rpmRateLimiter.acquireBackgroundOrYield(1, estimatedTokens);
 
             log.info("Dispatching background embedding batch to provider: offset={}, batchSize={}, estimatedTokens={}, total={}",
                     i, batch.size(), estimatedTokens, texts.size());

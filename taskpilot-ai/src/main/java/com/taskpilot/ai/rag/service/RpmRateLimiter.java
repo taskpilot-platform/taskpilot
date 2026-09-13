@@ -133,6 +133,139 @@ public class RpmRateLimiter {
     }
 
     /**
+     * Atomically acquires background capacity or yields with QuotaBackpressureException.
+     * Enforces:
+     * 1. Atomic admission check and reservation in one critical section.
+     * 2. Small inline quota wait optimization (<= 2000ms, at most once per batch).
+     * 3. Exact sliding-window wait calculation (max(requestWaitMs, tokenWaitMs)).
+     * 4. QuotaBackpressureException when capacity must yield without consuming retry budget.
+     *
+     * @param requestCount number of provider HTTP requests (1 for batchEmbedContents)
+     * @param estimatedTokens total estimated tokens for the batch
+     * @throws QuotaBackpressureException when capacity is not available and worker must yield to RETRY_WAIT
+     */
+    public void acquireBackgroundOrYield(int requestCount, int estimatedTokens) throws QuotaBackpressureException {
+        long waitMs;
+        lock.lock();
+        try {
+            long now = System.currentTimeMillis();
+            pruneExpired(now);
+            int backgroundRpmLimit = properties.getMaxRpm() - properties.getInteractiveHeadroom();
+            int backgroundTpmLimit = properties.getMaxTpm() - properties.getInteractiveTpmHeadroom();
+            int currentRequests = calculateTotalRequests();
+            int currentTokens = calculateTotalTokens();
+
+            if ((currentRequests + requestCount) <= backgroundRpmLimit
+                    && (currentTokens + estimatedTokens) <= backgroundTpmLimit) {
+                records.addLast(new AdmissionRecord(now, requestCount, estimatedTokens));
+                log.debug("Background embedding admitted (requests={}, tokens={}). Window RPM: {}/{} (limit: {}), TPM: {}/{} (limit: {})",
+                        requestCount, estimatedTokens, currentRequests + requestCount, properties.getMaxRpm(), backgroundRpmLimit,
+                        currentTokens + estimatedTokens, properties.getMaxTpm(), backgroundTpmLimit);
+                return;
+            }
+
+            waitMs = calculateBackgroundWaitMs(requestCount, estimatedTokens, now);
+        } finally {
+            lock.unlock();
+        }
+
+        // Small inline quota wait optimization (<= 2000ms, once per batch)
+        if (waitMs <= 2000L) {
+            log.info("Background quota near capacity, performing short inline wait of {}ms (requests={}, tokens={})",
+                    waitMs, requestCount, estimatedTokens);
+            try {
+                Thread.sleep(waitMs);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new QuotaBackpressureException(waitMs, "Interrupted during inline quota wait");
+            }
+
+            // Re-enter limiter and recompute quota from scratch atomically
+            lock.lock();
+            try {
+                long now = System.currentTimeMillis();
+                pruneExpired(now);
+                int backgroundRpmLimit = properties.getMaxRpm() - properties.getInteractiveHeadroom();
+                int backgroundTpmLimit = properties.getMaxTpm() - properties.getInteractiveTpmHeadroom();
+                int currentRequests = calculateTotalRequests();
+                int currentTokens = calculateTotalTokens();
+
+                if ((currentRequests + requestCount) <= backgroundRpmLimit
+                        && (currentTokens + estimatedTokens) <= backgroundTpmLimit) {
+                    records.addLast(new AdmissionRecord(now, requestCount, estimatedTokens));
+                    log.info("Background embedding admitted after inline wait (requests={}, tokens={}). Window RPM: {}/{}, TPM: {}/{}",
+                            requestCount, estimatedTokens, currentRequests + requestCount, backgroundRpmLimit,
+                            currentTokens + estimatedTokens, backgroundTpmLimit);
+                    return;
+                }
+
+                long recalculatedWaitMs = calculateBackgroundWaitMs(requestCount, estimatedTokens, now);
+                log.warn("Capacity unavailable after inline wait (RPM: {}/{}, TPM: {}/{}); yielding with waitMs={}",
+                        currentRequests + requestCount, backgroundRpmLimit, currentTokens + estimatedTokens, backgroundTpmLimit, recalculatedWaitMs);
+                throw new QuotaBackpressureException(recalculatedWaitMs,
+                        String.format("Background quota capacity exhausted after inline wait (waitMs=%d)", recalculatedWaitMs));
+            } finally {
+                lock.unlock();
+            }
+        } else {
+            log.warn("Background quota limit reached; waitMs={} exceeds inline threshold 2000ms; yielding to RETRY_WAIT", waitMs);
+            throw new QuotaBackpressureException(waitMs,
+                    String.format("Background quota capacity exhausted (waitMs=%d)", waitMs));
+        }
+    }
+
+    /**
+     * Exact sliding-window wait calculation.
+     * Determines when sufficient capacity actually becomes available for both RPM and TPM.
+     * Must be called while holding `lock`.
+     */
+    public long calculateBackgroundWaitMs(int requestCount, int estimatedTokens, long now) {
+        int backgroundRpmLimit = properties.getMaxRpm() - properties.getInteractiveHeadroom();
+        int backgroundTpmLimit = properties.getMaxTpm() - properties.getInteractiveTpmHeadroom();
+
+        int currentRequests = calculateTotalRequests();
+        int currentTokens = calculateTotalTokens();
+
+        int neededRequests = (currentRequests + requestCount) - backgroundRpmLimit;
+        int neededTokens = (currentTokens + estimatedTokens) - backgroundTpmLimit;
+
+        if (neededRequests <= 0 && neededTokens <= 0) {
+            return 0L;
+        }
+
+        long requestWaitMs = 0L;
+        if (neededRequests > 0) {
+            int freed = 0;
+            long targetExpiry = now + WINDOW_MS;
+            for (AdmissionRecord rec : records) {
+                freed += rec.requestCount();
+                if (freed >= neededRequests) {
+                    targetExpiry = rec.timestamp() + WINDOW_MS;
+                    break;
+                }
+            }
+            requestWaitMs = Math.max(0L, targetExpiry - now);
+        }
+
+        long tokenWaitMs = 0L;
+        if (neededTokens > 0) {
+            int freed = 0;
+            long targetExpiry = now + WINDOW_MS;
+            for (AdmissionRecord rec : records) {
+                freed += rec.tokens();
+                if (freed >= neededTokens) {
+                    targetExpiry = rec.timestamp() + WINDOW_MS;
+                    break;
+                }
+            }
+            tokenWaitMs = Math.max(0L, targetExpiry - now);
+        }
+
+        long waitMs = Math.max(requestWaitMs, tokenWaitMs);
+        return Math.max(waitMs, 50L);
+    }
+
+    /**
      * Normal pacing for background ingestion (single request): waits up to maxWaitMs for sliding-window capacity.
      */
     public boolean acquireBackgroundWithPacing(int estimatedTokens, long maxWaitMs) {
