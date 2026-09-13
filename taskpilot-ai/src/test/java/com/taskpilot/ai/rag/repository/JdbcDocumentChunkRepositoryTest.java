@@ -76,37 +76,61 @@ class JdbcDocumentChunkRepositoryTest {
     }
 
     @Test
-    @DisplayName("Verify findNearestChunks input validations")
-    void testFindNearestChunksValidations() {
-        assertThatThrownBy(() -> repository.findNearestChunks(null, new float[]{0.1f}, 5, 0.0))
+    @DisplayName("Verify findByProjectAndNearest and findNearestChunks input validations")
+    void testFindByProjectAndNearestValidations() {
+        assertThatThrownBy(() -> repository.findByProjectAndNearest(null, new float[]{0.1f}, 5, 0.0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("projectId must not be null");
 
-        assertThatThrownBy(() -> repository.findNearestChunks(1L, null, 5, 0.0))
+        assertThatThrownBy(() -> repository.findByProjectAndNearest(1L, null, 5, 0.0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("queryVector must not be null or empty");
 
-        assertThatThrownBy(() -> repository.findNearestChunks(1L, new float[0], 5, 0.0))
+        assertThatThrownBy(() -> repository.findByProjectAndNearest(1L, new float[0], 5, 0.0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("queryVector must not be null or empty");
+
+        assertThatThrownBy(() -> repository.findNearestChunks(null, new float[]{0.1f}, 5, 0.0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("projectId must not be null");
+    }
+
+    @Test
+    @DisplayName("Verify findByDocumentAndNearest input validations")
+    void testFindByDocumentAndNearestValidations() {
+        assertThatThrownBy(() -> repository.findByDocumentAndNearest(null, 10L, new float[]{0.1f}, 5, 0.0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("projectId must not be null");
+
+        assertThatThrownBy(() -> repository.findByDocumentAndNearest(1L, null, new float[]{0.1f}, 5, 0.0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("documentId must not be null");
+
+        assertThatThrownBy(() -> repository.findByDocumentAndNearest(1L, 10L, null, 5, 0.0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("queryVector must not be null or empty");
     }
 
     @Test
-    @DisplayName("Verify findNearestChunks filters by minScore")
+    @DisplayName("Verify findByProjectAndNearest and findByDocumentAndNearest filter by minScore")
     @SuppressWarnings("unchecked")
-    void testFindNearestChunksFiltering() {
+    void testFindByNearestFiltering() {
         ScoredChunk high = new ScoredChunk(1L, 10L, 100L, 0, "High match", 0.85, "Architecture_Design.pdf");
         ScoredChunk low = new ScoredChunk(2L, 10L, 100L, 1, "Low match", 0.40, "Old_Doc.pdf");
 
         when(jdbcTemplate.query(anyString(), any(PreparedStatementSetter.class), any(RowMapper.class)))
                 .thenReturn(List.of(high, low));
 
-        List<ScoredChunk> results = repository.findNearestChunks(100L, new float[]{0.1f, 0.2f}, 10, 0.70);
+        List<ScoredChunk> projectResults = repository.findByProjectAndNearest(100L, new float[]{0.1f, 0.2f}, 10, 0.70);
 
-        assertThat(results).hasSize(1);
-        assertThat(results.get(0).chunkId()).isEqualTo(1L);
-        assertThat(results.get(0).similarity()).isEqualTo(0.85);
-        assertThat(results.get(0).documentName()).isEqualTo("Architecture_Design.pdf");
+        assertThat(projectResults).hasSize(1);
+        assertThat(projectResults.get(0).chunkId()).isEqualTo(1L);
+        assertThat(projectResults.get(0).similarity()).isEqualTo(0.85);
+        assertThat(projectResults.get(0).documentName()).isEqualTo("Architecture_Design.pdf");
+
+        List<ScoredChunk> docResults = repository.findByDocumentAndNearest(100L, 10L, new float[]{0.1f, 0.2f}, 10, 0.70);
+        assertThat(docResults).hasSize(1);
+        assertThat(docResults.get(0).chunkId()).isEqualTo(1L);
     }
 
     @Test

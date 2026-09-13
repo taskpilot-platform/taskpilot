@@ -8,7 +8,7 @@ public record ScoredChunk(
         String content,
         double similarity,
         String documentName
-) {
+) implements DocumentIdAware {
     public ScoredChunk(Long chunkId, Long documentId, Long projectId, int chunkIndex, String content, double similarity) {
         this(chunkId, documentId, projectId, chunkIndex, content, similarity, null);
     }

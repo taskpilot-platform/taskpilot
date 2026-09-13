@@ -9,7 +9,18 @@ public interface DocumentChunkRepository {
 
     void saveAll(List<DocumentChunk> chunks);
 
-    List<ScoredChunk> findNearestChunks(Long projectId, float[] queryVector, int limit, double minScore);
+    List<ScoredChunk> findByProjectAndNearest(Long projectId, float[] queryVector, int candidateLimit, double minScore);
+
+    default List<ScoredChunk> findByDocumentAndNearest(Long projectId, Long documentId, float[] queryVector, int candidateLimit, double minScore) {
+        return findByProjectAndNearest(projectId, queryVector, candidateLimit, minScore).stream()
+                .filter(chunk -> documentId != null && documentId.equals(chunk.documentId()))
+                .limit(candidateLimit)
+                .toList();
+    }
+
+    default List<ScoredChunk> findNearestChunks(Long projectId, float[] queryVector, int limit, double minScore) {
+        return findByProjectAndNearest(projectId, queryVector, limit, minScore);
+    }
 
     void deleteByDocumentId(Long documentId);
 

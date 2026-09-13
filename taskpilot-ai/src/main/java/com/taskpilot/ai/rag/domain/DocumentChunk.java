@@ -10,4 +10,4 @@ public record DocumentChunk(
         String content,
         float[] embedding,
         Instant createdAt
-) {}
+) implements DocumentIdAware {}
