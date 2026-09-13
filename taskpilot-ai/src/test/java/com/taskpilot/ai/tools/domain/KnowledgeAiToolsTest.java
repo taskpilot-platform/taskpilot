@@ -42,11 +42,11 @@ class KnowledgeAiToolsTest {
     }
 
     @Test
-    @DisplayName("Verify searchProjectKnowledge calls ProjectKnowledgeService with context userId")
+    @DisplayName("Verify searchProjectKnowledge calls ProjectKnowledgeService.getContextChunks with context userId")
     @SuppressWarnings("unchecked")
     void testSearchProjectKnowledgeSuccess() {
         ScoredChunk chunk = new ScoredChunk(1L, 10L, 5L, 0, "System specifications: pgvector RAG", 0.89);
-        when(projectKnowledgeService.searchKnowledge(5L, USER_ID, "specs", 3, 0.40))
+        when(projectKnowledgeService.getContextChunks(5L, USER_ID, "specs", 3))
                 .thenReturn(List.of(chunk));
 
         Object result = knowledgeAiTools.searchProjectKnowledge(5L, "specs", 3);
@@ -58,19 +58,70 @@ class KnowledgeAiToolsTest {
         assertThat(list.get(0).get("similarity")).isEqualTo(0.89);
         assertThat(list.get(0).get("content")).isEqualTo("System specifications: pgvector RAG");
 
-        verify(projectKnowledgeService).searchKnowledge(5L, USER_ID, "specs", 3, 0.40);
+        verify(projectKnowledgeService).getContextChunks(5L, USER_ID, "specs", 3);
     }
 
     @Test
     @DisplayName("Verify searchProjectKnowledge returns informative message when no chunks found")
     void testSearchProjectKnowledgeEmpty() {
-        when(projectKnowledgeService.searchKnowledge(5L, USER_ID, "nonexistent topic", 5, 0.40))
+        when(projectKnowledgeService.getContextChunks(5L, USER_ID, "nonexistent topic", 6))
                 .thenReturn(List.of());
 
         Object result = knowledgeAiTools.searchProjectKnowledge(5L, "nonexistent topic", null);
 
         assertThat(result).isInstanceOf(String.class);
         assertThat((String) result).contains("No relevant project documents found for query: nonexistent topic");
+        verify(projectKnowledgeService).getContextChunks(5L, USER_ID, "nonexistent topic", 6);
+    }
+
+    @Test
+    @DisplayName("Verify document-focused searchProjectKnowledge calls getContextChunks with documentId")
+    @SuppressWarnings("unchecked")
+    void testSearchProjectKnowledgeWithDocumentId() {
+        Long projectId = 5L;
+        Long documentId = 42L;
+        ScoredChunk chunk = new ScoredChunk(2L, documentId, projectId, 1, "Focused doc chunk", 0.95, "Spec.pdf");
+        when(projectKnowledgeService.getContextChunks(projectId, documentId, USER_ID, "security", 6))
+                .thenReturn(List.of(chunk));
+
+        Object result = knowledgeAiTools.searchProjectKnowledge(projectId, documentId, "security", null);
+
+        assertThat(result).isInstanceOf(List.class);
+        List<Map<String, Object>> list = (List<Map<String, Object>>) result;
+        assertThat(list).hasSize(1);
+        assertThat(list.get(0).get("documentName")).isEqualTo("Spec.pdf");
+        assertThat(list.get(0).get("content")).isEqualTo("Focused doc chunk");
+        verify(projectKnowledgeService).getContextChunks(projectId, documentId, USER_ID, "security", 6);
+    }
+
+    @Test
+    @DisplayName("Verify Chunk 517 Crowding Regression: searchProjectKnowledge receives and preserves Chunk 517 in tool result")
+    @SuppressWarnings("unchecked")
+    void testSearchProjectKnowledgePreservesChunk517UnderCrowding() {
+        Long projectId = 4L;
+        String query = "data security and privacy";
+
+        // Diversified context: Doc 3 chunks capped at 2, Doc 9 Chunk 517 rescued into context
+        ScoredChunk doc3Chunk75 = new ScoredChunk(107L, 3L, projectId, 75, "Maintenance DSS chunk 75", 0.72);
+        ScoredChunk doc3Chunk77 = new ScoredChunk(109L, 3L, projectId, 77, "Maintenance DSS chunk 77", 0.71);
+        ScoredChunk targetChunk517 = new ScoredChunk(1270L, 9L, projectId, 517, "EMR Data Security and Privacy RBAC", 0.66, "OOAD Report.docx");
+
+        when(projectKnowledgeService.getContextChunks(projectId, USER_ID, query, 6))
+                .thenReturn(List.of(doc3Chunk75, doc3Chunk77, targetChunk517));
+
+        Object result = knowledgeAiTools.searchProjectKnowledge(projectId, query, null);
+
+        assertThat(result).isInstanceOf(List.class);
+        List<Map<String, Object>> list = (List<Map<String, Object>>) result;
+        assertThat(list).hasSize(3);
+
+        boolean chunk517Present = list.stream().anyMatch(m ->
+                Integer.valueOf(517).equals(m.get("chunkIndex")) && "OOAD Report.docx".equals(m.get("documentName")));
+        assertThat(chunk517Present)
+                .as("Document 9 Chunk 517 must be preserved in final AI/RAG context")
+                .isTrue();
+
+        verify(projectKnowledgeService).getContextChunks(projectId, USER_ID, query, 6);
     }
 
     @Test

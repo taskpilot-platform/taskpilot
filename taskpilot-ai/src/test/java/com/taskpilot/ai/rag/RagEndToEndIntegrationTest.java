@@ -159,7 +159,7 @@ class RagEndToEndIntegrationTest {
                 "Chunk 1: RAG PGVector Architecture",
                 0.88
         );
-        when(documentChunkRepository.findNearestChunks(eq(PROJECT_ID), eq(sampleEmbedding), eq(5), anyDouble()))
+        when(documentChunkRepository.findByProjectAndNearest(eq(PROJECT_ID), eq(sampleEmbedding), anyInt(), anyDouble()))
                 .thenReturn(List.of(retrievedChunk));
 
         List<ScoredChunk> searchResults = knowledgeService.searchKnowledge(

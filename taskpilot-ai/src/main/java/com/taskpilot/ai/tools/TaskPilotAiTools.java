@@ -670,4 +670,11 @@ public class TaskPilotAiTools {
         }
         return knowledgeAiTools.searchProjectKnowledge(projectId, query, limit);
     }
+
+    public Object searchProjectKnowledge(Long projectId, Long documentId, String query, Integer limit) {
+        if (knowledgeAiTools == null) {
+            return "Project knowledge search tool is currently unavailable";
+        }
+        return knowledgeAiTools.searchProjectKnowledge(projectId, documentId, query, limit);
+    }
 }

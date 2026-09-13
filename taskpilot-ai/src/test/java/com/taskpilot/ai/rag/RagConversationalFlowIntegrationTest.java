@@ -96,7 +96,7 @@ class RagConversationalFlowIntegrationTest {
                 "Kế hoạch dự án TaskPilot: Deadline bàn giao Phase 1 là ngày 15/10/2026.",
                 0.89
         );
-        when(documentChunkRepository.findNearestChunks(eq(PROJECT_ID), eq(mockVector), eq(5), anyDouble()))
+        when(documentChunkRepository.findByProjectAndNearest(eq(PROJECT_ID), eq(mockVector), eq(20), anyDouble()))
                 .thenReturn(List.of(deadlineChunk));
 
         // WHEN: LangChain4j LLM requests tool execution for searchProjectKnowledge
@@ -115,7 +115,7 @@ class RagConversationalFlowIntegrationTest {
 
         verify(projectMemberPort).isProjectMember(PROJECT_ID, AUTHORIZED_USER_ID);
         verify(embeddingGateway).embedForSearch("deadline bàn giao");
-        verify(documentChunkRepository).findNearestChunks(eq(PROJECT_ID), eq(mockVector), eq(5), anyDouble());
+        verify(documentChunkRepository).findByProjectAndNearest(eq(PROJECT_ID), eq(mockVector), eq(20), anyDouble());
     }
 
     @Test
@@ -160,7 +160,7 @@ class RagConversationalFlowIntegrationTest {
         when(embeddingGateway.embedForSearch("công thức nướng bánh pizza")).thenReturn(mockVector);
 
         // Vector repository returns empty list because all scores are below threshold minScore
-        when(documentChunkRepository.findNearestChunks(eq(PROJECT_ID), eq(mockVector), eq(5), anyDouble()))
+        when(documentChunkRepository.findByProjectAndNearest(eq(PROJECT_ID), eq(mockVector), eq(20), anyDouble()))
                 .thenReturn(List.of());
 
         ToolExecutionRequest request = ToolExecutionRequest.builder()
@@ -173,7 +173,7 @@ class RagConversationalFlowIntegrationTest {
 
         assertThat(toolResult).contains("No relevant project documents found for query");
         verify(projectMemberPort).isProjectMember(PROJECT_ID, AUTHORIZED_USER_ID);
-        verify(documentChunkRepository).findNearestChunks(eq(PROJECT_ID), eq(mockVector), eq(5), anyDouble());
+        verify(documentChunkRepository).findByProjectAndNearest(eq(PROJECT_ID), eq(mockVector), eq(20), anyDouble());
     }
 
 

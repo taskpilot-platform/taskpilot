@@ -437,6 +437,11 @@ class LargeDocumentIngestionAndRetrievalTest {
 
         @Override
         public List<ScoredChunk> findNearestChunks(Long projectId, float[] queryVector, int limit, double minScore) {
+            return findByProjectAndNearest(projectId, queryVector, limit, minScore);
+        }
+
+        @Override
+        public List<ScoredChunk> findByProjectAndNearest(Long projectId, float[] queryVector, int candidateLimit, double minScore) {
             return chunks.stream()
                     .filter(c -> Objects.equals(c.projectId(), projectId))
                     .map(c -> {
@@ -445,7 +450,7 @@ class LargeDocumentIngestionAndRetrievalTest {
                     })
                     .filter(sc -> sc.similarity() >= minScore)
                     .sorted((a, b) -> Double.compare(b.similarity(), a.similarity()))
-                    .limit(limit)
+                    .limit(candidateLimit)
                     .toList();
         }
 
