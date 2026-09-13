@@ -9,6 +9,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -120,36 +121,113 @@ public class ProjectKnowledgeServiceImpl implements ProjectKnowledgeService {
 
         if (documentId != null) {
             // Document-focused path: top candidates (default 6), NO diversity cap
-            log.info("[RAG Retrieval] Document-focused retrieval: projectId={}, documentId={}, candidateLimit={}",
+            log.debug("[RAG Retrieval] Document-focused retrieval: projectId={}, documentId={}, candidateLimit={}",
                     projectId, documentId, finalContextLimit);
             List<ScoredChunk> docResults = documentChunkRepository.findByDocumentAndNearest(projectId, documentId, queryVector, finalContextLimit, 0.40);
+            logContextRetrievalAndCandidates(query.trim(), finalContextLimit, 0.40, docResults);
+            logAfterDiversityAndBudget(docResults, finalContextLimit);
             logFinalResultsAndDtoMapping(docResults);
             return docResults;
         } else {
             // Project-wide path: candidate pool of 20, two-pass diversity soft-cap (max 2 per doc, up to 6 final context)
             List<ScoredChunk> candidates = documentChunkRepository.findByProjectAndNearest(projectId, queryVector, 20, 0.40);
+            logContextRetrievalAndCandidates(query.trim(), 20, 0.40, candidates);
+
             List<ScoredChunk> selected = diversityContextSelector.selectProjectContext(candidates, finalContextLimit, 2);
-            log.info("[RAG FILTER]\nstage=diversity_selection\nbefore={}\nafter={}\nremoved={}\nreason=maxPerDocument cap (2) / maxContext limit ({})",
+            log.debug("[RAG FILTER]\nstage=diversity_selection\nbefore={}\nafter={}\nremoved={}\nreason=maxPerDocument cap (2) / maxContext limit ({})",
                     candidates.size(), selected.size(), candidates.size() - selected.size(), finalContextLimit);
-            log.info("[RAG Retrieval] Project-wide diversified context: candidates={}, finalContext={}, selectedDocs={}",
+            log.debug("[RAG Retrieval] Project-wide diversified context: candidates={}, finalContext={}, selectedDocs={}",
                     candidates.size(), selected.size(),
                     selected.stream().map(ScoredChunk::documentId).toList());
+
+            logAfterDiversityAndBudget(selected, finalContextLimit);
             logFinalResultsAndDtoMapping(selected);
             return selected;
         }
     }
 
+    private void logContextRetrievalAndCandidates(String query, int candidateLimit, double minScore, List<ScoredChunk> candidates) {
+        if (!log.isDebugEnabled()) {
+            return;
+        }
+        log.debug("\n[RAG CONTEXT RETRIEVAL]\nquery=\"{}\"\ncandidateLimit={}\nsimilarityThreshold={}\nrawCandidates={}",
+                query, candidateLimit, minScore, candidates.size());
+
+        StringBuilder sb = new StringBuilder("\n[RAG CANDIDATES BEFORE DIVERSITY]\n");
+        Map<String, Integer> sourceDist = new java.util.LinkedHashMap<>();
+        int limit = Math.min(20, candidates.size());
+        for (int i = 0; i < limit; i++) {
+            ScoredChunk c = candidates.get(i);
+            String docName = c.documentName() != null ? c.documentName() : "Doc #" + c.documentId();
+            sourceDist.put(docName, sourceDist.getOrDefault(docName, 0) + 1);
+            String preview = sanitizePreview(c.content(), 200);
+            sb.append(String.format("\n#%d document=\"%s\" chunkId=%d documentId=%d chunkIndex=%d similarity=%.4f\n    preview: \"%s...\"",
+                    i + 1, docName, c.chunkId(), c.documentId(), c.chunkIndex(), c.similarity(), preview));
+        }
+        log.debug("{}", sb.toString());
+
+        StringBuilder distSb = new StringBuilder("\n[RAG SOURCE DISTRIBUTION]");
+        for (Map.Entry<String, Integer> entry : sourceDist.entrySet()) {
+            distSb.append(String.format("\n%s = %d", entry.getKey(), entry.getValue()));
+        }
+        log.debug("{}", distSb.toString());
+    }
+
+    private void logAfterDiversityAndBudget(List<ScoredChunk> selected, int maxContext) {
+        if (!log.isDebugEnabled()) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder("\n[RAG AFTER DIVERSITY]\n");
+        Map<String, Integer> sourceDist = new java.util.LinkedHashMap<>();
+        int totalChars = 0;
+        for (int i = 0; i < selected.size(); i++) {
+            ScoredChunk c = selected.get(i);
+            String docName = c.documentName() != null ? c.documentName() : "Doc #" + c.documentId();
+            sourceDist.put(docName, sourceDist.getOrDefault(docName, 0) + 1);
+            if (c.content() != null) {
+                totalChars += c.content().length();
+            }
+            String preview = sanitizePreview(c.content(), 200);
+            sb.append(String.format("\n#%d document=\"%s\" chunkId=%d documentId=%d chunkIndex=%d similarity=%.4f\n    preview: \"%s...\"",
+                    i + 1, docName, c.chunkId(), c.documentId(), c.chunkIndex(), c.similarity(), preview));
+        }
+        sb.append(String.format("\n\nFinal count=%d", selected.size()));
+        log.debug("{}", sb.toString());
+
+        StringBuilder distSb = new StringBuilder("\n[RAG SOURCE DISTRIBUTION AFTER DIVERSITY]");
+        for (Map.Entry<String, Integer> entry : sourceDist.entrySet()) {
+            distSb.append(String.format("\n%s = %d", entry.getKey(), entry.getValue()));
+        }
+        log.debug("{}", distSb.toString());
+
+        int estimatedTokens = (int) Math.round(totalChars / 4.0);
+        log.debug("\n[RAG CONTEXT BUDGET]\nmaxChunks={}\nmaxTokens=none (no hard token budget limit on chunks)\nmaxChars=unlimited (actual selected chars: {})\nestimatedFinalTokens={}",
+                maxContext, totalChars, estimatedTokens);
+    }
+
+    private String sanitizePreview(String content, int maxLen) {
+        if (content == null) return "";
+        String singleLine = content.replaceAll("[\\r\\n\\t]+", " ").trim();
+        return singleLine.length() <= maxLen ? singleLine : singleLine.substring(0, maxLen);
+    }
+
     private void logSearchDetails(String query, float[] queryVector, boolean success) {
+        if (!log.isDebugEnabled()) {
+            return;
+        }
         int estimatedTokens = Math.max(1, query.trim().split("\\s+").length);
         String provider = "Google AI (Gemini)";
         String model = "gemini-embedding-2";
         int dimension = queryVector != null ? queryVector.length : 768;
-        log.info("\n[RAG SEARCH]\nquery={}\nprovider={}\nmodel={}\nembeddingDimension={}\nestimatedTokens={}\nembeddingRequestSuccess={}",
+        log.debug("\n[RAG SEARCH]\nquery={}\nprovider={}\nmodel={}\nembeddingDimension={}\nestimatedTokens={}\nembeddingRequestSuccess={}",
                 query, provider, model, dimension, estimatedTokens, success);
     }
 
     private void logFinalResultsAndDtoMapping(List<ScoredChunk> results) {
-        log.info("[RAG] No reranker/post-ranking applied");
+        if (!log.isDebugEnabled()) {
+            return;
+        }
+        log.debug("[RAG] No reranker/post-ranking applied");
 
         StringBuilder finalSb = new StringBuilder("[FINAL RESULTS]");
         for (int i = 0; i < results.size(); i++) {
@@ -157,7 +235,7 @@ public class ProjectKnowledgeServiceImpl implements ProjectKnowledgeService {
             finalSb.append(String.format("\n#%d chunkId=%d, docId=%d, fileName=\"%s\", sim=%.4f",
                     i + 1, c.chunkId(), c.documentId(), c.documentName() != null ? c.documentName() : "Doc #" + c.documentId(), c.similarity()));
         }
-        log.info("{}", finalSb.toString());
+        log.debug("{}", finalSb.toString());
 
         StringBuilder dtoSb = new StringBuilder("[RAG DTO MAPPING]\nraw similarity/distance -> mapped relevance -> final rank:");
         for (int i = 0; i < results.size(); i++) {
@@ -167,7 +245,7 @@ public class ProjectKnowledgeServiceImpl implements ProjectKnowledgeService {
             dtoSb.append(String.format("\n#%d: raw sim=%.4f, dist=%.4f -> mapped relevance=%.1f%% -> final rank=#%d",
                     i + 1, c.similarity(), dist, relevancePercent, i + 1));
         }
-        log.info("{}", dtoSb.toString());
+        log.debug("{}", dtoSb.toString());
     }
 
     @Override
