@@ -93,22 +93,22 @@ Kiểm tra trực tiếp bảng `documents` và `document_chunk_staging` trên P
 | :--- | :--- | :--- |
 | **1** | **Đánh đồng "Chờ Quota (Pacing Wait)" với "Lỗi hệ thống (Job Failure)"** | Một tài liệu 800 trang (~742.000 tokens) dưới trần 28.000 TPM về mặt toán học **bắt buộc phải mất ít nhất 27 phút** mới có thể embed xong. Trong 27 phút đó, tài liệu sẽ chạm trần quota ít nhất 26 lần. Việc giới hạn `maxRetryAttempts = 5` và coi mỗi lần tạm dừng chờ quota là 1 lần hỏng khiến tài liệu không thể hoàn thành. |
 | **2** | **Lệch pha giữa Cửa sổ trượt (60s) và Thời gian Backoff (12s, 22s)** | Khi dính nghẽn quota cửa sổ trượt, thời gian lùi (`next_attempt_at`) của các lần retry đầu chỉ là 12s và 22s. Khi worker tỉnh dậy, cửa sổ 60s trong RAM vẫn chưa giải phóng các batch cũ, kết hợp với `pacingWaitMs` ngắn (10s) dẫn tới việc job tự timeout liên tục mà không tiến thêm được chunk nào. |
-| **3** | **Lạm phát tính RPM trong `EmbeddingGateway`** | Tại dòng 62 của `EmbeddingGateway.java`: gọi `rpmRateLimiter.acquireBackgroundWithPacing(batch.size(), estimatedTokens, ...)`. Tham số `batch.size()` (20) bị tính vào `requestCount`, trong khi 1 batch chunk gửi lên Gemini chỉ là **1 HTTP request**. Điều này khiến quota RPM nội bộ bị trừ nhanh gấp 20 lần thực tế. |
+| **3** | **Cơ chế tính Quota của Google Gemini: Tính theo từng input text chứ không theo HTTP request** | *(Cập nhật kết quả thực nghiệm ngày 13/09)*: Ban đầu giả định việc truyền `batch.size()` (20) là lạm phát quota. Tuy nhiên, qua bài kiểm thử cô lập `GeminiBatchQuotaExperimentTest`, dashboard Google AI Studio xác nhận: 1 HTTP batch (20 texts) tăng **chính xác +20 đơn vị RPD** (từ 3/1K lên 23/1K) và **+20 đơn vị RPM** (từ 1/100 lên 20/100). Do đó, việc limiter tính `batch.size()` là hoàn toàn chính xác với cơ chế của Google. Nguyên nhân khiến Document 14 thất bại sau 2.680 chunks là do chạm trần **1.000 RPD (Requests Per Day)** của gói Free Tier trên 1 API key. |
 
 ---
 
-## 5. Phương Án Khắc Phục Tối Thiểu Đề Xuất (Minimal Fix Proposal)
+## 5. Phương Án Khắc Phục Triệt Để & Đã Thực Hiện (Implementation & Resolution)
 
-*(Chỉ đề xuất, chưa thực hiện chỉnh sửa code)*
-
-1. **Sửa lỗi đếm Request trong `EmbeddingGateway.java`:**
-   - Truyền `requestCount = 1` thay vì `batch.size()` khi xin cấp phép vào `acquireBackgroundWithPacing`.
-2. **Nguyên tắc "Tiến độ không bị phạt" (Progress-aware Retry Management):**
-   - Trong `DocumentIngestionServiceImpl`: Khi gặp `QuotaExceededException`, nếu trong phiên làm việc vừa rồi worker đã embed thành công ít nhất $\ge 1$ batch, hệ thống chuyển sang `RETRY_WAIT` nhưng **giữ nguyên hoặc reset `retry_count = 0`**. Chỉ tính tăng `retry_count` khi một batch đã thử lại nhiều lần mà không ghi nhận thêm bất kỳ tiến độ nào.
-3. **Đồng bộ thời gian chờ Quota với Cửa sổ trượt:**
-   - Khi tạm dừng vì quota cạn kiệt, thời gian chờ tối thiểu để Poller kích hoạt lại phiên tiếp theo phải $\ge 60$ giây (hoặc thời gian còn lại của bản ghi cũ nhất trong window), đảm bảo khi thức dậy thì bucket quota đã được làm mới hoàn toàn.
-4. **Tăng nhẹ `pacingWaitMs` (tùy chọn):**
-   - Nâng `pacing-wait-ms` từ 10s lên 30s–45s để worker có thể kiên nhẫn chờ trong phiên làm việc hiện tại thay vì vội vã yield sang `RETRY_WAIT`.
+1. **Bảo tồn Dữ liệu Staging Tuyệt Đối (Zero Staging Loss on Failure):**
+   - Đã khắc phục lỗi nghiêm trọng trong `markPermanentFailure()`: Khi cạn quota hoặc gặp lỗi không thể hồi phục, hệ thống **chỉ dọn dẹp các chunk publish dở dang (`document_chunks`), tuyệt đối không xóa staging (`document_chunk_staging`)**. Nhờ đó, 2.680 vector đã tính toán được giữ nguyên vẹn.
+2. **Hỗ trợ Đa Khóa Dự Phòng (Multi-Key Rotation & Failover):**
+   - Hỗ trợ cấu hình `GEMINI_API_KEYS` trong `.env` và `application.yml`. Tự động luân chuyển khóa khi một khóa chạm ngưỡng 1.000 RPD ngày.
+3. **Đồng bộ Schema Database (Flyway Migration V30):**
+   - Xóa bỏ cột `processing_version` khỏi bảng `document_chunk_staging` (`V30__remove_processing_version_from_staging.sql`), giải quyết triệt để lỗi `null value in column "processing_version"` khi nạp tài liệu mới.
+4. **Nguyên tắc "Tiến độ không bị phạt" (Progress-aware Retry Management):**
+   - Khi gặp `QuotaExceededException`, nếu worker đã embed thành công ít nhất $\ge 1$ batch, hệ thống chuyển sang `RETRY_WAIT` nhưng không phạt cạn lượt retry.
+5. **Đồng bộ thời gian chờ Quota với Cửa sổ trượt:**
+   - Khi tạm dừng vì quota cạn kiệt, thời gian lùi tối thiểu $\ge 60$ giây để cửa sổ trượt xả sạch token cũ trước khi phiên tiếp theo bắt đầu.
 
 ---
 
