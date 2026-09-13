@@ -115,5 +115,11 @@ class FlywayMigrationVerificationTest {
         assertThat(v28Applied)
                 .as("Migration V28__migrate_identity_to_sequences.sql should be applied successfully")
                 .isTrue();
+
+        boolean v29Applied = Arrays.stream(applied)
+                .anyMatch(m -> "29".equals(m.getVersion().getVersion()) && m.getState().isApplied());
+        assertThat(v29Applied)
+                .as("Migration V29__simplify_staging_identity.sql should be applied successfully")
+                .isTrue();
     }
 }

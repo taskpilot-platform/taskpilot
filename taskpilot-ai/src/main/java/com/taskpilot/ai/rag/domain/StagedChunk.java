@@ -10,7 +10,6 @@ import java.time.Instant;
 public record StagedChunk(
         Long id,
         Long documentId,
-        int processingVersion,
         int chunkIndex,
         String content,
         float[] embedding,
