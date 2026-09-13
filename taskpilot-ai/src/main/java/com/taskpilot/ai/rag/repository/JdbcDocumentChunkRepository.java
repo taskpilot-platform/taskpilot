@@ -25,11 +25,13 @@ public class JdbcDocumentChunkRepository implements DocumentChunkRepository {
             """;
 
     private static final String FIND_NEAREST_SQL = """
-            SELECT id, document_id, project_id, chunk_index, content,
-                   (1 - (embedding <=> CAST(? AS vector))) AS similarity_score
-            FROM document_chunks
-            WHERE project_id = ?
-            ORDER BY embedding <=> CAST(? AS vector)
+            SELECT c.id, c.document_id, c.project_id, c.chunk_index, c.content,
+                   d.original_filename AS document_name,
+                   (1 - (c.embedding <=> CAST(? AS vector))) AS similarity_score
+            FROM document_chunks c
+            LEFT JOIN documents d ON c.document_id = d.id
+            WHERE c.project_id = ?
+            ORDER BY c.embedding <=> CAST(? AS vector)
             LIMIT ?
             """;
 
@@ -90,7 +92,8 @@ public class JdbcDocumentChunkRepository implements DocumentChunkRepository {
                         rs.getLong("project_id"),
                         rs.getInt("chunk_index"),
                         rs.getString("content"),
-                        rs.getDouble("similarity_score")
+                        rs.getDouble("similarity_score"),
+                        rs.getString("document_name")
                 )
         );
 

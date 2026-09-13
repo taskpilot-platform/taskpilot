@@ -58,7 +58,8 @@ public class ProjectKnowledgeServiceImpl implements ProjectKnowledgeService {
         StringBuilder sb = new StringBuilder("Relevant project documentation:\n");
         for (int i = 0; i < chunks.size(); i++) {
             ScoredChunk c = chunks.get(i);
-            sb.append(String.format("[%d] (Score: %.2f) %s\n\n", i + 1, c.similarity(), c.content()));
+            String docLabel = c.documentName() != null ? c.documentName() : "Doc #" + c.documentId();
+            sb.append(String.format("[%d] (%s, Score: %.2f) %s\n\n", i + 1, docLabel, c.similarity(), c.content()));
         }
         return sb.toString().trim();
     }

@@ -43,11 +43,14 @@ public class KnowledgeAiTools {
         }
 
         return chunks.stream()
-                .map(c -> Map.of(
-                        "chunkIndex", c.chunkIndex(),
-                        "similarity", Math.round(c.similarity() * 1000.0) / 1000.0,
-                        "content", c.content()
-                ))
+                .map(c -> {
+                    java.util.Map<String, Object> map = new java.util.LinkedHashMap<>();
+                    map.put("documentName", c.documentName() != null ? c.documentName() : "Doc #" + c.documentId());
+                    map.put("chunkIndex", c.chunkIndex());
+                    map.put("similarity", Math.round(c.similarity() * 1000.0) / 1000.0);
+                    map.put("content", c.content());
+                    return map;
+                })
                 .toList();
     }
 }

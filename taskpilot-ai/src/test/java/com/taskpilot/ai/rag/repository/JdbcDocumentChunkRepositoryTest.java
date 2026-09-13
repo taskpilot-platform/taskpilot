@@ -95,8 +95,8 @@ class JdbcDocumentChunkRepositoryTest {
     @DisplayName("Verify findNearestChunks filters by minScore")
     @SuppressWarnings("unchecked")
     void testFindNearestChunksFiltering() {
-        ScoredChunk high = new ScoredChunk(1L, 10L, 100L, 0, "High match", 0.85);
-        ScoredChunk low = new ScoredChunk(2L, 10L, 100L, 1, "Low match", 0.40);
+        ScoredChunk high = new ScoredChunk(1L, 10L, 100L, 0, "High match", 0.85, "Architecture_Design.pdf");
+        ScoredChunk low = new ScoredChunk(2L, 10L, 100L, 1, "Low match", 0.40, "Old_Doc.pdf");
 
         when(jdbcTemplate.query(anyString(), any(PreparedStatementSetter.class), any(RowMapper.class)))
                 .thenReturn(List.of(high, low));
@@ -106,6 +106,7 @@ class JdbcDocumentChunkRepositoryTest {
         assertThat(results).hasSize(1);
         assertThat(results.get(0).chunkId()).isEqualTo(1L);
         assertThat(results.get(0).similarity()).isEqualTo(0.85);
+        assertThat(results.get(0).documentName()).isEqualTo("Architecture_Design.pdf");
     }
 
     @Test
