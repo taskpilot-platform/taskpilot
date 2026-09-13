@@ -57,13 +57,18 @@ public class EmbeddingGateway {
         for (int i = 0; i < texts.size(); i += maxBatchSize) {
             int end = Math.min(i + maxBatchSize, texts.size());
             List<String> batch = texts.subList(i, end);
+            int httpRequestCount = 1;
+            int providerRequestUnits = batch.size();
             int estimatedTokens = RpmRateLimiter.estimateTokens(batch);
 
-            // Pass requestCount = 1 for the single provider HTTP batch request (P0 Requirement 1)
-            rpmRateLimiter.acquireBackgroundOrYield(1, estimatedTokens);
+            // Local quota limiter accounts providerRequestUnits for provider RPM accounting
+            rpmRateLimiter.acquireBackgroundOrYield(providerRequestUnits, estimatedTokens);
 
-            log.info("Dispatching background embedding batch to provider: offset={}, batchSize={}, estimatedTokens={}, total={}",
-                    i, batch.size(), estimatedTokens, texts.size());
+            log.info("Background embedding admitted: providerRequestUnits={}, estimatedTokens={}, httpRequestCount={}",
+                    providerRequestUnits, estimatedTokens, httpRequestCount);
+
+            log.info("Dispatching background embedding batch: offset={}, batchSize={}, estimatedTokens={}, httpRequestCount={}, total={}",
+                    i, batch.size(), estimatedTokens, httpRequestCount, texts.size());
             List<float[]> batchEmbeddings = embeddingService.embedBatch(batch);
             if (batchEmbeddings.size() != batch.size()) {
                 throw new IllegalStateException(String.format(

@@ -148,4 +148,87 @@ class EmbeddingGatewayAndBatchTest {
 
         verifyNoInteractions(embeddingService);
     }
+
+    @Test
+    @DisplayName("Step 5 Test A — Provider unit accounting: batchSize=20 passes providerRequestUnits=20 to limiter, not 1")
+    void testA_providerUnitAccounting() {
+        RpmRateLimiter mockLimiter = mock(RpmRateLimiter.class);
+        EmbeddingGateway gateway = new EmbeddingGateway(embeddingService, mockLimiter, properties);
+
+        List<String> texts = new ArrayList<>();
+        for (int i = 0; i < 20; i++) {
+            texts.add("text " + i);
+        }
+
+        when(embeddingService.embedBatch(anyList())).thenAnswer(inv -> {
+            List<?> b = inv.getArgument(0);
+            List<float[]> res = new ArrayList<>();
+            for (int i = 0; i < b.size(); i++) res.add(new float[768]);
+            return res;
+        });
+
+        gateway.embedForIngestion(texts);
+
+        // Verify the limiter receives providerRequestUnits = 20, NOT 1
+        verify(mockLimiter, times(1)).acquireBackgroundOrYield(eq(20), anyInt());
+        verify(mockLimiter, never()).acquireBackgroundOrYield(eq(1), anyInt());
+    }
+
+    @Test
+    @DisplayName("Step 5 Test B — Multi-input batch: 20 texts -> 1 HTTP batchEmbedContents call -> 20 embeddings returned")
+    void testB_multiInputBatch() {
+        List<String> texts = new ArrayList<>();
+        for (int i = 0; i < 20; i++) {
+            texts.add("text item " + i);
+        }
+
+        when(embeddingService.embedBatch(anyList())).thenAnswer(inv -> {
+            List<?> b = inv.getArgument(0);
+            List<float[]> res = new ArrayList<>();
+            for (int i = 0; i < b.size(); i++) res.add(new float[768]);
+            return res;
+        });
+
+        List<float[]> results = embeddingGateway.embedForIngestion(texts);
+
+        // 1 HTTP invocation to provider
+        verify(embeddingService, times(1)).embedBatch(eq(texts));
+        // 20 embeddings returned
+        assertThat(results).hasSize(20);
+    }
+
+    @Test
+    @DisplayName("Step 5 Test C — RPM accounting: 20-text batch consumes 20 RPM units, not 1")
+    void testC_rpmAccounting() {
+        // maxRpm = 25, interactiveHeadroom = 5 -> backgroundRpmLimit = 20
+        RagEmbeddingProperties props = new RagEmbeddingProperties(25, 5, 100, 10, 5, 3000L);
+        RpmRateLimiter limiter = new RpmRateLimiter(props);
+
+        // First batch of 20 items: consumes 20 RPM units -> exactly fills background limit of 20
+        boolean batch1Admitted = limiter.tryAcquireBackground(20, 100);
+        assertThat(batch1Admitted).as("First batch of 20 should be admitted").isTrue();
+
+        // Second batch of 10 items: needs 10 RPM units (current 20 + 10 = 30 > 20 limit) -> rejected!
+        // (Note: if batch 1 had consumed only 1 unit, 1 + 10 = 11 <= 20, it would have been admitted)
+        boolean batch2Admitted = limiter.tryAcquireBackground(10, 100);
+        assertThat(batch2Admitted).as("Second batch must be rejected because batch 1 consumed 20 RPM units").isFalse();
+    }
+
+    @Test
+    @DisplayName("Step 5 Test D — TPM accounting: token usage enforced independently of RPM units")
+    void testD_tpmAccounting() {
+        // maxRpm = 100, maxTpm = 2000, interactiveTpmHeadroom = 500 -> backgroundTpmLimit = 1500
+        RagEmbeddingProperties props = new RagEmbeddingProperties(100, 10, 100, 10, 5, 3000L);
+        props.setMaxTpm(2000);
+        props.setInteractiveTpmHeadroom(500);
+        RpmRateLimiter limiter = new RpmRateLimiter(props);
+
+        // 5 providerRequestUnits (well under RPM limit of 90) but 1600 estimated tokens (exceeds TPM limit of 1500)
+        boolean admitted = limiter.tryAcquireBackground(5, 1600);
+        assertThat(admitted).as("Batch exceeding TPM limit must be rejected even with ample RPM headroom").isFalse();
+
+        // Within TPM limit (e.g. 1200 tokens)
+        boolean withinLimit = limiter.tryAcquireBackground(5, 1200);
+        assertThat(withinLimit).as("Batch within TPM limit should be admitted").isTrue();
+    }
 }

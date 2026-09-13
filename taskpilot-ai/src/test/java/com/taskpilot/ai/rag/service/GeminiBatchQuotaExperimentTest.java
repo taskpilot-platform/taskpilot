@@ -28,9 +28,8 @@ class GeminiBatchQuotaExperimentTest {
             testKey = System.getenv("GEMINI_API_KEY");
         }
 
-        assertThat(testKey)
-                .withFailMessage("Test Gemini API key must be provided via -Dgemini.test.api-key or GEMINI_TEST_API_KEY or GEMINI_API_KEY")
-                .isNotBlank();
+        org.junit.jupiter.api.Assumptions.assumeTrue(testKey != null && !testKey.isBlank(),
+                "Test Gemini API key must be provided via -Dgemini.test.api-key or GEMINI_TEST_API_KEY or GEMINI_API_KEY to run live experiment");
 
         String maskedKey = testKey.length() > 10
                 ? testKey.substring(0, 8) + "..." + testKey.substring(testKey.length() - 4)

@@ -24,7 +24,7 @@ public class RpmRateLimiter {
 
     private static final long WINDOW_MS = 60_000L;
 
-    public record AdmissionRecord(long timestamp, int requestCount, int tokens) {}
+    public record AdmissionRecord(long timestamp, int providerRequestUnits, int tokens) {}
 
     private final RagEmbeddingProperties properties;
     private final Deque<AdmissionRecord> records = new ArrayDeque<>();
@@ -54,11 +54,11 @@ public class RpmRateLimiter {
      * Attempts admission for interactive search embedding with request count and estimated token count.
      * Higher priority: can consume up to the global maxRpm and maxTpm limits.
      *
-     * @param requestCount number of embedding requests
+     * @param providerRequestUnits number of provider quota units (1 for interactive single query)
      * @param estimatedTokens token count estimated for the query
      * @return true if admitted, false if capacity exhausted
      */
-    public boolean tryAcquireInteractive(int requestCount, int estimatedTokens) {
+    public boolean tryAcquireInteractive(int providerRequestUnits, int estimatedTokens) {
         lock.lock();
         try {
             long now = System.currentTimeMillis();
@@ -66,16 +66,16 @@ public class RpmRateLimiter {
             int currentRequests = calculateTotalRequests();
             int currentTokens = calculateTotalTokens();
 
-            if ((currentRequests + requestCount) <= properties.getMaxRpm()
+            if ((currentRequests + providerRequestUnits) <= properties.getMaxRpm()
                     && (currentTokens + estimatedTokens) <= properties.getMaxTpm()) {
-                records.addLast(new AdmissionRecord(now, requestCount, estimatedTokens));
-                log.debug("Interactive embedding admitted (requests={}, tokens={}). Window RPM: {}/{}, TPM: {}/{}",
-                        requestCount, estimatedTokens, currentRequests + requestCount, properties.getMaxRpm(),
+                records.addLast(new AdmissionRecord(now, providerRequestUnits, estimatedTokens));
+                log.debug("Interactive embedding admitted (providerRequestUnits={}, tokens={}). Window RPM: {}/{}, TPM: {}/{}",
+                        providerRequestUnits, estimatedTokens, currentRequests + providerRequestUnits, properties.getMaxRpm(),
                         currentTokens + estimatedTokens, properties.getMaxTpm());
                 return true;
             }
             log.warn("Interactive embedding rejected: global quota exhausted (RPM: {}/{}, TPM: {}/{})",
-                    currentRequests + requestCount, properties.getMaxRpm(),
+                    currentRequests + providerRequestUnits, properties.getMaxRpm(),
                     currentTokens + estimatedTokens, properties.getMaxTpm());
             return false;
         } finally {
@@ -85,14 +85,14 @@ public class RpmRateLimiter {
 
     /**
      * Attempts immediate admission for background ingestion embedding without tokens specified.
-     * Backwards-compatible convenience method assuming default batch (~100 tokens, 1 request).
+     * Backwards-compatible convenience method assuming default batch (~100 tokens, 1 request unit).
      */
     public boolean tryAcquireBackground() {
         return tryAcquireBackground(1, 100);
     }
 
     /**
-     * Attempts immediate admission for background ingestion embedding (1 request).
+     * Attempts immediate admission for background ingestion embedding (1 request unit).
      */
     public boolean tryAcquireBackground(int estimatedTokens) {
         return tryAcquireBackground(1, estimatedTokens);
@@ -102,11 +102,11 @@ public class RpmRateLimiter {
      * Attempts immediate admission for background ingestion embedding.
      * Capacity is constrained to (maxRpm - interactiveHeadroom) and (maxTpm - interactiveTpmHeadroom).
      *
-     * @param requestCount number of embedding requests in the batch
+     * @param providerRequestUnits number of provider quota units in the batch (e.g. batch.size())
      * @param estimatedTokens token count estimated for the batch
      * @return true if admitted, false if capacity exhausted or headroom reserved
      */
-    public boolean tryAcquireBackground(int requestCount, int estimatedTokens) {
+    public boolean tryAcquireBackground(int providerRequestUnits, int estimatedTokens) {
         lock.lock();
         try {
             long now = System.currentTimeMillis();
@@ -116,16 +116,16 @@ public class RpmRateLimiter {
             int currentRequests = calculateTotalRequests();
             int currentTokens = calculateTotalTokens();
 
-            if ((currentRequests + requestCount) <= backgroundRpmLimit
+            if ((currentRequests + providerRequestUnits) <= backgroundRpmLimit
                     && (currentTokens + estimatedTokens) <= backgroundTpmLimit) {
-                records.addLast(new AdmissionRecord(now, requestCount, estimatedTokens));
-                log.debug("Background embedding admitted (requests={}, tokens={}). Window RPM: {}/{} (limit: {}), TPM: {}/{} (limit: {})",
-                        requestCount, estimatedTokens, currentRequests + requestCount, properties.getMaxRpm(), backgroundRpmLimit,
+                records.addLast(new AdmissionRecord(now, providerRequestUnits, estimatedTokens));
+                log.debug("Background embedding admitted (providerRequestUnits={}, tokens={}). Window RPM: {}/{} (limit: {}), TPM: {}/{} (limit: {})",
+                        providerRequestUnits, estimatedTokens, currentRequests + providerRequestUnits, properties.getMaxRpm(), backgroundRpmLimit,
                         currentTokens + estimatedTokens, properties.getMaxTpm(), backgroundTpmLimit);
                 return true;
             }
             log.warn("Background embedding rejected: capacity limit reached (RPM: {}/{}, TPM: {}/{})",
-                    currentRequests + requestCount, backgroundRpmLimit, currentTokens + estimatedTokens, backgroundTpmLimit);
+                    currentRequests + providerRequestUnits, backgroundRpmLimit, currentTokens + estimatedTokens, backgroundTpmLimit);
             return false;
         } finally {
             lock.unlock();
@@ -140,11 +140,11 @@ public class RpmRateLimiter {
      * 3. Exact sliding-window wait calculation (max(requestWaitMs, tokenWaitMs)).
      * 4. QuotaBackpressureException when capacity must yield without consuming retry budget.
      *
-     * @param requestCount number of provider HTTP requests (1 for batchEmbedContents)
+     * @param providerRequestUnits number of provider quota units (batch.size() for batchEmbedContents)
      * @param estimatedTokens total estimated tokens for the batch
      * @throws QuotaBackpressureException when capacity is not available and worker must yield to RETRY_WAIT
      */
-    public void acquireBackgroundOrYield(int requestCount, int estimatedTokens) throws QuotaBackpressureException {
+    public void acquireBackgroundOrYield(int providerRequestUnits, int estimatedTokens) throws QuotaBackpressureException {
         long waitMs;
         lock.lock();
         try {
@@ -155,24 +155,24 @@ public class RpmRateLimiter {
             int currentRequests = calculateTotalRequests();
             int currentTokens = calculateTotalTokens();
 
-            if ((currentRequests + requestCount) <= backgroundRpmLimit
+            if ((currentRequests + providerRequestUnits) <= backgroundRpmLimit
                     && (currentTokens + estimatedTokens) <= backgroundTpmLimit) {
-                records.addLast(new AdmissionRecord(now, requestCount, estimatedTokens));
-                log.debug("Background embedding admitted (requests={}, tokens={}). Window RPM: {}/{} (limit: {}), TPM: {}/{} (limit: {})",
-                        requestCount, estimatedTokens, currentRequests + requestCount, properties.getMaxRpm(), backgroundRpmLimit,
+                records.addLast(new AdmissionRecord(now, providerRequestUnits, estimatedTokens));
+                log.debug("Background embedding admitted (providerRequestUnits={}, tokens={}). Window RPM: {}/{} (limit: {}), TPM: {}/{} (limit: {})",
+                        providerRequestUnits, estimatedTokens, currentRequests + providerRequestUnits, properties.getMaxRpm(), backgroundRpmLimit,
                         currentTokens + estimatedTokens, properties.getMaxTpm(), backgroundTpmLimit);
                 return;
             }
 
-            waitMs = calculateBackgroundWaitMs(requestCount, estimatedTokens, now);
+            waitMs = calculateBackgroundWaitMs(providerRequestUnits, estimatedTokens, now);
         } finally {
             lock.unlock();
         }
 
         // Small inline quota wait optimization (<= 2000ms, once per batch)
         if (waitMs <= 2000L) {
-            log.info("Background quota near capacity, performing short inline wait of {}ms (requests={}, tokens={})",
-                    waitMs, requestCount, estimatedTokens);
+            log.info("Background quota near capacity, performing short inline wait of {}ms (providerRequestUnits={}, tokens={})",
+                    waitMs, providerRequestUnits, estimatedTokens);
             try {
                 Thread.sleep(waitMs);
             } catch (InterruptedException ie) {
@@ -190,18 +190,18 @@ public class RpmRateLimiter {
                 int currentRequests = calculateTotalRequests();
                 int currentTokens = calculateTotalTokens();
 
-                if ((currentRequests + requestCount) <= backgroundRpmLimit
+                if ((currentRequests + providerRequestUnits) <= backgroundRpmLimit
                         && (currentTokens + estimatedTokens) <= backgroundTpmLimit) {
-                    records.addLast(new AdmissionRecord(now, requestCount, estimatedTokens));
-                    log.info("Background embedding admitted after inline wait (requests={}, tokens={}). Window RPM: {}/{}, TPM: {}/{}",
-                            requestCount, estimatedTokens, currentRequests + requestCount, backgroundRpmLimit,
+                    records.addLast(new AdmissionRecord(now, providerRequestUnits, estimatedTokens));
+                    log.info("Background embedding admitted after inline wait (providerRequestUnits={}, tokens={}). Window RPM: {}/{}, TPM: {}/{}",
+                            providerRequestUnits, estimatedTokens, currentRequests + providerRequestUnits, backgroundRpmLimit,
                             currentTokens + estimatedTokens, backgroundTpmLimit);
                     return;
                 }
 
-                long recalculatedWaitMs = calculateBackgroundWaitMs(requestCount, estimatedTokens, now);
+                long recalculatedWaitMs = calculateBackgroundWaitMs(providerRequestUnits, estimatedTokens, now);
                 log.warn("Capacity unavailable after inline wait (RPM: {}/{}, TPM: {}/{}); yielding with waitMs={}",
-                        currentRequests + requestCount, backgroundRpmLimit, currentTokens + estimatedTokens, backgroundTpmLimit, recalculatedWaitMs);
+                        currentRequests + providerRequestUnits, backgroundRpmLimit, currentTokens + estimatedTokens, backgroundTpmLimit, recalculatedWaitMs);
                 throw new QuotaBackpressureException(recalculatedWaitMs,
                         String.format("Background quota capacity exhausted after inline wait (waitMs=%d)", recalculatedWaitMs));
             } finally {
@@ -219,14 +219,14 @@ public class RpmRateLimiter {
      * Determines when sufficient capacity actually becomes available for both RPM and TPM.
      * Must be called while holding `lock`.
      */
-    public long calculateBackgroundWaitMs(int requestCount, int estimatedTokens, long now) {
+    public long calculateBackgroundWaitMs(int providerRequestUnits, int estimatedTokens, long now) {
         int backgroundRpmLimit = properties.getMaxRpm() - properties.getInteractiveHeadroom();
         int backgroundTpmLimit = properties.getMaxTpm() - properties.getInteractiveTpmHeadroom();
 
         int currentRequests = calculateTotalRequests();
         int currentTokens = calculateTotalTokens();
 
-        int neededRequests = (currentRequests + requestCount) - backgroundRpmLimit;
+        int neededRequests = (currentRequests + providerRequestUnits) - backgroundRpmLimit;
         int neededTokens = (currentTokens + estimatedTokens) - backgroundTpmLimit;
 
         if (neededRequests <= 0 && neededTokens <= 0) {
@@ -238,7 +238,7 @@ public class RpmRateLimiter {
             int freed = 0;
             long targetExpiry = now + WINDOW_MS;
             for (AdmissionRecord rec : records) {
-                freed += rec.requestCount();
+                freed += rec.providerRequestUnits();
                 if (freed >= neededRequests) {
                     targetExpiry = rec.timestamp() + WINDOW_MS;
                     break;
@@ -266,7 +266,7 @@ public class RpmRateLimiter {
     }
 
     /**
-     * Normal pacing for background ingestion (single request): waits up to maxWaitMs for sliding-window capacity.
+     * Normal pacing for background ingestion (single request unit): waits up to maxWaitMs for sliding-window capacity.
      */
     public boolean acquireBackgroundWithPacing(int estimatedTokens, long maxWaitMs) {
         return acquireBackgroundWithPacing(1, estimatedTokens, maxWaitMs);
@@ -276,14 +276,14 @@ public class RpmRateLimiter {
      * Normal pacing for background ingestion: waits up to maxWaitMs for sliding-window capacity
      * to become available instead of immediately throwing an exception or thrashing RETRY_WAIT.
      *
-     * @param requestCount number of embedding requests in the batch
+     * @param providerRequestUnits number of provider quota units in the batch (e.g. batch.size())
      * @param estimatedTokens tokens needed for the batch
      * @param maxWaitMs maximum time in milliseconds to wait before giving up
      * @return true if acquired within maxWaitMs, false if capacity could not be acquired
      */
-    public boolean acquireBackgroundWithPacing(int requestCount, int estimatedTokens, long maxWaitMs) {
+    public boolean acquireBackgroundWithPacing(int providerRequestUnits, int estimatedTokens, long maxWaitMs) {
         if (maxWaitMs <= 0) {
-            return tryAcquireBackground(requestCount, estimatedTokens);
+            return tryAcquireBackground(providerRequestUnits, estimatedTokens);
         }
 
         long deadline = System.currentTimeMillis() + maxWaitMs;
@@ -297,11 +297,11 @@ public class RpmRateLimiter {
                 int currentRequests = calculateTotalRequests();
                 int currentTokens = calculateTotalTokens();
 
-                if ((currentRequests + requestCount) <= backgroundRpmLimit
+                if ((currentRequests + providerRequestUnits) <= backgroundRpmLimit
                         && (currentTokens + estimatedTokens) <= backgroundTpmLimit) {
-                    records.addLast(new AdmissionRecord(now, requestCount, estimatedTokens));
-                    log.info("Background embedding admitted with pacing (requests={}, tokens={}). Window RPM: {}/{}, TPM: {}/{}",
-                            requestCount, estimatedTokens, currentRequests + requestCount, backgroundRpmLimit,
+                    records.addLast(new AdmissionRecord(now, providerRequestUnits, estimatedTokens));
+                    log.info("Background embedding admitted with pacing (providerRequestUnits={}, tokens={}). Window RPM: {}/{}, TPM: {}/{}",
+                            providerRequestUnits, estimatedTokens, currentRequests + providerRequestUnits, backgroundRpmLimit,
                             currentTokens + estimatedTokens, backgroundTpmLimit);
                     return true;
                 }
@@ -309,7 +309,7 @@ public class RpmRateLimiter {
                 long remaining = deadline - now;
                 if (remaining <= 0) {
                     log.warn("Background pacing timeout after {}ms (RPM: {}/{}, TPM: {}/{}). Yielding to RETRY_WAIT.",
-                            maxWaitMs, currentRequests + requestCount, backgroundRpmLimit,
+                            maxWaitMs, currentRequests + providerRequestUnits, backgroundRpmLimit,
                             currentTokens + estimatedTokens, backgroundTpmLimit);
                     return false;
                 }
@@ -385,7 +385,7 @@ public class RpmRateLimiter {
     private int calculateTotalRequests() {
         int sum = 0;
         for (AdmissionRecord rec : records) {
-            sum += rec.requestCount();
+            sum += rec.providerRequestUnits();
         }
         return sum;
     }
