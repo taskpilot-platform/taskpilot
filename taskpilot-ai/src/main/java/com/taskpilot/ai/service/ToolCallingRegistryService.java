@@ -127,7 +127,6 @@ public class ToolCallingRegistryService {
         // GENERAL / ACTIONS
         register("confirmPendingAction", Set.of(ToolScope.GENERAL), List.of("confirm", "dong y", "xac nhan"), 40, false);
         register("cancelPendingAction", Set.of(ToolScope.GENERAL), List.of("cancel", "huy", "tu choi"), 40, false);
-        register("executeQuerySql", Set.of(ToolScope.GENERAL, ToolScope.PROJECT, ToolScope.TASK, ToolScope.MEMBER), List.of("sql", "query sql", "execute sql", "database", "select", "executeQuerySql", "truy van"), 90, true);
         register("smartQuery", Set.of(ToolScope.GENERAL, ToolScope.PROJECT, ToolScope.TASK, ToolScope.MEMBER, ToolScope.SPRINT, ToolScope.NOTIFICATION), List.of("smart query", "multi query", "truy van nhieu", "lay nhieu du lieu", "du an va thanh vien", "du an va task", "nhieu thong tin", "project and members", "batch query", "parallel"), 95, false);
     }
 
@@ -209,7 +208,7 @@ public class ToolCallingRegistryService {
                     }
                 }
                 if (limitToAHP) {
-                    if ("smartQuery".equals(name) || "getTaskDetails".equals(name) || "queryTasks".equals(name) || "queryProjects".equals(name) || "queryProjectMembers".equals(name) || "executeQuerySql".equals(name)) {
+                    if ("smartQuery".equals(name) || "getTaskDetails".equals(name) || "queryTasks".equals(name) || "queryProjects".equals(name) || "queryProjectMembers".equals(name)) {
                         return false;
                     }
                 }
@@ -316,8 +315,7 @@ public class ToolCallingRegistryService {
     private boolean isReadOnlyTool(String toolName) {
         if (toolName == null) return false;
         String lower = toolName.toLowerCase();
-        if ("recommendtaskassignmentcandidates".equals(lower) || "recommendassignmentcandidates".equals(lower)
-                || "executequerysql".equals(lower) || lower.contains("sql")) {
+        if ("recommendtaskassignmentcandidates".equals(lower) || "recommendassignmentcandidates".equals(lower)) {
             return true;
         }
         return (lower.startsWith("get") || lower.startsWith("query") || lower.startsWith("recommend") || lower.startsWith("search"))

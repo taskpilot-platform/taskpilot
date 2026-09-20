@@ -8,10 +8,8 @@ import com.taskpilot.ai.service.SmartQueryService;
 import com.taskpilot.ai.tools.ToolExecutionContext;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
-import jakarta.annotation.Nullable;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -24,23 +22,13 @@ public class SystemAiTools {
 
     private final PendingAiActionService pendingAiActionService;
     private final SmartQueryService smartQueryService;
-    @Nullable
-    private final JdbcTemplate jdbcTemplate;
 
     @Autowired
     public SystemAiTools(
             PendingAiActionService pendingAiActionService,
-            SmartQueryService smartQueryService,
-            @Nullable JdbcTemplate jdbcTemplate) {
+            SmartQueryService smartQueryService) {
         this.pendingAiActionService = pendingAiActionService;
         this.smartQueryService = smartQueryService;
-        this.jdbcTemplate = jdbcTemplate;
-    }
-
-    public SystemAiTools(
-            PendingAiActionService pendingAiActionService,
-            SmartQueryService smartQueryService) {
-        this(pendingAiActionService, smartQueryService, null);
     }
 
     @Tool("Confirm and execute a pending write action by its unique action ID.")
@@ -75,44 +63,6 @@ public class SystemAiTools {
         Long sessionId = ToolExecutionContext.requireSessionId();
         pendingAiActionService.cancel(actionId, userId, sessionId);
         return Map.of("cancelled", true, "actionId", actionId);
-    }
-
-
-
-
-    @Tool("Execute a read-only raw SQL SELECT query to retrieve complex, joined, or aggregated database information directly. " +
-          "Use table names: 'projects', 'project_members', 'tasks', 'users', 'sprints', 'comments', 'labels', 'skills', 'user_skills', 'notifications'. " +
-          "Only SELECT statement is allowed. Useful for fetching multiple tables' data in one step.")
-    public Object executeQuerySql(@P("The SELECT SQL query statement to run") String sql) {
-        log.info("[AiTool] executeQuerySql called with SQL: {}", sql);
-        if (jdbcTemplate == null) {
-            log.warn("[AiTool] jdbcTemplate is null, executeQuerySql is disabled in current context.");
-            return Map.of("error", "Database query tool is not initialized in this environment.");
-        }
-        if (sql == null || sql.isBlank()) {
-            throw new IllegalArgumentException("SQL query cannot be null or empty.");
-        }
-        
-        String cleanSql = sql.trim().toUpperCase();
-        if (!cleanSql.startsWith("SELECT") && !cleanSql.startsWith("WITH")) {
-            throw new IllegalArgumentException("Only read-only SELECT queries are allowed for security reasons.");
-        }
-        
-        // Prevent simple SQL write attempts in comments or subqueries (naive check)
-        List<String> forbidden = List.of("INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "TRUNCATE", "REPLACE");
-        for (String word : forbidden) {
-            if (cleanSql.contains(" " + word + " ") || cleanSql.contains("\n" + word + " ") || cleanSql.contains("\t" + word + " ")) {
-                throw new IllegalArgumentException("Forbidden keyword '" + word + "' detected in SQL statement.");
-            }
-        }
-
-        try {
-            List<Map<String, Object>> results = jdbcTemplate.queryForList(sql);
-            return Map.of("results", results, "totalMatched", results.size());
-        } catch (Exception e) {
-            log.error("[AiTool] executeQuerySql failed", e);
-            return Map.of("error", e.getMessage());
-        }
     }
 
 
