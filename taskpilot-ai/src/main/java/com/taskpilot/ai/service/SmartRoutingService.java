@@ -379,6 +379,9 @@ public class SmartRoutingService {
                             if (item instanceof java.util.Map<?, ?> map) {
                                 String provider = map.containsKey("provider") ? String.valueOf(map.get("provider")).toUpperCase(Locale.ROOT) : "";
                                 String modelName = map.containsKey("model") ? String.valueOf(map.get("model")) : "";
+                                if (isRetiredModel(modelName)) {
+                                    continue;
+                                }
                                 StreamingChatModel resolved = getModelByProviderAndName(provider, modelName, targetType);
                                 if (resolved != null && resolved != currentModel) {
                                     return resolved;
@@ -489,23 +492,38 @@ public class SmartRoutingService {
                 || model == openRouterReasoningFallback10Model;
     }
 
+    public static boolean isRetiredModel(String modelName) {
+        if (modelName == null || modelName.isBlank()) {
+            return false;
+        }
+        String lower = modelName.trim().toLowerCase(Locale.ROOT);
+        return lower.contains("llama-3.3")
+                || lower.contains("llama-3.1-8b")
+                || lower.contains("llama-4-scout")
+                || lower.contains("gemini-2.0-flash")
+                || lower.contains("gpt-4o")
+                || lower.contains("deepseek-r1");
+    }
+
     private StreamingChatModel resolveModelByPriority(String type) {
         try {
             java.util.Optional<java.util.Map<String, Object>> priorityRaw = systemSettingPort.findJsonObjectByKey("ai.model_priority");
             if (priorityRaw.isPresent() && !priorityRaw.get().isEmpty()) {
                 Object modelsObj = priorityRaw.get().get("models");
                 if (modelsObj instanceof List<?> list && !list.isEmpty()) {
-                    int targetIndex = 0;
-                    if (targetIndex >= list.size()) {
-                        targetIndex = 0;
-                    }
-                    Object item = list.get(targetIndex);
-                    if (item instanceof java.util.Map<?, ?> map) {
-                        String provider = map.containsKey("provider") ? String.valueOf(map.get("provider")).toUpperCase(Locale.ROOT) : "";
-                        String modelName = map.containsKey("model") ? String.valueOf(map.get("model")) : "";
-                        StreamingChatModel resolved = getModelByProviderAndName(provider, modelName, type);
-                        if (resolved != null) {
-                            return resolved;
+                    for (int targetIndex = 0; targetIndex < list.size(); targetIndex++) {
+                        Object item = list.get(targetIndex);
+                        if (item instanceof java.util.Map<?, ?> map) {
+                            String provider = map.containsKey("provider") ? String.valueOf(map.get("provider")).toUpperCase(Locale.ROOT) : "";
+                            String modelName = map.containsKey("model") ? String.valueOf(map.get("model")) : "";
+                            if (isRetiredModel(modelName)) {
+                                log.warn("[SmartRouting] Skipping retired model from DB priority list: provider={}, model={}", provider, modelName);
+                                continue;
+                            }
+                            StreamingChatModel resolved = getModelByProviderAndName(provider, modelName, type);
+                            if (resolved != null) {
+                                return resolved;
+                            }
                         }
                     }
                 }
@@ -517,7 +535,10 @@ public class SmartRoutingService {
     }
 
     public StreamingChatModel getModelByProviderAndName(String provider, String modelName, String type) {
-        if (modelName == null || modelName.isBlank()) {
+        if (modelName == null || modelName.isBlank() || isRetiredModel(modelName)) {
+            if (isRetiredModel(modelName)) {
+                log.warn("[SmartRouting] Refusing to resolve retired model: provider={}, model={}", provider, modelName);
+            }
             return null;
         }
         StreamingChatModel dynamicModel = aiModelConfig.getOrCreateDynamicModel(provider, modelName, type);
@@ -584,12 +605,18 @@ public class SmartRoutingService {
     public StreamingChatModel getReasoningModel() {
         StreamingChatModel resolved = resolveModelByPriority("reasoning");
         if (resolved != null) return resolved;
+        if (groqEnabled && groqOssReasoningModel != null) {
+            return groqOssReasoningModel;
+        }
         return geminiPrimaryModel;
     }
 
     public StreamingChatModel getReasoningTextModel() {
         StreamingChatModel resolved = resolveModelByPriority("reasoning_text");
         if (resolved != null) return resolved;
+        if (groqEnabled && groqOssReasoningTextModel != null) {
+            return groqOssReasoningTextModel;
+        }
         return geminiPrimaryModel;
     }
 

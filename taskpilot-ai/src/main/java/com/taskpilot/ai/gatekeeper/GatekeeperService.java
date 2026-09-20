@@ -85,7 +85,7 @@ public class GatekeeperService {
         try {
             IntentResult intent = gatekeeperAgent.classify(userMessage);
             boolean requiresAHP = intent != null && intent.isRequiresAHP();
-            log.info("[Gatekeeper] requiresAHP={} (llama-3.1-8b)", requiresAHP);
+            log.info("[Gatekeeper] requiresAHP={} (groq gatekeeper)", requiresAHP);
             return requiresAHP;
         } catch (Exception ex) {
             log.warn("[Gatekeeper] Gatekeeper model failed, using keyword fallback: {}", ex.getMessage());

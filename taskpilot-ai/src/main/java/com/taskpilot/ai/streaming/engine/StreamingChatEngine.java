@@ -678,7 +678,8 @@ public class StreamingChatEngine {
 
                 log.error("[SSE] Model {} failed for session {}: {}", modelName, sessionId, error.getMessage());
 
-                if (timeoutFallbackHandler.hasRemainingKeys(model, modelKeyAttempts)) {
+                boolean isNonRetryableModelError = isNonRetryableModelError(error);
+                if (!isNonRetryableModelError && timeoutFallbackHandler.hasRemainingKeys(model, modelKeyAttempts)) {
                     int nextAttempt = modelKeyAttempts + 1;
                     chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.THINKING, modelName, null, null);
                     sseTransport.safeSend(emitter, "model", modelName + " (" + timeoutFallbackHandler.getModelKeyLabel(model, nextAttempt) + ")", null);
@@ -687,6 +688,9 @@ public class StreamingChatEngine {
                             history, systemPrompt, model, modelName, startTime, isFallbackAttempt, clientMessageId,
                             requiresAHP, requiresTools, retryCount, nextAttempt);
                     return;
+                }
+                if (isNonRetryableModelError) {
+                    log.warn("[SSE] Model {} failed with permanent client error: {}. Skipping key rotation and escalating to fallback.", modelName, error.getMessage());
                 }
 
                 if (!isFallbackAttempt || routingService.hasStreamingFallbackAfter(model)) {
@@ -926,5 +930,20 @@ public class StreamingChatEngine {
                 + "   - Xem tất cả bình luận: [Xem bình luận](/comments)\n"
                 + "   Tuyệt đối KHÔNG dùng các URL tuyệt đối chứa http://localhost:5173 hay taskpilot-platform.netlify.app.\n"
                 + "5. Sử dụng tiếng Việt thân thiện, tự nhiên. Tuyệt đối không sinh ra thẻ <think> hay bất kỳ quá trình suy nghĩ nào khác. Viết trực tiếp câu trả lời của bạn.";
+    }
+
+    boolean isNonRetryableModelError(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            String msg = current.getMessage();
+            if (msg != null) {
+                String lower = msg.toLowerCase(java.util.Locale.ROOT);
+                if (lower.contains("404") || lower.contains("does not exist") || lower.contains("not found") || lower.contains("model_not_found")) {
+                    return true;
+                }
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 }
