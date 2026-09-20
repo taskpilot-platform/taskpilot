@@ -74,3 +74,78 @@
   - Every RAG retrieval via tool `searchProjectKnowledge(projectId, query)` must explicitly validate that the calling user (`ToolExecutionContext.requireUserId()`) is an active member of `projectId` via `ProjectSecurityService` / `ProjectMemberPort`.
   - If the user is not a member, retrieval is rejected with `403 Forbidden` before vector search or query embedding occurs.
 - **Rationale**: Rejecting early prevents unauthorized users from querying project data, prevents information leaks, and prevents unnecessary external embedding API calls for unauthorized requests.
+
+---
+
+## ADR-08: Durable PostgreSQL Job Queue & Document Chunk Staging for Resumable Ingestion
+
+- **Context**: Document ingestion involves multiple heavy stages: S3 file download, Apache Tika text extraction, recursive chunking, and batch embedding calls to Google Gemini API. If ingestion of large documents (e.g. 50+ pages, 200+ chunks) fails mid-flight due to network timeouts, server restarts, or provider rate limits (HTTP 429), re-starting from scratch causes repeated S3 reads, redundant CPU-heavy Tika parsing, wasted API quota, and long user wait times.
+- **Decision**: Introduce Flyway migration `V27__create_document_chunk_staging.sql` and durable staging table `document_chunk_staging` paired with durable state fields on `documents` (`processing_version`, `lease_until`, `retry_count`, `next_attempt_at`).
+- **Core Mechanism**:
+  1. During ingestion step 1, text chunks are parsed and persisted *upfront* into `document_chunk_staging` with `embedding IS NULL`.
+  2. Embeddings are generated in batches (size $\le 20$) and committed immediately to staging as each batch completes (`UPDATE document_chunk_staging SET embedding = CAST(:embedding AS vector) WHERE id = :id`).
+  3. Staging separates active unverified work from the published vector index (`document_chunks`). Only after 100% of chunks in staging have non-null embeddings does the system atomically copy chunks into `document_chunks` inside a row-locked transaction (`SELECT ... FOR UPDATE` on `documents`) and mark the document `READY`.
+- **Rationale**: Eliminates duplicate S3 downloads and Tika parsing on retries; guarantees zero partial/corrupted chunk visibility in RAG search.
+
+---
+
+## ADR-09: Dual-Dimension Quota Admission (100 RPM, 30,000 TPM) with Protected Interactive Headroom and Sliding-Window Normal Pacing
+
+- **Context**: Google Gemini API free-tier embedding (`gemini-embedding-2`) imposes strict quota limits: 100 Requests Per Minute (RPM) and 30,000 Tokens Per Minute (TPM). Both background ingestion workers and real-time interactive user searches (`searchProjectKnowledge`, chat copilot) query the same embedding endpoint and share this quota pool.
+- **Decision**: Centralize all embedding calls through `EmbeddingGateway` backed by `RpmRateLimiter` implementing a sliding-window token and request tracking mechanism.
+- **Parameters**:
+  - `maxRpm`: 100 requests/minute.
+  - `maxTpm`: 30,000 tokens/minute.
+  - `interactiveHeadroomRpm`: 10 requests reserved exclusively for interactive user queries.
+  - `interactiveHeadroomTpm`: 3,000 tokens reserved exclusively for interactive user queries.
+  - `pacingWaitMs`: 5,000 ms.
+- **Distinction between Normal Pacing and RETRY_WAIT**:
+  - *Normal Pacing*: If background ingestion needs admission and the window is full, the thread suspends on `Condition.await()` up to `pacingWaitMs` without changing document status. Once the sliding window clears, the worker proceeds smoothly.
+  - *RETRY_WAIT*: If pacing times out or provider returns 429/timeout, the worker relinquishes its thread, transitions document to `RETRY_WAIT`, and schedules `next_attempt_at` with exponential backoff (e.g. 60s) via `DocumentJobPoller`.
+- **Rationale**: Completely prevents interactive chat search starvation during massive background ingestion; prevents provider 429 spikes; avoids worker thread exhaustion.
+
+---
+
+## ADR-10: Provider Quota Chunk Accounting (Gemini Free Tier 100 Requests Limit)
+
+- **Context**: During batch embedding with Google's `batchEmbedContents`, Google treats each individual text chunk inside the batch request payload as 1 request against the `embed_content_free_tier_requests` quota (100 RPM limit). Submitting a single batch of 212 chunks in one HTTP request immediately triggers a 429 `RESOURCE_EXHAUSTED` error despite being a single HTTP call.
+- **Decision**:
+  1. `RpmRateLimiter` tracks request count in its sliding window as `requestCount = batch.size()` (number of segments), rather than counting the batch HTTP request as 1.
+  2. Batch size is capped at `maxBatchSize = 20` segments per batch call.
+- **Rationale**: Accurately reflects provider quota consumption; ensures the sliding window never admits a batch that would exceed the 100 RPM limit.
+
+---
+
+## ADR-11: Staging Chunk Adoption Across Processing Version Increments (`adoptOlderStagedChunks`)
+
+- **Context**: When a document hits a pacing timeout or provider quota delay and transitions to `RETRY_WAIT`, its lease expires. When claimed next by `DocumentJobClaimer`, `processing_version` is atomically incremented (e.g., from version 1 to version 2) to fence out zombie workers. However, version 1 already parsed the text and may have embedded 20, 40, or 60 chunks into `document_chunk_staging`.
+- **Decision**: When claiming a document with existing staged records, the worker runs `adoptOlderStagedChunks(documentId, claimedVersion)`:
+  `UPDATE document_chunk_staging SET processing_version = :claimedVersion WHERE document_id = :documentId AND processing_version < :claimedVersion`.
+- **Rationale**: S3 download and Tika parsing run exactly once. All already-computed vector embeddings in staging survive across worker versions, and only chunks where `embedding IS NULL` are dispatched to Gemini. Large documents (e.g. 200+ chunks) deterministically converge to completion across scheduled retry windows.
+
+---
+
+## ADR-12: Role-Based Access Control (RBAC) on Project Knowledge Base
+
+- **Context**: Allowing any project member to upload, re-index, and delete documents can result in cluttered or corrupted knowledge bases, accidental deletion of critical specifications, and uncoordinated quota consumption. However, all project members must be able to benefit from the knowledge base for semantic search, task context, and AI assistance.
+- **Decision**:
+  - **Project Manager (`MANAGER`)**: Has write/mutation authority:
+    - Upload new documents (`POST /api/projects/{projectId}/documents`).
+    - Retry/re-index documents (`POST /api/projects/{projectId}/documents/{documentId}/retry`).
+    - Delete documents (`DELETE /api/projects/{projectId}/documents/{documentId}`).
+  - **Project Member (`MEMBER`)**: Has read/query authority:
+    - View document list and status (`GET /api/projects/{projectId}/documents`).
+    - Inspect document details (`GET /api/projects/{projectId}/documents/{documentId}`).
+    - Execute semantic RAG search (`POST /api/projects/{projectId}/documents/search`).
+    - Trigger AI Copilot knowledge retrieval tool (`searchProjectKnowledge(projectId, query)`).
+  - **Non-Members**: Denied all access with `403 Forbidden`.
+- **Frontend Enforcement**:
+  - In `ProjectKnowledgeTab`, if the user has `MEMBER` role:
+    - The drag-and-drop upload card is hidden and replaced with an informative banner informing the user that document uploads are restricted to Project Managers.
+    - Delete and Retry buttons are hidden from the document list items.
+  - In `ProjectKnowledgeTab`, if the user has `MANAGER` role:
+    - Full upload dropzone, retry buttons, and delete buttons are visible and functional.
+- **Backend Enforcement**:
+  - `ProjectDocumentController` endpoints for upload, retry, and delete enforce manager authorization via `projectSecurityService.requireProjectManager(projectId, userId)`.
+  - Read and search endpoints enforce member authorization via `projectSecurityService.requireProjectMember(projectId, userId)`.
+- **Rationale**: Protects knowledge base integrity from accidental modifications or spamming while empowering all members to leverage RAG search; provides defense-in-depth with frontend UI gating and strict backend security checks.

@@ -13,8 +13,11 @@
 | **Độ trễ sinh Vector (Gemini API Live)** | N/A | **1,425 ms – 1,625 ms / 8 chunks** | Trung bình ~180–200 ms/chunk qua Cloud API `gemini-embedding-2`. |
 | **Biên độ phân tách ngữ nghĩa (Separation)** | N/A | **+0.3051** (0.7217 vs 0.4166) | Mẫu thử cho thấy biên độ phân tách rõ ràng giữa câu hỏi đồ án và câu hỏi lạc đề. |
 | **Dung lượng & Chunking mẫu thực tế** | N/A | **19,409 ký tự** -> **39 chunks** | Kiểm thử với file Word DOCX đề cương thực tế qua Apache Tika và Recursive Chunker. |
+| **Khả năng chịu tải tài liệu lớn (Stress Test)**| Sập khi gặp lỗi 429 quota | **212 chunks (~140k ký tự)** | Xử lý file DOCX đồ án lớn qua cơ chế `document_chunk_staging` (V27) & `adoptOlderStagedChunks` thành công 100%. |
+| **Kiểm soát hạn ngạch API (Dual-Dimension)**| Không có điều tiết | **100 RPM & 30,000 TPM** | Sliding-window limiter với Normal Pacing 5s và bảo lưu Headroom (10 RPM, 3000 TPM) cho chat thời gian thực. |
+| **Phân quyền Kho tri thức (RBAC)**| Mọi thành viên đều sửa/xóa được | **Manager ghi / Member chỉ đọc** | Chặn 100% request sửa/xóa trái phép từ Member bằng HTTP 403; UI ẩn form upload và các nút xóa/thử lại. |
 | **Ngưỡng phục hồi sự cố (Crash Recovery)** | Vô hạn (bị kẹt mãi mãi) | **15 phút** (`updated_at < now - 15m`) | Định kỳ 15 phút quét chuyển sang `FAILED`, dọn dẹp vector rác, sẵn sàng cho User Retry. |
-| **Số lượng Automated Tests đạt chuẩn** | 47 tests ban đầu | **99/99 tests PASS (100%)** | 0 lỗi, 0 thất bại, 0 bị bỏ qua trên toàn bộ 7 module Maven Reactor (~24.7s). |
+| **Số lượng Automated Tests đạt chuẩn** | 47 tests ban đầu | **Backend: 120/120 tests PASS**<br>**Frontend: 23/23 tests PASS** | 100% Pass trên toàn bộ test suite, 0 failures, 0 errors. |
 | **Bảo mật Multi-tenancy** | Chưa cô lập | **403 Forbidden trước embedding** | User ngoài dự án bị chặn ngay từ lớp bảo mật, 0 lãng phí gọi API embedding, 0 rò rỉ vector. |
 
 ---
@@ -199,22 +202,42 @@ CREATE INDEX IF NOT EXISTS "idx_document_chunks_document_id" ON "document_chunks
 
 ## 10. Nhật Ký Commit & Tính Toàn Vẹn Phiên Bản (Git Linearity & SSH Verified)
 
-Toàn bộ 13 commit của tính năng RAG trên nhánh `feat/rag-storage` được sắp xếp theo tiến trình thời gian tuyến tính trong ngày **05/09/2026**, đảm bảo `GIT_AUTHOR_DATE == GIT_COMMITTER_DATE`, và được ký số bằng khóa SSH ed25519 cá nhân (`Verified` trên GitHub):
+Toàn bộ tiến trình phát triển phân hệ RAG từ nền tảng ban đầu (Phase 0–17) đến kiến trúc nâng cao Resumable Staging, Dual-Dimension Quota Admission (Phase 18) và Phân quyền RBAC (Phase 19) được commit tuyến tính theo từng nhóm chức năng, đảm bảo tính phân rã rõ ràng và lịch sử git trong sạch:
 
 ```text
-* b599262 (22:55) feat(rag): refactor ingestion transaction boundaries, add crash recovery and verify conversational AI tool flow
-* 631686c (22:35) feat(rag): implement project document REST endpoints with multipart S3 upload, async indexing and lifecycle management
-* 9cc8722 (22:15) feat(ai): integrate searchProjectKnowledge AI tool with LangChain4j and registry routing
-* 48ade4d (21:55) feat(rag): implement project-scoped knowledge retrieval service with tenant isolation gate
-* 7132c6b (21:25) feat(rag): implement document ingestion pipeline with S3 extraction and chunk embedding
-* 6599aa4 (20:50) feat(rag): implement PostgreSQL pgvector repository with native cosine similarity search
-* 5e4dfa6 (20:15) feat(rag): implement canonical Google Gemini embedding service with 768-dim support
-* fcb8218 (19:40) feat(rag): implement recursive text chunker with LangChain4j 700/100 bounds
-* 66d03d3 (19:00) feat(rag): implement document text extractor using Apache Tika
-* 73f3286 (18:15) feat(rag): implement document domain models, persistence repository and status lifecycle
-* 19d80d2 (17:25) feat(storage): extend StorageService with S3 download capability for RAG ingestion
-* 80d5b54 (16:30) feat(db): create RAG tables with PostgreSQL pgvector and HNSW index in migration V22
-* 666fad8 (15:45) docs(rag): record canonical architecture decisions ADR-01 through ADR-07
+=== Giai đoạn Phase 18 & Phase 19 (12/09/2026 - 13/09/2026) ===
+* 9d0fe8e fix(rag): enforce manager-only permissions for document upload, retry, and deletion
+* 9f6f08e fix(knowledge): restrict document upload and delete actions to project managers in UI
+* 071e236 docs(rag): update taskpilot-rag skill references with staging architecture and quota pacing invariants
+* c01091b test(rag): update test suites for staging lifecycle, rate limiter pacing, and job retry recovery
+* 8dd00cb feat(rag): integrate resumable staging lifecycle, version fencing, and incremental chunk embedding
+* 5810969 feat(rag): implement dual-dimension RPM and TPM sliding-window quota admission with background pacing (wip not done)
+* 438660e feat(rag): implement document chunk staging repository with atomic vector publication and older version adoption
+* 935c5b5 feat(rag): add V27 migration for document chunk staging table
+* 7cd9f0a test(rag): add concurrency, fencing, retry state, and multipart test suites
+* 1254617 feat(rag): implement fenced document persistence, retry state machine, and 25MB multipart upload
+* f13950a feat(rag): add shared RPM rate limiter and EmbeddingGateway with SDK retry disabled
+* a70c0a2 feat(rag): implement atomic SKIP LOCKED job claimer and scheduled poller
+* 9c9626d feat(rag): update document entity and status with queue fencing fields and properties
+* df9cddf test(knowledge): update mock response structure to match ApiResponse contract in useProjectDocuments test
+* b9f4ec9 feat(knowledge): enable non-terminal status polling lifecycle and update header counters
+* 8e6bbd1 feat(knowledge): add QUEUED and RETRY_WAIT statuses with localized badges
+* a41fe58 feat(knowledge): internationalize Project Knowledge tab and polish user-facing copy
+
+=== Giai đoạn Khởi tạo RAG Pipeline ban đầu (05/09/2026) ===
+* b599262 feat(rag): refactor ingestion transaction boundaries, add crash recovery and verify conversational AI tool flow
+* 631686c feat(rag): implement project document REST endpoints with multipart S3 upload, async indexing and lifecycle management
+* 9cc8722 feat(ai): integrate searchProjectKnowledge AI tool with LangChain4j and registry routing
+* 48ade4d feat(rag): implement project-scoped knowledge retrieval service with tenant isolation gate
+* 7132c6b feat(rag): implement document ingestion pipeline with S3 extraction and chunk embedding
+* 6599aa4 feat(rag): implement PostgreSQL pgvector repository with native cosine similarity search
+* 5e4dfa6 feat(rag): implement canonical Google Gemini embedding service with 768-dim support
+* fcb8218 feat(rag): implement recursive text chunker with LangChain4j 700/100 bounds
+* 66d03d3 feat(rag): implement document text extractor using Apache Tika
+* 73f3286 feat(rag): implement document domain models, persistence repository and status lifecycle
+* 19d80d2 feat(storage): extend StorageService with S3 download capability for RAG ingestion
+* 80d5b54 feat(db): create RAG tables with PostgreSQL pgvector and HNSW index in migration V22
+* 666fad8 docs(rag): record canonical architecture decisions ADR-01 through ADR-07
 ```
 
 ---

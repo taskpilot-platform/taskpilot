@@ -62,14 +62,24 @@ This document records the finalized architectural decisions for TaskPilot RAG In
 
 ---
 
-### Decision 9: Dual-Dimension Admission Limiter (RPM + TPM) with Protected Headroom
-- **Context**: Gemini enforces both 100 RPM and 30,000 TPM.
-- **Decision**: Implement a sliding 60-second window in `RpmRateLimiter` that records `AdmissionRecord(timestamp, tokens)`. Heuristically estimate tokens (`chars / 3`). Reserve dedicated headroom (`interactiveHeadroom`, `interactiveTpmHeadroom`) for user-facing chat queries.
-- **Rationale**: Concurrency semaphores or fixed sleeps alone do not guard against token burst limits. Reserving headroom guarantees interactive search is never starved by background document ingestion.
+### Decision 9: Global Dual-Dimension Rate Limiting (RPM + TPM) with Normal Pacing
+- **Context**: Ingestion batches and interactive chat searches share the same external embedding quota.
+- **Decision**: Centralize quota admission in `EmbeddingGateway` backed by `RpmRateLimiter` tracking sliding-window request count and estimated tokens. Interactive search has priority and dedicated headroom. Background batches wait (pace) on condition variables up to `pacingWaitMs`.
+- **Rationale**: Prevents chat search starvation while maximizing ingestion throughput without triggering provider 429 quota exhaustion.
 
 ---
 
-### Decision 10: Provider SDK Retries Disabled (`maxRetries = 0`)
+### Decision 10: Provider Quota Chunk Accounting & Staging Adoption Across Retries
+- **Context**: Large documents (e.g. 200+ chunks) hit Google Gemini free tier 429 quota (`embed_content_free_tier_requests`, limit: 100). Google counts each text chunk inside `batchEmbedContents` as 1 request against this quota.
+- **Decision**:
+  1. `RpmRateLimiter` tracks `AdmissionRecord(timestamp, requestCount, tokens)` where `requestCount = batch.size()`.
+  2. Batch size is capped at `maxBatchSize = 20` segments per batch call.
+  3. `adoptOlderStagedChunks`: When a new worker claims a document following a pacing timeout / RETRY_WAIT (with newly incremented `processing_version`), it adopts all existing staged records to the claimed version (`UPDATE document_chunk_staging SET processing_version = claimedVersion WHERE document_id = ? AND processing_version < ?`).
+- **Rationale**: Completely prevents 429 quota exhaustion from Gemini. S3 download and Tika parsing run exactly once. All already-computed vector embeddings in staging survive across worker versions, and only chunks where `embedding IS NULL` are dispatched to Gemini. Large documents deterministically converge to completion across scheduled retry windows. Reserving headroom guarantees interactive search is never starved by background document ingestion.
+
+---
+
+### Decision 11: Provider SDK Retries Disabled (`maxRetries = 0`)
 - **Context**: LangChain4j `GoogleAiEmbeddingModel` defaults to internal retries with fixed delays.
 - **Decision**: Explicitly configure `GoogleAiEmbeddingModel.builder().maxRetries(0)`.
 - **Rationale**: Silent SDK-level retries undermine application-level quota admission and can cause rapid quota exhaustion. All retries must be governed by TaskPilot's state machine.
