@@ -31,8 +31,6 @@ public class SmartRoutingService {
     private final StreamingChatModel geminiFallback6Model;
     private final StreamingChatModel geminiFallback7Model;
 
-    private final StreamingChatModel gpt4oFallbackModel;
-    private final StreamingChatModel deepSeekReasoningModel;
     private final StreamingChatModel groqOssReasoningModel;
     private final StreamingChatModel groqOssReasoningFallback1Model;
     private final StreamingChatModel openRouterReasoningModel;
@@ -47,8 +45,6 @@ public class SmartRoutingService {
     private final StreamingChatModel openRouterReasoningFallback9Model;
     private final StreamingChatModel openRouterReasoningFallback10Model;
 
-    private final StreamingChatModel gpt4oFallbackTextModel;
-    private final StreamingChatModel deepSeekReasoningTextModel;
     private final StreamingChatModel groqOssReasoningTextModel;
     private final StreamingChatModel groqOssReasoningFallback1TextModel;
     private final StreamingChatModel openRouterReasoningTextModel;
@@ -73,10 +69,10 @@ public class SmartRoutingService {
     @Value("${ai.gemini.fallback4-model:gemini-2.5-pro}")
     private String geminiFallback4ModelName;
 
-    @Value("${ai.gemini.fallback5-model:gemini-2.0-flash}")
+    @Value("${ai.gemini.fallback5-model:gemini-3.5-flash-lite}")
     private String geminiFallback5ModelName;
 
-    @Value("${ai.gemini.fallback6-model:gemini-2.0-flash-lite}")
+    @Value("${ai.gemini.fallback6-model:gemini-3.8-flash}")
     private String geminiFallback6ModelName;
 
     @Value("${ai.gemini.fallback7-model:gemini-3.1-pro-preview}")
@@ -88,16 +84,10 @@ public class SmartRoutingService {
     @Value("${ai.gemini.use-for-tools:false}")
     private boolean useGeminiForTools;
 
-    @Value("${ai.github.fallback-model:gpt-4o}")
-    private String fallbackModelName;
-
-    @Value("${ai.github.reasoning-model:DeepSeek-R1}")
-    private String deepSeekReasoningModelName;
-
-    @Value("${ai.groq.reasoning-model:meta-llama/llama-4-scout-17b-16e-instruct}")
+    @Value("${ai.groq.reasoning-model:openai/gpt-oss-120b}")
     private String groqReasoningModelName;
 
-    @Value("${ai.groq.reasoning-fallback1-model:llama-3.3-70b-versatile}")
+    @Value("${ai.groq.reasoning-fallback1-model:openai/gpt-oss-20b}")
     private String groqReasoningFallback1ModelName;
 
     @Value("${ai.groq.enabled:false}")
@@ -157,8 +147,6 @@ public class SmartRoutingService {
             @Qualifier("geminiFallback5Model") StreamingChatModel geminiFallback5Model,
             @Qualifier("geminiFallback6Model") StreamingChatModel geminiFallback6Model,
             @Qualifier("geminiFallback7Model") StreamingChatModel geminiFallback7Model,
-            @Qualifier("gpt4oFallbackModel") StreamingChatModel gpt4oFallbackModel,
-            @Qualifier("deepSeekReasoningModel") StreamingChatModel deepSeekReasoningModel,
             @Qualifier("groqOssReasoningModel") @Nullable StreamingChatModel groqOssReasoningModel,
             @Qualifier("groqOssReasoningFallback1Model") @Nullable StreamingChatModel groqOssReasoningFallback1Model,
             @Qualifier("openRouterReasoningModel") @Nullable StreamingChatModel openRouterReasoningModel,
@@ -172,8 +160,6 @@ public class SmartRoutingService {
             @Qualifier("openRouterReasoningFallback8Model") @Nullable StreamingChatModel openRouterReasoningFallback8Model,
             @Qualifier("openRouterReasoningFallback9Model") @Nullable StreamingChatModel openRouterReasoningFallback9Model,
             @Qualifier("openRouterReasoningFallback10Model") @Nullable StreamingChatModel openRouterReasoningFallback10Model,
-            @Qualifier("gpt4oFallbackTextModel") StreamingChatModel gpt4oFallbackTextModel,
-            @Qualifier("deepSeekReasoningTextModel") StreamingChatModel deepSeekReasoningTextModel,
             @Qualifier("groqOssReasoningTextModel") @Nullable StreamingChatModel groqOssReasoningTextModel,
             @Qualifier("groqOssReasoningFallback1TextModel") @Nullable StreamingChatModel groqOssReasoningFallback1TextModel,
             @Qualifier("openRouterReasoningTextModel") @Nullable StreamingChatModel openRouterReasoningTextModel,
@@ -189,8 +175,6 @@ public class SmartRoutingService {
         this.geminiFallback5Model = geminiFallback5Model;
         this.geminiFallback6Model = geminiFallback6Model;
         this.geminiFallback7Model = geminiFallback7Model;
-        this.gpt4oFallbackModel = gpt4oFallbackModel;
-        this.deepSeekReasoningModel = deepSeekReasoningModel;
         this.groqOssReasoningModel = groqOssReasoningModel;
         this.groqOssReasoningFallback1Model = groqOssReasoningFallback1Model;
         this.openRouterReasoningModel = openRouterReasoningModel;
@@ -204,8 +188,6 @@ public class SmartRoutingService {
         this.openRouterReasoningFallback8Model = openRouterReasoningFallback8Model;
         this.openRouterReasoningFallback9Model = openRouterReasoningFallback9Model;
         this.openRouterReasoningFallback10Model = openRouterReasoningFallback10Model;
-        this.gpt4oFallbackTextModel = gpt4oFallbackTextModel;
-        this.deepSeekReasoningTextModel = deepSeekReasoningTextModel;
         this.groqOssReasoningTextModel = groqOssReasoningTextModel;
         this.groqOssReasoningFallback1TextModel = groqOssReasoningFallback1TextModel;
         this.openRouterReasoningTextModel = openRouterReasoningTextModel;
@@ -366,9 +348,7 @@ public class SmartRoutingService {
 
     private StreamingChatModel getNextStreamingFallbackInternal(StreamingChatModel currentModel) {
         String targetType = "reasoning";
-        if (currentModel == gpt4oFallbackTextModel
-                || currentModel == deepSeekReasoningTextModel
-                || currentModel == groqOssReasoningTextModel
+        if (currentModel == groqOssReasoningTextModel
                 || currentModel == groqOssReasoningFallback1TextModel
                 || currentModel == openRouterReasoningTextModel) {
             targetType = "text";
@@ -416,9 +396,6 @@ public class SmartRoutingService {
         if (isGeminiModel(currentModel)) {
             return getNextGeminiFallback(currentModel);
         }
-        if (isGpt4oFallbackModel(currentModel)) {
-            return currentModel;
-        }
         if (isOpenRouterReasoningModel(currentModel)) {
             return getNextOpenRouterReasoningFallback(currentModel);
         }
@@ -432,12 +409,6 @@ public class SmartRoutingService {
             return groqOssReasoningTextModel;
         }
         if (currentModel == groqOssReasoningFallback1TextModel) {
-            return currentModel;
-        }
-        if (currentModel == deepSeekReasoningModel) {
-            return currentModel;
-        }
-        if (currentModel == deepSeekReasoningTextModel) {
             return currentModel;
         }
         return currentModel;
@@ -516,11 +487,6 @@ public class SmartRoutingService {
                 || model == openRouterReasoningFallback8Model
                 || model == openRouterReasoningFallback9Model
                 || model == openRouterReasoningFallback10Model;
-    }
-
-    public boolean isGpt4oFallbackModel(StreamingChatModel model) {
-        return model == gpt4oFallbackModel
-                || model == gpt4oFallbackTextModel;
     }
 
     private StreamingChatModel resolveModelByPriority(String type) {
@@ -643,11 +609,7 @@ public class SmartRoutingService {
         if (modelName == null) {
             return getPrimaryModel();
         }
-        if (modelName.equals(fallbackModelName)) {
-            return getFallbackTextModel();
-        }
-        if (modelName.equals(deepSeekReasoningModelName)
-                || modelName.equals(groqReasoningModelName)
+        if (modelName.equals(groqReasoningModelName)
                 || modelName.equals(groqReasoningFallback1ModelName)
                 || isOpenRouterReasoningModelName(modelName)) {
             return getReasoningTextModel();
@@ -671,8 +633,6 @@ public class SmartRoutingService {
         if (model == geminiFallback5Model) return geminiFallback5ModelName;
         if (model == geminiFallback6Model) return geminiFallback6ModelName;
         if (model == geminiFallback7Model) return geminiFallback7ModelName;
-        if (model == gpt4oFallbackModel || model == gpt4oFallbackTextModel) return fallbackModelName;
-        if (model == deepSeekReasoningModel || model == deepSeekReasoningTextModel) return deepSeekReasoningModelName;
         if (model == groqOssReasoningModel || model == groqOssReasoningTextModel) return groqReasoningModelName;
         if (model == groqOssReasoningFallback1Model || model == groqOssReasoningFallback1TextModel) return groqReasoningFallback1ModelName;
         if (model == openRouterReasoningModel || model == openRouterReasoningTextModel) return openRouterReasoningModelName;

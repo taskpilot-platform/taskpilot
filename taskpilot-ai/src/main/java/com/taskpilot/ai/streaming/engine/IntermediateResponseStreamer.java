@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Streams intermediate summaries via Llama 3.3 after Round 0 tool execution
+ * Streams intermediate summaries via reasoning text model after Round 0 tool execution
  * before proceeding to subsequent execution rounds.
  */
 @Slf4j
@@ -58,7 +58,7 @@ public class IntermediateResponseStreamer {
             ScheduledExecutorService timeoutScheduler,
             Runnable continueToNextRound) {
 
-        log.info("[Multi-Agent] Round 0 complete. Streaming intermediate response via Llama 3.3 before next round for session {}", sessionId);
+        log.info("[Multi-Agent] Round 0 complete. Streaming intermediate response via reasoning text model before next round for session {}", sessionId);
         try {
             emitter.send(SseEmitter.event().id(clientMessageId).name("status").data("🟢 Đang tóm tắt kết quả đợt 1..."));
         } catch (Exception ignored) {
@@ -84,9 +84,8 @@ public class IntermediateResponseStreamer {
                 compactor.compactHistoryForRequest(textOnlyHistory, "intermediate-text"),
                 true));
 
-        StreamingChatModel llamaModel = routingService.getModelByProviderAndName("GROQ", "llama-3.3-70b-versatile", "text");
-        StreamingChatModel finalLlama = llamaModel != null ? llamaModel : routingService.getReasoningTextModel();
-        String finalLlamaName = routingService.getModelName(finalLlama);
+        StreamingChatModel reasoningModel = routingService.getReasoningTextModel();
+        String reasoningModelName = routingService.getModelName(reasoningModel);
 
         ChatRequest request = ChatRequest.builder()
                 .messages(textOnlyHistory)
@@ -98,7 +97,7 @@ public class IntermediateResponseStreamer {
 
         final ScheduledFuture<?> timeoutFuture = timeoutScheduler.schedule(() -> {
             if (roundFinished.compareAndSet(false, true)) {
-                log.warn("[Intermediate] Timeout occurred during intermediate Llama streaming for session {}. Continuing to next round.", sessionId);
+                log.warn("[Intermediate] Timeout occurred during intermediate reasoning model streaming for session {}. Continuing to next round.", sessionId);
                 generatingMarked.set(false);
                 sseTransport.safeSend(emitter, "token", Map.of("token", "\n\n<think>\nTiếp tục thực hiện bước tiếp theo...\n</think>\n\n"), MediaType.APPLICATION_JSON);
                 sseTransport.safeSend(emitter, "phase", Phase.THINKING.name(), null);
@@ -109,7 +108,7 @@ public class IntermediateResponseStreamer {
         final AtomicBoolean insideLlmThink = new AtomicBoolean(false);
         final StringBuilder filterBuffer = new StringBuilder();
 
-        finalLlama.chat(request, new StreamingChatResponseHandler() {
+        reasoningModel.chat(request, new StreamingChatResponseHandler() {
             @Override
             public void onPartialResponse(String token) {
                 if (roundFinished.get()) return;
@@ -138,7 +137,7 @@ public class IntermediateResponseStreamer {
                         if (openIdx != -1) {
                             String before = content.substring(0, openIdx);
                             if (!before.isEmpty()) {
-                                sseTransport.sendTokenToClient(emitter, before, clientDisconnected, generatingMarked, sessionId, clientMessageId, finalLlamaName);
+                                sseTransport.sendTokenToClient(emitter, before, clientDisconnected, generatingMarked, sessionId, clientMessageId, reasoningModelName);
                             }
                             insideLlmThink.set(true);
                             content = content.substring(openIdx + 7);
@@ -150,11 +149,11 @@ public class IntermediateResponseStreamer {
                             if (potentialIdx != -1) {
                                 String before = content.substring(0, potentialIdx);
                                 if (!before.isEmpty()) {
-                                    sseTransport.sendTokenToClient(emitter, before, clientDisconnected, generatingMarked, sessionId, clientMessageId, finalLlamaName);
+                                    sseTransport.sendTokenToClient(emitter, before, clientDisconnected, generatingMarked, sessionId, clientMessageId, reasoningModelName);
                                 }
                                 filterBuffer.append(content.substring(potentialIdx));
                             } else {
-                                sseTransport.sendTokenToClient(emitter, content, clientDisconnected, generatingMarked, sessionId, clientMessageId, finalLlamaName);
+                                sseTransport.sendTokenToClient(emitter, content, clientDisconnected, generatingMarked, sessionId, clientMessageId, reasoningModelName);
                             }
                             break;
                         }
@@ -182,7 +181,7 @@ public class IntermediateResponseStreamer {
             public void onError(Throwable error) {
                 if (!roundFinished.compareAndSet(false, true)) return;
                 timeoutFuture.cancel(false);
-                log.error("[Intermediate] Error during intermediate Llama streaming for session {}: {}", sessionId, error.getMessage());
+                log.error("[Intermediate] Error during intermediate reasoning model streaming for session {}: {}", sessionId, error.getMessage());
 
                 generatingMarked.set(false);
                 sseTransport.safeSend(emitter, "token", Map.of("token", "\n\n<think>\nĐang tiến hành bước tiếp theo...\n</think>\n\n"), MediaType.APPLICATION_JSON);

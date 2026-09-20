@@ -25,9 +25,6 @@ public class AiModelConfig {
         @Value("${ai.gemini.api-key}")
         private String geminiApiKey;
 
-        @Value("${ai.github.token}")
-        private String githubToken;
-
         @Value("${ai.gemini.model-name:gemini-3.5-flash}")
         private String geminiModelName;
 
@@ -44,20 +41,14 @@ public class AiModelConfig {
         @Value("${ai.gemini.fallback4-model:gemini-2.5-pro}")
         private String geminiFallback4ModelName;
 
-        @Value("${ai.gemini.fallback5-model:gemini-2.0-flash}")
+        @Value("${ai.gemini.fallback5-model:gemini-3.5-flash-lite}")
         private String geminiFallback5ModelName;
 
-        @Value("${ai.gemini.fallback6-model:gemini-2.0-flash-lite}")
+        @Value("${ai.gemini.fallback6-model:gemini-3.8-flash}")
         private String geminiFallback6ModelName;
 
         @Value("${ai.gemini.fallback7-model:gemini-3.1-pro-preview}")
         private String geminiFallback7ModelName;
-
-        @Value("${ai.github.fallback-model:gpt-4o}")
-        private String fallbackModelName;
-
-        @Value("${ai.github.reasoning-model:DeepSeek-R1}")
-        private String reasoningModelName;
 
         @Value("${ai.groq.api-key:}")
         private String groqApiKey;
@@ -68,13 +59,13 @@ public class AiModelConfig {
         @Value("${ai.groq.base-url:https://api.groq.com/openai/v1}")
         private String groqBaseUrl;
 
-        @Value("${ai.groq.reasoning-model:meta-llama/llama-4-scout-17b-16e-instruct}")
+        @Value("${ai.groq.reasoning-model:openai/gpt-oss-120b}")
         private String groqReasoningModelName;
 
-        @Value("${ai.groq.reasoning-fallback1-model:llama-3.3-70b-versatile}")
+        @Value("${ai.groq.reasoning-fallback1-model:openai/gpt-oss-20b}")
         private String groqReasoningFallback1ModelName;
 
-        @Value("${ai.groq.gatekeeper-model:llama-3.1-8b-instant}")
+        @Value("${ai.groq.gatekeeper-model:openai/gpt-oss-20b}")
         private String groqGatekeeperModelName;
 
         @Value("${ai.openrouter.api-key:}")
@@ -175,17 +166,6 @@ public class AiModelConfig {
                                                 .toList();
                                 return register(new OpenRouterMultiKeyStreamingChatModel(modelName, keyedModels), modelName);
                         }
-                        if ("GITHUB".equals(provider)) {
-                                StreamingChatModel model = OpenAiOfficialStreamingChatModel.builder()
-                                                .apiKey(githubToken)
-                                                .modelName(modelName)
-                                                .isGitHubModels(true)
-                                                .temperature(0.3)
-                                                .timeout(Duration.ofSeconds(timeoutSeconds))
-                                                .parallelToolCalls(true)
-                                                .build();
-                                return register(model, modelName);
-                        }
                         return null;
                 });
         }
@@ -262,60 +242,6 @@ public class AiModelConfig {
                                 .parallelToolCalls(true)
                                 .build();
                 return register(model, modelName);
-        }
-
-        @Bean("gpt4oFallbackModel")
-        public StreamingChatModel gpt4oFallbackModel() {
-                log.info("[AI Config] Initializing FALLBACK model: {} (GitHub Models via OpenAI Official SDK)",
-                                fallbackModelName);
-                return OpenAiOfficialStreamingChatModel.builder()
-                                .apiKey(githubToken)
-                                .modelName(fallbackModelName)
-                                .isGitHubModels(true)
-                                .temperature(0.3)
-                                .timeout(Duration.ofSeconds(timeoutSeconds))
-                                .parallelToolCalls(true)
-                                .build();
-        }
-
-        @Bean("gpt4oFallbackTextModel")
-        public StreamingChatModel gpt4oFallbackTextModel() {
-                log.info("[AI Config] Initializing FALLBACK TEXT model: {} (GitHub Models via OpenAI Official SDK)",
-                                fallbackModelName);
-                return OpenAiOfficialStreamingChatModel.builder()
-                                .apiKey(githubToken)
-                                .modelName(fallbackModelName)
-                                .isGitHubModels(true)
-                                .temperature(0.3)
-                                .timeout(Duration.ofSeconds(timeoutSeconds))
-                                .build();
-        }
-
-        @Bean("deepSeekReasoningModel")
-        public StreamingChatModel deepSeekReasoningModel() {
-                log.info("[AI Config] Initializing REASONING model: {} (GitHub Models via OpenAI Official SDK)",
-                                reasoningModelName);
-                return OpenAiOfficialStreamingChatModel.builder()
-                                .apiKey(githubToken)
-                                .modelName(reasoningModelName)
-                                .isGitHubModels(true)
-                                .temperature(0.5)
-                                .timeout(Duration.ofSeconds(timeoutSeconds * 2))
-                                .parallelToolCalls(true)
-                                .build();
-        }
-
-        @Bean("deepSeekReasoningTextModel")
-        public StreamingChatModel deepSeekReasoningTextModel() {
-                log.info("[AI Config] Initializing REASONING TEXT model: {} (GitHub Models via OpenAI Official SDK)",
-                                reasoningModelName);
-                return OpenAiOfficialStreamingChatModel.builder()
-                                .apiKey(githubToken)
-                                .modelName(reasoningModelName)
-                                .isGitHubModels(true)
-                                .temperature(0.5)
-                                .timeout(Duration.ofSeconds(timeoutSeconds * 2))
-                                .build();
         }
 
         @Bean("groqOssReasoningModel")

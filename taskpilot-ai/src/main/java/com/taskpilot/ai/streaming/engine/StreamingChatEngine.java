@@ -71,7 +71,7 @@ public class StreamingChatEngine {
 
     private static final int MAX_TOOL_ROUNDS = 4;
     private static final int MAX_CONSECUTIVE_SAME_TOOL_EXECUTIONS = 3;
-    private static final int GITHUB_MODELS_MAX_TOKENS = 32768;
+    private static final int DEFAULT_CONTEXT_MAX_TOKENS = 32768;
     private static final int LARGE_CONTEXT_MAX_TOKENS = 128_000;
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
@@ -321,7 +321,7 @@ public class StreamingChatEngine {
         }
 
         int modelBudget = routingService.supportsLargeContextAndTools(model)
-                ? LARGE_CONTEXT_MAX_TOKENS : GITHUB_MODELS_MAX_TOKENS;
+                ? LARGE_CONTEXT_MAX_TOKENS : DEFAULT_CONTEXT_MAX_TOKENS;
         int historyTokens = tokenCountEstimator.estimateTokenCountInMessages(sanitizedHistory);
         int toolSpecTokens = 0;
         if (toolSpecs != null) {
@@ -614,7 +614,7 @@ public class StreamingChatEngine {
                 }
 
                 if (requiresTools) {
-                    log.info("[Multi-Agent] Chặng 3: Executor finished. Forwarding result to Communicator (llama-3.3-70b-versatile) for streaming...");
+                    log.info("[Multi-Agent] Chặng 3: Executor finished. Forwarding result to Communicator for streaming...");
                     if (session.getTitle() == null || session.getTitle().isBlank()) {
                         postProcessor.generateSessionTitleViaGemmaAsync(session, userInput, rawResponseText);
                     }
@@ -626,8 +626,7 @@ public class StreamingChatEngine {
                     String allToolResultsText = toolCoordinator.formatAllToolResults(history);
                     String promptForCommunicator = buildCommunicatorPrompt(allToolResultsText, rawResponseText);
 
-                    StreamingChatModel groqModel = routingService.getModelByProviderAndName("GROQ", "llama-3.3-70b-versatile", "text");
-                    StreamingChatModel finalModel = groqModel != null ? groqModel : routingService.getReasoningTextModel();
+                    StreamingChatModel finalModel = routingService.getReasoningTextModel();
                     String finalModelName = routingService.getModelName(finalModel);
 
                     timeoutFallbackHandler.forceTextOnlyResponse(
