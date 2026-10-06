@@ -347,39 +347,42 @@ public class SmartRoutingService {
     }
 
     private StreamingChatModel getNextStreamingFallbackInternal(StreamingChatModel currentModel) {
-        String targetType = "reasoning";
-        if (currentModel == groqOssReasoningTextModel
-                || currentModel == groqOssReasoningFallback1TextModel
-                || currentModel == openRouterReasoningTextModel) {
-            targetType = "text";
-        }
+        String currentType = getModelType(currentModel);
+        String targetType = ("text".equalsIgnoreCase(currentType) || currentType.endsWith("text")) ? "text" : "reasoning";
 
         try {
             java.util.Optional<java.util.Map<String, Object>> priorityRaw = systemSettingPort.findJsonObjectByKey("ai.model_priority");
             if (priorityRaw.isPresent() && !priorityRaw.get().isEmpty()) {
                 Object modelsObj = priorityRaw.get().get("models");
                 if (modelsObj instanceof List<?> list) {
+                    String currentProvider = getModelProvider(currentModel);
+                    String currentModelName = getModelName(currentModel);
+
                     int currentIndex = -1;
-                    for (int i = 0; i < list.size(); i++) {
-                        Object item = list.get(i);
-                        if (item instanceof java.util.Map<?, ?> map) {
-                            String provider = map.containsKey("provider") ? String.valueOf(map.get("provider")).toUpperCase(Locale.ROOT) : "";
-                            String modelName = map.containsKey("model") ? String.valueOf(map.get("model")) : "";
-                            StreamingChatModel resReasoning = getModelByProviderAndName(provider, modelName, "reasoning");
-                            StreamingChatModel resText = getModelByProviderAndName(provider, modelName, "text");
-                            if (resReasoning == currentModel || resText == currentModel) {
-                                currentIndex = i;
-                                break;
+                    if (!"UNKNOWN".equalsIgnoreCase(currentProvider) && !"Unknown".equalsIgnoreCase(currentModelName)) {
+                        for (int i = 0; i < list.size(); i++) {
+                            Object item = list.get(i);
+                            if (item instanceof java.util.Map<?, ?> map) {
+                                String provider = map.containsKey("provider") ? String.valueOf(map.get("provider")).trim() : "";
+                                String modelName = map.containsKey("model") ? String.valueOf(map.get("model")).trim() : "";
+                                if (provider.equalsIgnoreCase(currentProvider) && modelName.equalsIgnoreCase(currentModelName)) {
+                                    currentIndex = i;
+                                    break;
+                                }
                             }
                         }
                     }
+
                     if (currentIndex != -1) {
                         for (int i = currentIndex + 1; i < list.size(); i++) {
                             Object item = list.get(i);
                             if (item instanceof java.util.Map<?, ?> map) {
-                                String provider = map.containsKey("provider") ? String.valueOf(map.get("provider")).toUpperCase(Locale.ROOT) : "";
-                                String modelName = map.containsKey("model") ? String.valueOf(map.get("model")) : "";
+                                String provider = map.containsKey("provider") ? String.valueOf(map.get("provider")).trim() : "";
+                                String modelName = map.containsKey("model") ? String.valueOf(map.get("model")).trim() : "";
                                 if (isRetiredModel(modelName)) {
+                                    continue;
+                                }
+                                if (provider.equalsIgnoreCase(currentProvider) && modelName.equalsIgnoreCase(currentModelName)) {
                                     continue;
                                 }
                                 StreamingChatModel resolved = getModelByProviderAndName(provider, modelName, targetType);
@@ -460,14 +463,7 @@ public class SmartRoutingService {
     }
 
     public boolean isGeminiModel(StreamingChatModel model) {
-        return model == geminiPrimaryModel
-                || model == geminiFallback1Model
-                || model == geminiFallback2Model
-                || model == geminiFallback3Model
-                || model == geminiFallback4Model
-                || model == geminiFallback5Model
-                || model == geminiFallback6Model
-                || model == geminiFallback7Model;
+        return "GEMINI".equalsIgnoreCase(getModelProvider(model));
     }
 
     public boolean supportsLargeContextAndTools(StreamingChatModel model) {
@@ -674,6 +670,67 @@ public class SmartRoutingService {
         if (model == openRouterReasoningFallback9Model) return openRouterReasoningFallback9ModelName;
         if (model == openRouterReasoningFallback10Model) return openRouterReasoningFallback10ModelName;
         return model.getClass().getSimpleName();
+    }
+
+    public String getModelProvider(StreamingChatModel model) {
+        if (model == null) {
+            return "UNKNOWN";
+        }
+        if (aiModelConfig != null) {
+            String dynamicProvider = aiModelConfig.getModelProvider(model);
+            if (dynamicProvider != null && !dynamicProvider.isBlank() && !"UNKNOWN".equalsIgnoreCase(dynamicProvider)) {
+                return dynamicProvider;
+            }
+        }
+        if (model == geminiPrimaryModel
+                || model == geminiFallback1Model
+                || model == geminiFallback2Model
+                || model == geminiFallback3Model
+                || model == geminiFallback4Model
+                || model == geminiFallback5Model
+                || model == geminiFallback6Model
+                || model == geminiFallback7Model) {
+            return "GEMINI";
+        }
+        if (model == groqOssReasoningModel
+                || model == groqOssReasoningTextModel
+                || model == groqOssReasoningFallback1Model
+                || model == groqOssReasoningFallback1TextModel) {
+            return "GROQ";
+        }
+        if (model == openRouterReasoningModel
+                || model == openRouterReasoningTextModel
+                || model == openRouterReasoningFallback1Model
+                || model == openRouterReasoningFallback2Model
+                || model == openRouterReasoningFallback3Model
+                || model == openRouterReasoningFallback4Model
+                || model == openRouterReasoningFallback5Model
+                || model == openRouterReasoningFallback6Model
+                || model == openRouterReasoningFallback7Model
+                || model == openRouterReasoningFallback8Model
+                || model == openRouterReasoningFallback9Model
+                || model == openRouterReasoningFallback10Model) {
+            return "OPENROUTER";
+        }
+        return "UNKNOWN";
+    }
+
+    public String getModelType(StreamingChatModel model) {
+        if (model == null) {
+            return "reasoning";
+        }
+        if (model == groqOssReasoningTextModel
+                || model == groqOssReasoningFallback1TextModel
+                || model == openRouterReasoningTextModel) {
+            return "text";
+        }
+        if (aiModelConfig != null) {
+            String dynamicType = aiModelConfig.getModelType(model);
+            if (dynamicType != null && !dynamicType.isBlank()) {
+                return dynamicType;
+            }
+        }
+        return "reasoning";
     }
 
     private boolean isOpenRouterReasoningModelName(String modelName) {
