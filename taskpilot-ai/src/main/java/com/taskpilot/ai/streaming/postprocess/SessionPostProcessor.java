@@ -114,6 +114,25 @@ public class SessionPostProcessor {
             int estimatedTokens,
             long durationMs,
             String clientMessageId) {
+        saveSessionMessagesAndLogsAsync(session, sessionId, userId, userInput, systemPrompt, responseText,
+                extractedReasoning, toolNames, toolOutput, modelName, estimatedTokens, durationMs, clientMessageId, null);
+    }
+
+    public void saveSessionMessagesAndLogsAsync(
+            ChatSessionEntity session,
+            Long sessionId,
+            Long userId,
+            String userInput,
+            String systemPrompt,
+            String responseText,
+            String extractedReasoning,
+            Collection<String> toolNames,
+            Object toolOutput,
+            String modelName,
+            int estimatedTokens,
+            long durationMs,
+            String clientMessageId,
+            String diagnosticErrorMessage) {
         executor.submit(() -> {
             try {
                 ChatMessageEntity assistantMsg = messageRepository.save(ChatMessageEntity.builder()
@@ -139,9 +158,10 @@ public class SessionPostProcessor {
                 sessionChatMemoryService.appendAssistantMessage(sessionId, cleanResponse, systemPrompt);
 
                 chatStreamStatusService.updatePhase(sessionId, clientMessageId,
-                        Phase.FINALIZED, modelName, assistantMsg.getId(), null);
+                        Phase.FINALIZED, modelName, assistantMsg.getId(), diagnosticErrorMessage);
 
-                log.info("[SSE] Async DB save and finalization complete for session {} in {}ms", sessionId, durationMs);
+                log.info("[SSE] Async DB save and finalization complete for session {} in {}ms (diagnosticError={})",
+                        sessionId, durationMs, diagnosticErrorMessage);
             } catch (Exception e) {
                 log.error("[SSE] Exception in async finalize for session {}: {}", sessionId, e.getMessage(), e);
             }
