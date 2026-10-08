@@ -1,95 +1,31 @@
 package com.taskpilot.app.migration;
 
-import io.github.cdimascio.dotenv.Dotenv;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationInfo;
-import org.junit.jupiter.api.*;
-import org.testcontainers.DockerClientFactory;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 
-import java.io.File;
 import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+@Testcontainers(disabledWithoutDocker = true)
 class FlywayMigrationVerificationTest {
 
-    private static PostgreSQLContainer<?> postgres;
-    private static String dbUrl;
-    private static String dbUser;
-    private static String dbPassword;
-
-    @BeforeAll
-    static void setUp() {
-        boolean dockerAvailable = false;
-        try {
-            dockerAvailable = DockerClientFactory.instance().isDockerAvailable();
-        } catch (Throwable ignored) {
-            dockerAvailable = false;
-        }
-
-        if (dockerAvailable) {
-            try {
-                postgres = new PostgreSQLContainer<>("pgvector/pgvector:pg16")
-                        .withDatabaseName("taskpilot_test")
-                        .withUsername("test")
-                        .withPassword("test");
-                postgres.start();
-                dbUrl = postgres.getJdbcUrl();
-                dbUser = postgres.getUsername();
-                dbPassword = postgres.getPassword();
-            } catch (Throwable t) {
-                if (postgres != null) {
-                    try {
-                        postgres.stop();
-                    } catch (Throwable ignored) {
-                    }
-                    postgres = null;
-                }
-            }
-        }
-
-        if (dbUrl == null || dbUrl.isBlank()) {
-            String envDir = new File(".env").exists() ? "./" : "../";
-            Dotenv dotenv = Dotenv.configure().directory(envDir).ignoreIfMissing().load();
-            dotenv.entries().forEach(entry -> {
-                if (System.getProperty(entry.getKey()) == null) {
-                    System.setProperty(entry.getKey(), entry.getValue());
-                }
-            });
-
-            dbUrl = System.getProperty("DB_URL");
-            if (dbUrl == null || dbUrl.isBlank()) {
-                dbUrl = System.getenv("DB_URL");
-            }
-            dbUser = System.getProperty("DB_USERNAME");
-            if (dbUser == null || dbUser.isBlank()) {
-                dbUser = System.getenv("DB_USERNAME");
-            }
-            dbPassword = System.getProperty("DB_PASSWORD");
-            if (dbPassword == null || dbPassword.isBlank()) {
-                dbPassword = System.getenv("DB_PASSWORD");
-            }
-        }
-    }
-
-    @AfterAll
-    static void tearDown() {
-        if (postgres != null && postgres.isRunning()) {
-            postgres.stop();
-        }
-    }
+    @Container
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("pgvector/pgvector:pg16")
+            .withDatabaseName("taskpilot_test")
+            .withUsername("test")
+            .withPassword("test");
 
     @Test
-    @DisplayName("Verify Flyway migrations successfully apply in PostgreSQL (Testcontainers / Configured DB)")
+    @DisplayName("Verify Flyway migrations successfully apply in PostgreSQL (Testcontainers)")
     void testFlywayMigrationV22AndV28() {
-        Assumptions.assumeTrue(
-                dbUrl != null && !dbUrl.isBlank(),
-                "Skipping Flyway migration verification: Neither Docker nor DB_URL is configured"
-        );
-
         Flyway flyway = Flyway.configure()
-                .dataSource(dbUrl, dbUser, dbPassword)
+                .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
                 .locations("classpath:db/migration")
                 .baselineOnMigrate(true)
                 .validateOnMigrate(false)
