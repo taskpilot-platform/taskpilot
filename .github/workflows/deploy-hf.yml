@@ -46,4 +46,12 @@ jobs:
 
           git remote add hf https://taskpilot952476:$HF_TOKEN@huggingface.co/spaces/taskpilot952476/taskpilot
 
-          git push -f hf main
+          # Hugging Face Hub rejects binary docs assets in this repository history.
+          # Build a clean orphan commit that excludes docs implementation assets.
+          git checkout --orphan hf-sync
+          git rm -rf --cached .
+          git add .
+          git rm -r --cached --ignore-unmatch docs/implementation
+          git commit -m "Sync repository to Hugging Face Space"
+
+          git push -f hf HEAD:main
