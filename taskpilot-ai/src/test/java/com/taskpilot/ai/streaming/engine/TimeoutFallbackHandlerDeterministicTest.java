@@ -311,4 +311,255 @@ class TimeoutFallbackHandlerDeterministicTest {
         // Watchdog was cancelled
         assertThat(scheduler.getPendingTaskCount()).isEqualTo(0);
     }
+
+    static class RateLimitException extends RuntimeException {
+        RateLimitException(String message) {
+            super(message);
+        }
+    }
+
+    @Test
+    @DisplayName("Test A: RateLimit before token, fallback succeeds")
+    void testA_rateLimitBeforeToken_fallbackSucceeds() {
+        ControllableStreamingChatModel fallbackModel = new ControllableStreamingChatModel();
+        when(routingService.getModelName(fallbackModel)).thenReturn("fake-fallback-model");
+        when(routingService.getModelProvider(fallbackModel)).thenReturn("FAKE_FALLBACK_PROVIDER");
+        when(routingService.getNextStreamingFallback(fakeModel)).thenReturn(fallbackModel);
+
+        List<FinalizerDiagnosticOutcome> capturedOutcomes = new ArrayList<>();
+        handler.setDiagnosticOutcomeListenerForTesting(capturedOutcomes::add);
+
+        SseEmitter emitter = mock(SseEmitter.class);
+        AtomicBoolean emitterCompleted = new AtomicBoolean(false);
+        ChatSessionEntity session = mock(ChatSessionEntity.class);
+
+        handler.forceTextOnlyResponse(
+                emitter, emitterCompleted, session, 891L, 18L, "ok lấy thông tin",
+                new ArrayList<>(List.of(new SystemMessage("sys"))),
+                "sys", fakeModel, "fake-finalizer-model", System.currentTimeMillis(),
+                false, "client-msg-a", new StringBuilder(),
+                new AtomicBoolean(false), new AtomicBoolean(false), false,
+                List.of(), new LinkedHashSet<>(List.of("smartQuery")), "guardrail"
+        );
+
+        // Attempt 1 fails before token with CompletionException wrapping RateLimitException
+        fakeModel.fail(new java.util.concurrent.CompletionException(new RateLimitException("com.openai.errors.RateLimitException: 429: null")));
+
+        // Attempt 2 completes successfully
+        fallbackModel.emitPartial("Dữ liệu dự án từ fallback model");
+        fallbackModel.complete("Dữ liệu dự án từ fallback model");
+
+        // Verify:
+        // - Attempt 1 invoked once
+        assertThat(fakeModel.getInvocationCount()).isEqualTo(1);
+        // - getNextStreamingFallback invoked once
+        verify(routingService, times(1)).getNextStreamingFallback(fakeModel);
+        // - Attempt 2 invoked once
+        assertThat(fallbackModel.getInvocationCount()).isEqualTo(1);
+
+        // - successful Attempt 2 text is persisted, static fallback text is not persisted, diagnostic error is null
+        ArgumentCaptor<String> respCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> errCaptor = ArgumentCaptor.forClass(String.class);
+        verify(postProcessor, times(1)).saveSessionMessagesAndLogsAsync(
+                eq(session), eq(891L), eq(18L), eq("ok lấy thông tin"), eq("sys"),
+                respCaptor.capture(), any(), any(), any(), eq("fake-fallback-model"),
+                anyInt(), anyLong(), eq("client-msg-a"), errCaptor.capture()
+        );
+        assertThat(respCaptor.getValue()).contains("Dữ liệu dự án từ fallback model");
+        assertThat(respCaptor.getValue()).doesNotContain("bước diễn giải cuối của model phản hồi quá lâu");
+        assertThat(errCaptor.getValue()).isNull();
+
+        // - SSE done emitted once
+        verify(sseTransport, times(1)).safeSend(eq(emitter), eq("done"), eq(respCaptor.getValue()), any());
+        // - emitter completed once
+        verify(sseTransport, times(1)).safeComplete(eq(emitter), any());
+
+        // - no third attempt
+        assertThat(capturedOutcomes).hasSize(2);
+        assertThat(capturedOutcomes.get(0).attempt()).isEqualTo(1);
+        assertThat(capturedOutcomes.get(0).finalizationExecuted()).isFalse();
+        assertThat(capturedOutcomes.get(1).attempt()).isEqualTo(2);
+        assertThat(capturedOutcomes.get(1).finalizationExecuted()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Test B: RateLimit before token, fallback also fails")
+    void testB_rateLimitBeforeToken_fallbackAlsoFails() {
+        ControllableStreamingChatModel fallbackModel = new ControllableStreamingChatModel();
+        when(routingService.getModelName(fallbackModel)).thenReturn("fake-fallback-model");
+        when(routingService.getModelProvider(fallbackModel)).thenReturn("FAKE_FALLBACK_PROVIDER");
+        when(routingService.getNextStreamingFallback(fakeModel)).thenReturn(fallbackModel);
+
+        List<FinalizerDiagnosticOutcome> capturedOutcomes = new ArrayList<>();
+        handler.setDiagnosticOutcomeListenerForTesting(capturedOutcomes::add);
+
+        SseEmitter emitter = mock(SseEmitter.class);
+        AtomicBoolean emitterCompleted = new AtomicBoolean(false);
+        ChatSessionEntity session = mock(ChatSessionEntity.class);
+
+        handler.forceTextOnlyResponse(
+                emitter, emitterCompleted, session, 891L, 18L, "ok lấy thông tin",
+                new ArrayList<>(List.of(new SystemMessage("sys"))),
+                "sys", fakeModel, "fake-finalizer-model", System.currentTimeMillis(),
+                false, "client-msg-b", new StringBuilder(),
+                new AtomicBoolean(false), new AtomicBoolean(false), false,
+                List.of(), new LinkedHashSet<>(List.of("smartQuery")), "guardrail"
+        );
+
+        // Attempt 1 fails with 429
+        fakeModel.fail(new java.util.concurrent.CompletionException(new RateLimitException("429 Too Many Requests")));
+
+        // Attempt 2 also fails before token
+        fallbackModel.fail(new IllegalStateException("Fallback upstream outage"));
+
+        // Verify:
+        // - exactly two logical model attempts, no third attempt
+        assertThat(fakeModel.getInvocationCount()).isEqualTo(1);
+        assertThat(fallbackModel.getInvocationCount()).isEqualTo(1);
+        assertThat(capturedOutcomes).hasSize(2);
+
+        // - static degradation finalized once
+        // - persistence once
+        ArgumentCaptor<String> respCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> errCaptor = ArgumentCaptor.forClass(String.class);
+        verify(postProcessor, times(1)).saveSessionMessagesAndLogsAsync(
+                eq(session), eq(891L), eq(18L), eq("ok lấy thông tin"), eq("sys"),
+                respCaptor.capture(), any(), any(), any(), eq("fake-fallback-model"),
+                anyInt(), anyLong(), eq("client-msg-b"), errCaptor.capture()
+        );
+        assertThat(respCaptor.getValue()).contains("Mình đã lấy dữ liệu bằng công cụ nội bộ, nhưng bước diễn giải cuối của model phản hồi quá lâu");
+
+        // - final diagnostic reflects the actionable fallback failure class
+        assertThat(errCaptor.getValue())
+                .isEqualTo("terminalCause=FINALIZER_MODEL_ERROR_BEFORE_FIRST_TOKEN; exceptionClass=java.lang.IllegalStateException");
+
+        // - SSE done once, emitter completion once
+        verify(sseTransport, times(1)).safeSend(eq(emitter), eq("done"), any(), any());
+        verify(sseTransport, times(1)).safeComplete(eq(emitter), any());
+    }
+
+    @Test
+    @DisplayName("Test C: Attempt 1 emits partial token then rate-limit error")
+    void testC_attempt1EmitsPartialTokenThenRateLimitError_noFallback() {
+        ControllableStreamingChatModel fallbackModel = new ControllableStreamingChatModel();
+        when(routingService.getNextStreamingFallback(fakeModel)).thenReturn(fallbackModel);
+
+        List<FinalizerDiagnosticOutcome> capturedOutcomes = new ArrayList<>();
+        handler.setDiagnosticOutcomeListenerForTesting(capturedOutcomes::add);
+
+        SseEmitter emitter = mock(SseEmitter.class);
+        AtomicBoolean emitterCompleted = new AtomicBoolean(false);
+        ChatSessionEntity session = mock(ChatSessionEntity.class);
+
+        handler.forceTextOnlyResponse(
+                emitter, emitterCompleted, session, 891L, 18L, "ok lấy thông tin",
+                new ArrayList<>(List.of(new SystemMessage("sys"))),
+                "sys", fakeModel, "fake-finalizer-model", System.currentTimeMillis(),
+                false, "client-msg-c", new StringBuilder(),
+                new AtomicBoolean(false), new AtomicBoolean(false), false,
+                List.of(), new LinkedHashSet<>(List.of("smartQuery")), "guardrail"
+        );
+
+        // Partial token emitted first
+        fakeModel.emitPartial("Một phần câu trả lời...");
+
+        // Then rate limit error
+        fakeModel.fail(new RateLimitException("429 rate limit exceeded"));
+
+        // Verify:
+        // - getNextStreamingFallback is never called
+        verify(routingService, never()).getNextStreamingFallback(any());
+        // - Attempt 2 is never invoked
+        assertThat(fallbackModel.getInvocationCount()).isEqualTo(0);
+
+        // - static degradation behavior remains
+        // - no mixed-model output
+        // - exact-once persistence and completion
+        ArgumentCaptor<String> respCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> errCaptor = ArgumentCaptor.forClass(String.class);
+        verify(postProcessor, times(1)).saveSessionMessagesAndLogsAsync(
+                eq(session), eq(891L), eq(18L), eq("ok lấy thông tin"), eq("sys"),
+                respCaptor.capture(), any(), any(), any(), eq("fake-finalizer-model"),
+                anyInt(), anyLong(), eq("client-msg-c"), errCaptor.capture()
+        );
+        assertThat(respCaptor.getValue()).contains("bước diễn giải cuối của model phản hồi quá lâu");
+        assertThat(errCaptor.getValue())
+                .isEqualTo("terminalCause=FINALIZER_MODEL_ERROR_AFTER_PARTIAL; exceptionClass=com.taskpilot.ai.streaming.engine.TimeoutFallbackHandlerDeterministicTest$RateLimitException");
+
+        verify(sseTransport, times(1)).safeComplete(eq(emitter), any());
+        assertThat(capturedOutcomes).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("Test D: No fallback candidate exists (returns currentModel)")
+    void testD_noFallbackCandidateExists_degradesImmediately() {
+        when(routingService.getNextStreamingFallback(fakeModel)).thenReturn(fakeModel);
+
+        List<FinalizerDiagnosticOutcome> capturedOutcomes = new ArrayList<>();
+        handler.setDiagnosticOutcomeListenerForTesting(capturedOutcomes::add);
+
+        SseEmitter emitter = mock(SseEmitter.class);
+        AtomicBoolean emitterCompleted = new AtomicBoolean(false);
+        ChatSessionEntity session = mock(ChatSessionEntity.class);
+
+        handler.forceTextOnlyResponse(
+                emitter, emitterCompleted, session, 891L, 18L, "ok lấy thông tin",
+                new ArrayList<>(List.of(new SystemMessage("sys"))),
+                "sys", fakeModel, "fake-finalizer-model", System.currentTimeMillis(),
+                false, "client-msg-d", new StringBuilder(),
+                new AtomicBoolean(false), new AtomicBoolean(false), false,
+                List.of(), new LinkedHashSet<>(List.of("smartQuery")), "guardrail"
+        );
+
+        fakeModel.fail(new RateLimitException("429 Too Many Requests"));
+
+        // Verify:
+        // - no repeated current-model invocation
+        // - no recursion
+        assertThat(fakeModel.getInvocationCount()).isEqualTo(1);
+        verify(routingService, times(1)).getNextStreamingFallback(fakeModel);
+
+        // - static degradation once
+        verify(postProcessor, times(1)).saveSessionMessagesAndLogsAsync(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyInt(), anyLong(), any(), any());
+        verify(sseTransport, times(1)).safeComplete(eq(emitter), any());
+        assertThat(capturedOutcomes).hasSize(1);
+        assertThat(capturedOutcomes.get(0).finalizationExecuted()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Test E: Non-rate-limit error before token")
+    void testE_nonRateLimitErrorBeforeToken_noFallback() {
+        ControllableStreamingChatModel fallbackModel = new ControllableStreamingChatModel();
+        when(routingService.getNextStreamingFallback(fakeModel)).thenReturn(fallbackModel);
+
+        List<FinalizerDiagnosticOutcome> capturedOutcomes = new ArrayList<>();
+        handler.setDiagnosticOutcomeListenerForTesting(capturedOutcomes::add);
+
+        SseEmitter emitter = mock(SseEmitter.class);
+        AtomicBoolean emitterCompleted = new AtomicBoolean(false);
+        ChatSessionEntity session = mock(ChatSessionEntity.class);
+
+        handler.forceTextOnlyResponse(
+                emitter, emitterCompleted, session, 891L, 18L, "ok lấy thông tin",
+                new ArrayList<>(List.of(new SystemMessage("sys"))),
+                "sys", fakeModel, "fake-finalizer-model", System.currentTimeMillis(),
+                false, "client-msg-non-429", new StringBuilder(),
+                new AtomicBoolean(false), new AtomicBoolean(false), false,
+                List.of(), new LinkedHashSet<>(List.of("smartQuery")), "guardrail"
+        );
+
+        // Non-rate-limit error: 503 or generic IOException
+        fakeModel.fail(new IOException("Connection reset by peer"));
+
+        // Verify:
+        // - no next-model fallback
+        verify(routingService, never()).getNextStreamingFallback(any());
+        assertThat(fallbackModel.getInvocationCount()).isEqualTo(0);
+
+        // - current degradation behavior remains
+        // - exact-once terminal handling
+        verify(postProcessor, times(1)).saveSessionMessagesAndLogsAsync(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyInt(), anyLong(), any(), any());
+        verify(sseTransport, times(1)).safeComplete(eq(emitter), any());
+        assertThat(capturedOutcomes).hasSize(1);
+    }
 }

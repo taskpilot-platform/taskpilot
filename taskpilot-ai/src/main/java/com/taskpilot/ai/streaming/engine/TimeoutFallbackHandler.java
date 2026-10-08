@@ -179,53 +179,86 @@ public class TimeoutFallbackHandler {
                 compactor.compactHistoryForRequest(textOnlyHistory, "text-only"),
                 routingService != null && routingService.isGeminiModel(textModel)));
 
-        StringBuilder roundResponse = new StringBuilder();
         ChatRequest request = ChatRequest.builder()
                 .messages(textOnlyHistory)
                 .maxOutputTokens(Math.min(maxOutputTokens, 1200))
                 .build();
 
+        AtomicBoolean terminalFinalized = new AtomicBoolean(false);
+        AtomicInteger activeAttempt = new AtomicInteger(1);
+
+        executeFinalizerAttempt(
+                1, textModel, textModelName, provider, request,
+                activeAttempt, terminalFinalized, emitter, emitterCompleted,
+                session, sessionId, userId, userInput, systemPrompt, startTime,
+                clientMessageId, clientDisconnected, generatingMarked,
+                toolCallSummaries, toolNames);
+    }
+
+    private void executeFinalizerAttempt(
+            int attempt,
+            StreamingChatModel currentModel,
+            String currentModelName,
+            String currentProvider,
+            ChatRequest request,
+            AtomicInteger activeAttempt,
+            AtomicBoolean terminalFinalized,
+            SseEmitter emitter,
+            AtomicBoolean emitterCompleted,
+            ChatSessionEntity session,
+            Long sessionId,
+            Long userId,
+            String userInput,
+            String systemPrompt,
+            long startTime,
+            String clientMessageId,
+            AtomicBoolean clientDisconnected,
+            AtomicBoolean generatingMarked,
+            List<Map<String, Object>> toolCallSummaries,
+            LinkedHashSet<String> toolNames) {
+
         final long stageStartedAt = System.currentTimeMillis();
         final AtomicReference<Long> firstTokenAt = new AtomicReference<>(null);
         final AtomicInteger partialChars = new AtomicInteger(0);
-        final AtomicBoolean roundClosed = new AtomicBoolean(false);
+        final AtomicBoolean attemptClosed = new AtomicBoolean(false);
         final AtomicBoolean firstModelSignalReceived = new AtomicBoolean(false);
         final AtomicBoolean watchdogWon = new AtomicBoolean(false);
-        final AtomicBoolean finalizationExecuted = new AtomicBoolean(false);
         final AtomicBoolean lateCallbackIgnored = new AtomicBoolean(false);
+        final StringBuilder roundResponse = new StringBuilder();
 
         final ScheduledFuture<?> timeoutFuture = timeoutScheduler.schedule(() -> {
-            if (firstModelSignalReceived.get() || clientDisconnected.get() || emitterCompleted.get()) {
+            if (firstModelSignalReceived.get() || clientDisconnected.get() || emitterCompleted.get() || attempt != activeAttempt.get()) {
                 return;
             }
-            if (roundClosed.compareAndSet(false, true)) {
+            if (attemptClosed.compareAndSet(false, true)) {
                 watchdogWon.set(true);
                 long elapsedMs = System.currentTimeMillis() - stageStartedAt;
                 FinalizerTerminalCause cause = FinalizerTerminalCause.FINALIZER_TIMEOUT_BEFORE_FIRST_TOKEN;
                 String errorSummary = "terminalCause=" + cause;
 
-                recordAttempt(sessionId, clientMessageId, 1, provider, textModelName, elapsedMs, null,
+                recordAttempt(sessionId, clientMessageId, attempt, currentProvider, currentModelName, elapsedMs, null,
                         cause, partialChars.get(), true, true, lateCallbackIgnored.get(), null);
 
-                log.warn("[ForceTextOnly] Text-only finalizer timed out for session {}. Emitting fallback text.", sessionId);
-                String timeoutFallback = buildTextOnlyTimeoutResponse(toolCallSummaries);
-                finalizationExecuted.set(true);
-                finalizeForceTextOnlyResponse(emitter, session, sessionId, userId, userInput, systemPrompt,
-                        textModelName, startTime, clientMessageId, clientDisconnected, toolCallSummaries, toolNames,
-                        timeoutFallback, null, generatingMarked, cause, errorSummary);
-                sseTransport.safeComplete(emitter, emitterCompleted);
+                if (terminalFinalized.compareAndSet(false, true)) {
+                    log.warn("[ForceTextOnly] Text-only finalizer timed out (attempt={}) for session {}. Emitting fallback text.", attempt, sessionId);
+                    String timeoutFallback = buildTextOnlyTimeoutResponse(toolCallSummaries);
+                    finalizeForceTextOnlyResponse(emitter, session, sessionId, userId, userInput, systemPrompt,
+                            currentModelName, startTime, clientMessageId, clientDisconnected, toolCallSummaries, toolNames,
+                            timeoutFallback, null, generatingMarked, cause, errorSummary);
+                    sseTransport.safeComplete(emitter, emitterCompleted);
+                }
             }
         }, 25, TimeUnit.SECONDS);
 
         try {
-            textModel.chat(request, new StreamingChatResponseHandler() {
+            currentModel.chat(request, new StreamingChatResponseHandler() {
                 @Override
                 public void onPartialResponse(String partialResponse) {
                     firstModelSignalReceived.set(true);
-                    if (roundClosed.get() || clientDisconnected.get() || emitterCompleted.get()) {
+                    if (attemptClosed.get() || clientDisconnected.get() || emitterCompleted.get() || attempt != activeAttempt.get()) {
                         lateCallbackIgnored.set(true);
-                        log.warn("[AI_ATTEMPT_LATE] session={} clientMessageId={} stage=FINALIZER late partial response ignored (chars={})",
-                                sessionId, clientMessageId, partialResponse != null ? partialResponse.length() : 0);
+                        log.warn("[AI_ATTEMPT_LATE] session={} clientMessageId={} stage=FINALIZER late partial response ignored (attempt={}, chars={})",
+                                sessionId, clientMessageId, attempt, partialResponse != null ? partialResponse.length() : 0);
                         return;
                     }
                     if (firstTokenAt.get() == null) {
@@ -236,16 +269,16 @@ public class TimeoutFallbackHandler {
                     }
                     roundResponse.append(partialResponse);
                     sseTransport.sendTokenToClient(emitter, partialResponse, clientDisconnected, generatingMarked,
-                            sessionId, clientMessageId, textModelName);
+                            sessionId, clientMessageId, currentModelName);
                 }
 
                 @Override
                 public void onCompleteResponse(ChatResponse completeResponse) {
                     timeoutFuture.cancel(true);
-                    if (!roundClosed.compareAndSet(false, true)) {
+                    if (!attemptClosed.compareAndSet(false, true) || attempt != activeAttempt.get()) {
                         lateCallbackIgnored.set(true);
-                        log.warn("[AI_ATTEMPT_LATE] session={} clientMessageId={} stage=FINALIZER late complete response ignored",
-                                sessionId, clientMessageId);
+                        log.warn("[AI_ATTEMPT_LATE] session={} clientMessageId={} stage=FINALIZER late complete response ignored (attempt={})",
+                                sessionId, clientMessageId, attempt);
                         return;
                     }
                     long elapsedMs = System.currentTimeMillis() - stageStartedAt;
@@ -255,64 +288,161 @@ public class TimeoutFallbackHandler {
                             ? FinalizerTerminalCause.FINALIZER_COMPLETED_EMPTY
                             : FinalizerTerminalCause.FINALIZER_COMPLETED_WITH_TEXT;
 
-                    recordAttempt(sessionId, clientMessageId, 1, provider, textModelName, elapsedMs, firstTokenMs,
+                    recordAttempt(sessionId, clientMessageId, attempt, currentProvider, currentModelName, elapsedMs, firstTokenMs,
                             cause, partialChars.get(), false, true, lateCallbackIgnored.get(), null);
 
-                    finalizationExecuted.set(true);
-                    finalizeForceTextOnlyResponse(emitter, session, sessionId, userId, userInput, systemPrompt,
-                            textModelName, startTime, clientMessageId, clientDisconnected, toolCallSummaries, toolNames,
-                            roundResponse.toString(), completeResponse, generatingMarked, cause, null);
-                    sseTransport.safeComplete(emitter, emitterCompleted);
+                    if (terminalFinalized.compareAndSet(false, true)) {
+                        finalizeForceTextOnlyResponse(emitter, session, sessionId, userId, userInput, systemPrompt,
+                                currentModelName, startTime, clientMessageId, clientDisconnected, toolCallSummaries, toolNames,
+                                roundResponse.toString(), completeResponse, generatingMarked, cause, null);
+                        sseTransport.safeComplete(emitter, emitterCompleted);
+                    }
                 }
 
                 @Override
                 public void onError(Throwable error) {
                     timeoutFuture.cancel(true);
-                    if (!roundClosed.compareAndSet(false, true)) {
+                    if (!attemptClosed.compareAndSet(false, true) || attempt != activeAttempt.get()) {
                         lateCallbackIgnored.set(true);
-                        log.warn("[AI_ATTEMPT_LATE] session={} clientMessageId={} stage=FINALIZER late error response ignored: {}",
-                                sessionId, clientMessageId, error != null ? error.getMessage() : "null");
+                        log.warn("[AI_ATTEMPT_LATE] session={} clientMessageId={} stage=FINALIZER late error response ignored (attempt={}): {}",
+                                sessionId, clientMessageId, attempt, error != null ? error.getMessage() : "null");
                         return;
                     }
                     long elapsedMs = System.currentTimeMillis() - stageStartedAt;
                     Long firstTokenMs = firstTokenAt.get() != null ? (firstTokenAt.get() - stageStartedAt) : null;
                     boolean hadTokens = partialChars.get() > 0 || firstTokenAt.get() != null;
+                    Throwable actionable = unwrapActionableException(error);
+
+                    boolean canFallback = (attempt == 1) && !hadTokens && isRateLimitError(error);
+                    StreamingChatModel fallbackCandidate = canFallback && routingService != null
+                            ? routingService.getNextStreamingFallback(currentModel)
+                            : currentModel;
+
+                    if (canFallback && fallbackCandidate != null && fallbackCandidate != currentModel) {
+                        FinalizerTerminalCause cause = FinalizerTerminalCause.FINALIZER_MODEL_ERROR_BEFORE_FIRST_TOKEN;
+                        recordAttempt(sessionId, clientMessageId, 1, currentProvider, currentModelName, elapsedMs, firstTokenMs,
+                                cause, partialChars.get(), false, false, lateCallbackIgnored.get(), actionable);
+
+                        String fallbackModelName = routingService.getModelName(fallbackCandidate);
+                        String fallbackProvider = routingService.getModelProvider(fallbackCandidate);
+                        log.warn("[ForceTextOnly] Finalizer attempt 1 ({}) hit rate limit before first token. Escalating to fallback text model: {} ({})",
+                                currentModelName, fallbackModelName, fallbackProvider);
+
+                        activeAttempt.set(2);
+                        executeFinalizerAttempt(
+                                2, fallbackCandidate, fallbackModelName, fallbackProvider, request,
+                                activeAttempt, terminalFinalized, emitter, emitterCompleted,
+                                session, sessionId, userId, userInput, systemPrompt, startTime,
+                                clientMessageId, clientDisconnected, generatingMarked,
+                                toolCallSummaries, toolNames);
+                        return;
+                    }
+
                     FinalizerTerminalCause cause = hadTokens
                             ? FinalizerTerminalCause.FINALIZER_MODEL_ERROR_AFTER_PARTIAL
                             : FinalizerTerminalCause.FINALIZER_MODEL_ERROR_BEFORE_FIRST_TOKEN;
                     String errorSummary = buildPersistedDiagnosticSummary(cause, error);
 
-                    recordAttempt(sessionId, clientMessageId, 1, provider, textModelName, elapsedMs, firstTokenMs,
-                            cause, partialChars.get(), false, true, lateCallbackIgnored.get(), error);
+                    recordAttempt(sessionId, clientMessageId, attempt, currentProvider, currentModelName, elapsedMs, firstTokenMs,
+                            cause, partialChars.get(), false, true, lateCallbackIgnored.get(), actionable);
 
-                    log.warn("[ForceTextOnly] Error in text-only finalizer for session {}: {}", sessionId, error != null ? error.getMessage() : "null");
-                    String timeoutFallback = buildTextOnlyTimeoutResponse(toolCallSummaries);
-                    finalizationExecuted.set(true);
-                    finalizeForceTextOnlyResponse(emitter, session, sessionId, userId, userInput, systemPrompt,
-                            textModelName, startTime, clientMessageId, clientDisconnected, toolCallSummaries, toolNames,
-                            timeoutFallback, null, generatingMarked, cause, errorSummary);
-                    sseTransport.safeComplete(emitter, emitterCompleted);
+                    log.warn("[ForceTextOnly] Error in text-only finalizer (attempt={}) for session {}: {}",
+                            attempt, sessionId, error != null ? error.getMessage() : "null");
+
+                    if (terminalFinalized.compareAndSet(false, true)) {
+                        String timeoutFallback = buildTextOnlyTimeoutResponse(toolCallSummaries);
+                        finalizeForceTextOnlyResponse(emitter, session, sessionId, userId, userInput, systemPrompt,
+                                currentModelName, startTime, clientMessageId, clientDisconnected, toolCallSummaries, toolNames,
+                                timeoutFallback, null, generatingMarked, cause, errorSummary);
+                        sseTransport.safeComplete(emitter, emitterCompleted);
+                    }
                 }
             });
         } catch (Exception ex) {
             timeoutFuture.cancel(true);
-            if (roundClosed.compareAndSet(false, true)) {
-                long elapsedMs = System.currentTimeMillis() - stageStartedAt;
+            if (!attemptClosed.compareAndSet(false, true) || attempt != activeAttempt.get()) {
+                return;
+            }
+            long elapsedMs = System.currentTimeMillis() - stageStartedAt;
+            Throwable actionable = unwrapActionableException(ex);
+
+            boolean canFallback = (attempt == 1) && isRateLimitError(ex);
+            StreamingChatModel fallbackCandidate = canFallback && routingService != null
+                    ? routingService.getNextStreamingFallback(currentModel)
+                    : currentModel;
+
+            if (canFallback && fallbackCandidate != null && fallbackCandidate != currentModel) {
                 FinalizerTerminalCause cause = FinalizerTerminalCause.FINALIZER_SYNC_START_FAILURE;
-                String errorSummary = buildPersistedDiagnosticSummary(cause, ex);
+                recordAttempt(sessionId, clientMessageId, 1, currentProvider, currentModelName, elapsedMs, null,
+                        cause, partialChars.get(), false, false, lateCallbackIgnored.get(), actionable);
 
-                recordAttempt(sessionId, clientMessageId, 1, provider, textModelName, elapsedMs, null,
-                        cause, partialChars.get(), false, true, lateCallbackIgnored.get(), ex);
+                String fallbackModelName = routingService.getModelName(fallbackCandidate);
+                String fallbackProvider = routingService.getModelProvider(fallbackCandidate);
+                log.warn("[ForceTextOnly] Finalizer attempt 1 ({}) hit synchronous rate limit. Escalating to fallback text model: {} ({})",
+                        currentModelName, fallbackModelName, fallbackProvider);
 
-                log.warn("[ForceTextOnly] Synchronous exception starting text-only finalizer for session {}: {}", sessionId, ex.getMessage());
+                activeAttempt.set(2);
+                executeFinalizerAttempt(
+                        2, fallbackCandidate, fallbackModelName, fallbackProvider, request,
+                        activeAttempt, terminalFinalized, emitter, emitterCompleted,
+                        session, sessionId, userId, userInput, systemPrompt, startTime,
+                        clientMessageId, clientDisconnected, generatingMarked,
+                        toolCallSummaries, toolNames);
+                return;
+            }
+
+            FinalizerTerminalCause cause = FinalizerTerminalCause.FINALIZER_SYNC_START_FAILURE;
+            String errorSummary = buildPersistedDiagnosticSummary(cause, ex);
+
+            recordAttempt(sessionId, clientMessageId, attempt, currentProvider, currentModelName, elapsedMs, null,
+                    cause, partialChars.get(), false, true, lateCallbackIgnored.get(), actionable);
+
+            log.warn("[ForceTextOnly] Synchronous exception starting text-only finalizer (attempt={}) for session {}: {}",
+                    attempt, sessionId, ex.getMessage());
+
+            if (terminalFinalized.compareAndSet(false, true)) {
                 String timeoutFallback = buildTextOnlyTimeoutResponse(toolCallSummaries);
-                finalizationExecuted.set(true);
                 finalizeForceTextOnlyResponse(emitter, session, sessionId, userId, userInput, systemPrompt,
-                        textModelName, startTime, clientMessageId, clientDisconnected, toolCallSummaries, toolNames,
+                        currentModelName, startTime, clientMessageId, clientDisconnected, toolCallSummaries, toolNames,
                         timeoutFallback, null, generatingMarked, cause, errorSummary);
                 sseTransport.safeComplete(emitter, emitterCompleted);
             }
         }
+    }
+
+    private Throwable unwrapActionableException(Throwable error) {
+        Throwable current = error;
+        java.util.Set<Throwable> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        while (current != null && seen.add(current)) {
+            if ((current instanceof java.util.concurrent.CompletionException
+                    || current instanceof java.util.concurrent.ExecutionException)
+                    && current.getCause() != null) {
+                current = current.getCause();
+            } else {
+                break;
+            }
+        }
+        return current != null ? current : error;
+    }
+
+    private boolean isRateLimitError(Throwable error) {
+        Throwable current = error;
+        java.util.Set<Throwable> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        while (current != null && seen.add(current)) {
+            String className = current.getClass().getName();
+            if (className.endsWith("RateLimitException")) {
+                return true;
+            }
+            String msg = current.getMessage();
+            if (msg != null) {
+                String lower = msg.toLowerCase(java.util.Locale.ROOT);
+                if (lower.contains("429") || lower.contains("rate limit") || lower.contains("rate_limit")) {
+                    return true;
+                }
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private void recordAttempt(
@@ -347,7 +477,8 @@ public class TimeoutFallbackHandler {
         if (t == null) {
             return "terminalCause=" + cause;
         }
-        return "terminalCause=" + cause + "; exceptionClass=" + t.getClass().getName();
+        Throwable actionable = unwrapActionableException(t);
+        return "terminalCause=" + cause + "; exceptionClass=" + actionable.getClass().getName();
     }
 
     public void finalizeForceTextOnlyResponse(
