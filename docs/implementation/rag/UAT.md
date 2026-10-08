@@ -39,6 +39,8 @@
 - [ ] **Tải lên thành công:** Nhấn nút *"Bắt đầu nạp tri thức"*.
   - *Kỳ vọng:* Nút chuyển sang trạng thái loading *"Đang tải lên..."*. Sau khi hoàn tất, hiển thị toast thông báo thành công và tệp xuất hiện trong danh sách tài liệu.
 
+![Giao diện khởi tạo Tab Tri thức](assets/uat_1_knowledge_initial.png)
+
 ---
 
 ### 2.2. Tiến Trình Lập Chỉ Mục Bất Đồng Bộ & Polling (Async Ingestion UX)
@@ -49,6 +51,8 @@
   - Khi backend hoàn tất trích xuất Tika và nhúng vector Gemini, badge tự động chuyển sang `Sẵn sàng` (xanh lá với icon tick tròn).
   - Huy hiệu số lượng vector chunk xuất hiện (ví dụ: `39 chunks` cho file đề cương).
   - Cơ chế polling tự động dừng lại, không gửi thêm request thừa.
+
+![Tài liệu chuyển sang trạng thái Sẵn sàng](assets/uat_2_document_ready.png)
 
 ---
 
@@ -64,6 +68,10 @@
   - Bấm chip: `"Công thức làm bánh pizza"` $\rightarrow$ Bấm **Tìm kiếm**.
   - *Kỳ vọng:* Hệ thống hiển thị hộp thông báo rỗng chuyên biệt: *"Không tìm thấy đoạn tri thức phù hợp. Không có đoạn văn bản nào trong tài liệu dự án vượt qua ngưỡng tương đồng cosine tối thiểu. Hệ thống đảm bảo không sinh dữ liệu sai lệch (hallucination)."*
 - [ ] **Thu gọn / Xóa kết quả:** Bấm nút *"Thu gọn"* hoặc nút X trên thanh tìm kiếm để xóa sạch kết quả truy vấn.
+
+| Kết quả tìm kiếm ngữ nghĩa | Thẻ chi tiết đoạn trích dẫn |
+| :---: | :---: |
+| ![Kết quả tìm kiếm](assets/uat_3_search_results.png) | ![Chi tiết đoạn trích](assets/uat_4_search_results_card.png) |
 
 ---
 
@@ -102,10 +110,34 @@
 
 ---
 
-### 2.7. Phân Quyền & Cách Ly Đa Người Thuê (Tenant Security Boundary)
-- [ ] **Người dùng hợp lệ:** User A (thành viên Dự án #1) xem được tài liệu và tìm kiếm tri thức bình thường.
+### 2.7. Phân Quyền Dựa Trên Vai Trò (RBAC) & Cách Ly Đa Người Thuê (Tenant Security Boundary)
+
+#### 2.7.1. Vai Trò Quản Lý Dự Án (Project Manager)
+- [ ] **Giao diện quản trị tri thức:** Thành viên có vai trò `MANAGER` (ví dụ User A) truy cập `/projects/:projectId/knowledge`:
+  - Khung kéo thả tải lên tài liệu (*DocumentUploadCard*) hiển thị đầy đủ, viền đứt nét, cho phép chọn tệp và tải lên.
+  - Mỗi mục tài liệu trong danh sách hiển thị nút **Thử lại (Retry)** (nếu trạng thái FAILED) và nút **Xóa (Delete)** (biểu tượng thùng rác).
+  - Có thể thực hiện toàn quyền: Upload tài liệu mới, kích hoạt retry, xóa tài liệu khỏi S3 và vector database, thực hiện tìm kiếm ngữ nghĩa.
+
+![Giao diện Quản lý dự án](assets/rbac_2_manager_knowledge_view.png)
+
+#### 2.7.2. Vai Trò Thành Viên Dự Án (Project Member - Read-Only Knowledge)
+- [ ] **Giao diện chỉ đọc an toàn:** Thành viên có vai trò `MEMBER` (ví dụ User C) truy cập `/projects/:projectId/knowledge`:
+  - **Khóa khu vực upload:** Thẻ kéo thả tải lên bị ẩn hoàn toàn, thay thế bằng khung thông báo viền xanh dương:
+    > *"Chỉ Quản lý dự án (Project Manager) mới có quyền tải lên tài liệu tri thức. Thành viên có quyền tra cứu và tìm kiếm."*
+  - **Ẩn nút thao tác nguy hiểm:** Các nút **Xóa (Delete)** và **Thử lại (Retry)** hoàn toàn biến mất khỏi danh sách tài liệu, ngăn chặn xóa nhầm tài nguyên chung.
+  - **Quyền tra cứu tri thức:** Vẫn được phép xem danh sách tài liệu, trạng thái vector, và sử dụng đầy đủ tính năng **Tìm kiếm ngữ nghĩa (Semantic Search)** cũng như hỏi đáp AI Copilot với công cụ RAG.
+- [ ] **Phòng thủ đa tầng Backend (Backend Defense-in-Depth):**
+  - Thử gọi trực tiếp API bằng cURL / Postman với JWT của `MEMBER`:
+    - `POST /api/projects/:projectId/documents` $\rightarrow$ Trả về **HTTP 403 Forbidden** (*"User is not a manager of project..."*).
+    - `POST /api/projects/:projectId/documents/:docId/retry` $\rightarrow$ Trả về **HTTP 403 Forbidden**.
+    - `DELETE /api/projects/:projectId/documents/:docId` $\rightarrow$ Trả về **HTTP 403 Forbidden**.
+    - `POST /api/projects/:projectId/documents/search` $\rightarrow$ Trả về **HTTP 200 OK** (tra cứu tri thức hợp lệ).
+
+![Giao diện Thành viên dự án](assets/rbac_1_member_knowledge_view.png)
+
+#### 2.7.3. Người Dùng Không Thuộc Dự Án (Non-Member Isolation)
 - [ ] **Người dùng trái phép (403 Forbidden):**
-  - Dùng tài khoản User B (không thuộc Dự án #1) truy cập URL `/projects/1/knowledge`.
+  - Dùng tài khoản User B (không thuộc Dự án) truy cập URL `/projects/:projectId/knowledge`.
   - *Kỳ vọng:* Toàn bộ giao diện upload và danh sách tài liệu bị khóa, hiển thị hộp cảnh báo bảo mật:
     > *"Không có quyền truy cập tri thức dự án. Bạn không phải là thành viên hợp lệ của dự án này. Hệ thống TaskPilot áp dụng cơ chế phân quyền đa người thuê (Tenant Isolation Gate) nghiêm ngặt trước mọi truy vấn vector và tài liệu."*
   - Backend trả về mã lỗi `403 Forbidden` trước khi bất kỳ thao tác embedding hay vector query nào được thực hiện.

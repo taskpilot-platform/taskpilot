@@ -6,6 +6,8 @@ import com.taskpilot.ai.entity.AiChatRequestEntity.Phase;
 import com.taskpilot.ai.service.ChatStreamStatusService;
 import com.taskpilot.ai.service.SessionChatMemoryService;
 import com.taskpilot.ai.service.SmartRoutingService;
+import com.taskpilot.ai.streaming.diagnostic.IntermediateDiagnosticOutcome;
+import com.taskpilot.ai.streaming.diagnostic.IntermediateTerminalCause;
 import com.taskpilot.ai.streaming.sse.AiSseTransport;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
@@ -26,9 +28,12 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 /**
- * Streams intermediate summaries via Llama 3.3 after Round 0 tool execution
+ * Streams intermediate summaries via reasoning text model after Round 0 tool execution
  * before proceeding to subsequent execution rounds.
  */
 @Slf4j
@@ -42,6 +47,12 @@ public class IntermediateResponseStreamer {
     private final SmartRoutingService routingService;
     private final SessionChatMemoryService sessionChatMemoryService;
     private final ChatStreamStatusService chatStreamStatusService;
+
+    private volatile Consumer<IntermediateDiagnosticOutcome> diagnosticOutcomeListener;
+
+    void setDiagnosticOutcomeListenerForTesting(Consumer<IntermediateDiagnosticOutcome> listener) {
+        this.diagnosticOutcomeListener = listener;
+    }
 
     public void streamIntermediateResponseAndContinue(
             SseEmitter emitter,
@@ -58,7 +69,7 @@ public class IntermediateResponseStreamer {
             ScheduledExecutorService timeoutScheduler,
             Runnable continueToNextRound) {
 
-        log.info("[Multi-Agent] Round 0 complete. Streaming intermediate response via Llama 3.3 before next round for session {}", sessionId);
+        log.info("[Multi-Agent] Round 0 complete. Streaming intermediate response via reasoning text model before next round for session {}", sessionId);
         try {
             emitter.send(SseEmitter.event().id(clientMessageId).name("status").data("🟢 Đang tóm tắt kết quả đợt 1..."));
         } catch (Exception ignored) {
@@ -84,9 +95,11 @@ public class IntermediateResponseStreamer {
                 compactor.compactHistoryForRequest(textOnlyHistory, "intermediate-text"),
                 true));
 
-        StreamingChatModel llamaModel = routingService.getModelByProviderAndName("GROQ", "llama-3.3-70b-versatile", "text");
-        StreamingChatModel finalLlama = llamaModel != null ? llamaModel : routingService.getReasoningTextModel();
-        String finalLlamaName = routingService.getModelName(finalLlama);
+        StreamingChatModel reasoningModel = routingService != null ? routingService.getReasoningTextModel() : null;
+        String reasoningModelName = (routingService != null && reasoningModel != null)
+                ? routingService.getModelName(reasoningModel) : (modelName != null ? modelName : "Unknown");
+        String provider = (routingService != null && reasoningModel != null)
+                ? routingService.getModelProvider(reasoningModel) : "UNKNOWN";
 
         ChatRequest request = ChatRequest.builder()
                 .messages(textOnlyHistory)
@@ -94,14 +107,33 @@ public class IntermediateResponseStreamer {
                 .build();
 
         StringBuilder intermediateResponse = new StringBuilder();
+        final long stageStartedAt = System.currentTimeMillis();
+        final AtomicReference<Long> firstTokenAt = new AtomicReference<>(null);
+        final AtomicInteger partialChars = new AtomicInteger(0);
         final AtomicBoolean roundFinished = new AtomicBoolean(false);
+        final AtomicBoolean watchdogWon = new AtomicBoolean(false);
+        final AtomicBoolean continuationExecuted = new AtomicBoolean(false);
+        final AtomicBoolean lateCallbackIgnored = new AtomicBoolean(false);
 
         final ScheduledFuture<?> timeoutFuture = timeoutScheduler.schedule(() -> {
             if (roundFinished.compareAndSet(false, true)) {
-                log.warn("[Intermediate] Timeout occurred during intermediate Llama streaming for session {}. Continuing to next round.", sessionId);
+                watchdogWon.set(true);
+                long elapsedMs = System.currentTimeMillis() - stageStartedAt;
+                boolean hadTokens = partialChars.get() > 0 || firstTokenAt.get() != null;
+                IntermediateTerminalCause cause = hadTokens
+                        ? IntermediateTerminalCause.INTERMEDIATE_TIMEOUT_AFTER_PARTIAL
+                        : IntermediateTerminalCause.INTERMEDIATE_TIMEOUT_BEFORE_FIRST_TOKEN;
+
+                recordAttempt(sessionId, clientMessageId, 1, provider, reasoningModelName, elapsedMs,
+                        firstTokenAt.get() != null ? (firstTokenAt.get() - stageStartedAt) : null,
+                        cause, partialChars.get(), true, true, lateCallbackIgnored.get(), null);
+
+                log.warn("[Intermediate] Timeout occurred during intermediate reasoning model streaming for session {}. Continuing to next round.", sessionId);
                 generatingMarked.set(false);
                 sseTransport.safeSend(emitter, "token", Map.of("token", "\n\n<think>\nTiếp tục thực hiện bước tiếp theo...\n</think>\n\n"), MediaType.APPLICATION_JSON);
                 sseTransport.safeSend(emitter, "phase", Phase.THINKING.name(), null);
+
+                continuationExecuted.set(true);
                 continueToNextRound.run();
             }
         }, 30, TimeUnit.SECONDS);
@@ -109,89 +141,189 @@ public class IntermediateResponseStreamer {
         final AtomicBoolean insideLlmThink = new AtomicBoolean(false);
         final StringBuilder filterBuffer = new StringBuilder();
 
-        finalLlama.chat(request, new StreamingChatResponseHandler() {
-            @Override
-            public void onPartialResponse(String token) {
-                if (roundFinished.get()) return;
-                intermediateResponse.append(token);
-                fullResponse.append(token);
+        try {
+            if (reasoningModel == null) {
+                throw new IllegalStateException("No reasoning model available for intermediate streaming");
+            }
 
-                filterBuffer.append(token);
-                String content = filterBuffer.toString();
-                filterBuffer.setLength(0);
+            reasoningModel.chat(request, new StreamingChatResponseHandler() {
+                @Override
+                public void onPartialResponse(String token) {
+                    if (roundFinished.get()) {
+                        lateCallbackIgnored.set(true);
+                        log.warn("[AI_ATTEMPT_LATE] session={} clientMessageId={} stage=INTERMEDIATE late partial response ignored (chars={})",
+                                sessionId, clientMessageId, token != null ? token.length() : 0);
+                        return;
+                    }
+                    if (firstTokenAt.get() == null) {
+                        firstTokenAt.set(System.currentTimeMillis());
+                    }
+                    if (token != null) {
+                        partialChars.addAndGet(token.length());
+                    }
 
-                while (!content.isEmpty()) {
-                    if (insideLlmThink.get()) {
-                        int closeIdx = content.indexOf("</think>");
-                        if (closeIdx != -1) {
-                            insideLlmThink.set(false);
-                            content = content.substring(closeIdx + 8);
-                        } else {
-                            int potentialIdx = getPotentialPrefixIndex(content, "</think>");
-                            if (potentialIdx != -1) {
-                                filterBuffer.append(content.substring(potentialIdx));
-                            }
-                            break;
-                        }
-                    } else {
-                        int openIdx = content.indexOf("<think>");
-                        if (openIdx != -1) {
-                            String before = content.substring(0, openIdx);
-                            if (!before.isEmpty()) {
-                                sseTransport.sendTokenToClient(emitter, before, clientDisconnected, generatingMarked, sessionId, clientMessageId, finalLlamaName);
-                            }
-                            insideLlmThink.set(true);
-                            content = content.substring(openIdx + 7);
-                        } else {
-                            int potentialOpen = getPotentialPrefixIndex(content, "<think>");
-                            int potentialClose = getPotentialPrefixIndex(content, "</think>");
-                            int potentialIdx = Math.max(potentialOpen, potentialClose);
+                    intermediateResponse.append(token);
+                    fullResponse.append(token);
 
-                            if (potentialIdx != -1) {
-                                String before = content.substring(0, potentialIdx);
-                                if (!before.isEmpty()) {
-                                    sseTransport.sendTokenToClient(emitter, before, clientDisconnected, generatingMarked, sessionId, clientMessageId, finalLlamaName);
-                                }
-                                filterBuffer.append(content.substring(potentialIdx));
+                    filterBuffer.append(token);
+                    String content = filterBuffer.toString();
+                    filterBuffer.setLength(0);
+
+                    while (!content.isEmpty()) {
+                        if (insideLlmThink.get()) {
+                            int closeIdx = content.indexOf("</think>");
+                            if (closeIdx != -1) {
+                                insideLlmThink.set(false);
+                                content = content.substring(closeIdx + 8);
                             } else {
-                                sseTransport.sendTokenToClient(emitter, content, clientDisconnected, generatingMarked, sessionId, clientMessageId, finalLlamaName);
+                                int potentialIdx = getPotentialPrefixIndex(content, "</think>");
+                                if (potentialIdx != -1) {
+                                    filterBuffer.append(content.substring(potentialIdx));
+                                }
+                                break;
                             }
-                            break;
+                        } else {
+                            int openIdx = content.indexOf("<think>");
+                            if (openIdx != -1) {
+                                String before = content.substring(0, openIdx);
+                                if (!before.isEmpty()) {
+                                    sseTransport.sendTokenToClient(emitter, before, clientDisconnected, generatingMarked, sessionId, clientMessageId, reasoningModelName);
+                                }
+                                insideLlmThink.set(true);
+                                content = content.substring(openIdx + 7);
+                            } else {
+                                int potentialOpen = getPotentialPrefixIndex(content, "<think>");
+                                int potentialClose = getPotentialPrefixIndex(content, "</think>");
+                                int potentialIdx = Math.max(potentialOpen, potentialClose);
+
+                                if (potentialIdx != -1) {
+                                    String before = content.substring(0, potentialIdx);
+                                    if (!before.isEmpty()) {
+                                        sseTransport.sendTokenToClient(emitter, before, clientDisconnected, generatingMarked, sessionId, clientMessageId, reasoningModelName);
+                                    }
+                                    filterBuffer.append(content.substring(potentialIdx));
+                                } else {
+                                    sseTransport.sendTokenToClient(emitter, content, clientDisconnected, generatingMarked, sessionId, clientMessageId, reasoningModelName);
+                                }
+                                break;
+                            }
                         }
                     }
                 }
-            }
 
-            @Override
-            public void onCompleteResponse(ChatResponse response) {
-                if (!roundFinished.compareAndSet(false, true)) return;
-                timeoutFuture.cancel(false);
+                @Override
+                public void onCompleteResponse(ChatResponse response) {
+                    if (!roundFinished.compareAndSet(false, true)) {
+                        lateCallbackIgnored.set(true);
+                        log.warn("[AI_ATTEMPT_LATE] session={} clientMessageId={} stage=INTERMEDIATE late complete response ignored",
+                                sessionId, clientMessageId);
+                        return;
+                    }
+                    timeoutFuture.cancel(false);
+                    long elapsedMs = System.currentTimeMillis() - stageStartedAt;
+                    Long firstTokenMs = firstTokenAt.get() != null ? (firstTokenAt.get() - stageStartedAt) : null;
 
-                String cleanText = sessionChatMemoryService.sanitizeAssistantMessage(intermediateResponse.toString());
-                sessionChatMemoryService.appendAssistantMessage(sessionId, cleanText, systemPrompt);
+                    String cleanText = sessionChatMemoryService.sanitizeAssistantMessage(intermediateResponse.toString());
+                    boolean isEmpty = cleanText == null || cleanText.isBlank();
+                    IntermediateTerminalCause cause = isEmpty
+                            ? IntermediateTerminalCause.INTERMEDIATE_COMPLETED_EMPTY
+                            : IntermediateTerminalCause.INTERMEDIATE_COMPLETED_WITH_TEXT;
+
+                    recordAttempt(sessionId, clientMessageId, 1, provider, reasoningModelName, elapsedMs, firstTokenMs,
+                            cause, partialChars.get(), false, true, lateCallbackIgnored.get(), null);
+
+                    sessionChatMemoryService.appendAssistantMessage(sessionId, cleanText, systemPrompt);
+
+                    generatingMarked.set(false);
+                    sseTransport.safeSend(emitter, "token", Map.of("token", "\n\n<think>\nĐang tiến hành bước tiếp theo...\n</think>\n\n"), MediaType.APPLICATION_JSON);
+                    chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.THINKING, modelName, null, null);
+                    sseTransport.safeSend(emitter, "phase", Phase.THINKING.name(), null);
+
+                    continuationExecuted.set(true);
+                    continueToNextRound.run();
+                }
+
+                @Override
+                public void onError(Throwable error) {
+                    if (!roundFinished.compareAndSet(false, true)) {
+                        lateCallbackIgnored.set(true);
+                        log.warn("[AI_ATTEMPT_LATE] session={} clientMessageId={} stage=INTERMEDIATE late error response ignored: {}",
+                                sessionId, clientMessageId, error != null ? error.getMessage() : "null");
+                        return;
+                    }
+                    timeoutFuture.cancel(false);
+                    long elapsedMs = System.currentTimeMillis() - stageStartedAt;
+                    Long firstTokenMs = firstTokenAt.get() != null ? (firstTokenAt.get() - stageStartedAt) : null;
+                    boolean hadTokens = partialChars.get() > 0 || firstTokenAt.get() != null;
+                    IntermediateTerminalCause cause = hadTokens
+                            ? IntermediateTerminalCause.INTERMEDIATE_MODEL_ERROR_AFTER_PARTIAL
+                            : IntermediateTerminalCause.INTERMEDIATE_MODEL_ERROR_BEFORE_FIRST_TOKEN;
+
+                    recordAttempt(sessionId, clientMessageId, 1, provider, reasoningModelName, elapsedMs, firstTokenMs,
+                            cause, partialChars.get(), false, true, lateCallbackIgnored.get(), error);
+
+                    log.error("[Intermediate] Error during intermediate reasoning model streaming for session {}: {}",
+                            sessionId, error != null ? error.getMessage() : "null");
+
+                    generatingMarked.set(false);
+                    sseTransport.safeSend(emitter, "token", Map.of("token", "\n\n<think>\nĐang tiến hành bước tiếp theo...\n</think>\n\n"), MediaType.APPLICATION_JSON);
+                    chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.THINKING, modelName, null, null);
+                    sseTransport.safeSend(emitter, "phase", Phase.THINKING.name(), null);
+
+                    continuationExecuted.set(true);
+                    continueToNextRound.run();
+                }
+            });
+        } catch (Exception syncEx) {
+            timeoutFuture.cancel(false);
+            if (roundFinished.compareAndSet(false, true)) {
+                long elapsedMs = System.currentTimeMillis() - stageStartedAt;
+                IntermediateTerminalCause cause = IntermediateTerminalCause.INTERMEDIATE_SYNC_START_FAILURE;
+
+                recordAttempt(sessionId, clientMessageId, 1, provider, reasoningModelName, elapsedMs, null,
+                        cause, partialChars.get(), false, true, lateCallbackIgnored.get(), syncEx);
+
+                log.error("[Intermediate] Synchronous exception during intermediate reasoning model chat for session {}: {}",
+                        sessionId, syncEx.getMessage());
 
                 generatingMarked.set(false);
                 sseTransport.safeSend(emitter, "token", Map.of("token", "\n\n<think>\nĐang tiến hành bước tiếp theo...\n</think>\n\n"), MediaType.APPLICATION_JSON);
                 chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.THINKING, modelName, null, null);
                 sseTransport.safeSend(emitter, "phase", Phase.THINKING.name(), null);
 
+                continuationExecuted.set(true);
                 continueToNextRound.run();
             }
+        }
+    }
 
-            @Override
-            public void onError(Throwable error) {
-                if (!roundFinished.compareAndSet(false, true)) return;
-                timeoutFuture.cancel(false);
-                log.error("[Intermediate] Error during intermediate Llama streaming for session {}: {}", sessionId, error.getMessage());
+    private void recordAttempt(
+            Long sessionId,
+            String clientMessageId,
+            int attempt,
+            String provider,
+            String modelName,
+            long elapsedMs,
+            Long firstTokenMs,
+            IntermediateTerminalCause cause,
+            int partialChars,
+            boolean watchdogWon,
+            boolean continuationExecuted,
+            boolean lateCallbackIgnored,
+            Throwable error) {
 
-                generatingMarked.set(false);
-                sseTransport.safeSend(emitter, "token", Map.of("token", "\n\n<think>\nĐang tiến hành bước tiếp theo...\n</think>\n\n"), MediaType.APPLICATION_JSON);
-                chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.THINKING, modelName, null, null);
-                sseTransport.safeSend(emitter, "phase", Phase.THINKING.name(), null);
+        log.info("[AI_ATTEMPT] session={} clientMessageId={} stage=INTERMEDIATE attempt={} provider={} model={} mode=TEXT elapsedMs={} firstTokenMs={} terminalCause={} partialChars={} watchdogWon={} continuationExecuted={} lateCallbackIgnored={}",
+                sessionId, clientMessageId, attempt, provider, modelName, elapsedMs,
+                firstTokenMs != null ? firstTokenMs : "none",
+                cause, partialChars, watchdogWon, continuationExecuted, lateCallbackIgnored);
 
-                continueToNextRound.run();
-            }
-        });
+        Consumer<IntermediateDiagnosticOutcome> listener = this.diagnosticOutcomeListener;
+        if (listener != null) {
+            listener.accept(new IntermediateDiagnosticOutcome(
+                    sessionId, clientMessageId, "INTERMEDIATE", attempt, provider, modelName, "TEXT",
+                    elapsedMs, firstTokenMs, cause, partialChars, watchdogWon, continuationExecuted,
+                    lateCallbackIgnored, error));
+        }
     }
 
     private int getPotentialPrefixIndex(String content, String target) {

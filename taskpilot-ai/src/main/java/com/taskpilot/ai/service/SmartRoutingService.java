@@ -31,8 +31,6 @@ public class SmartRoutingService {
     private final StreamingChatModel geminiFallback6Model;
     private final StreamingChatModel geminiFallback7Model;
 
-    private final StreamingChatModel gpt4oFallbackModel;
-    private final StreamingChatModel deepSeekReasoningModel;
     private final StreamingChatModel groqOssReasoningModel;
     private final StreamingChatModel groqOssReasoningFallback1Model;
     private final StreamingChatModel openRouterReasoningModel;
@@ -47,8 +45,6 @@ public class SmartRoutingService {
     private final StreamingChatModel openRouterReasoningFallback9Model;
     private final StreamingChatModel openRouterReasoningFallback10Model;
 
-    private final StreamingChatModel gpt4oFallbackTextModel;
-    private final StreamingChatModel deepSeekReasoningTextModel;
     private final StreamingChatModel groqOssReasoningTextModel;
     private final StreamingChatModel groqOssReasoningFallback1TextModel;
     private final StreamingChatModel openRouterReasoningTextModel;
@@ -73,10 +69,10 @@ public class SmartRoutingService {
     @Value("${ai.gemini.fallback4-model:gemini-2.5-pro}")
     private String geminiFallback4ModelName;
 
-    @Value("${ai.gemini.fallback5-model:gemini-2.0-flash}")
+    @Value("${ai.gemini.fallback5-model:gemini-3.5-flash-lite}")
     private String geminiFallback5ModelName;
 
-    @Value("${ai.gemini.fallback6-model:gemini-2.0-flash-lite}")
+    @Value("${ai.gemini.fallback6-model:gemini-3.8-flash}")
     private String geminiFallback6ModelName;
 
     @Value("${ai.gemini.fallback7-model:gemini-3.1-pro-preview}")
@@ -88,16 +84,10 @@ public class SmartRoutingService {
     @Value("${ai.gemini.use-for-tools:false}")
     private boolean useGeminiForTools;
 
-    @Value("${ai.github.fallback-model:gpt-4o}")
-    private String fallbackModelName;
-
-    @Value("${ai.github.reasoning-model:DeepSeek-R1}")
-    private String deepSeekReasoningModelName;
-
-    @Value("${ai.groq.reasoning-model:meta-llama/llama-4-scout-17b-16e-instruct}")
+    @Value("${ai.groq.reasoning-model:openai/gpt-oss-120b}")
     private String groqReasoningModelName;
 
-    @Value("${ai.groq.reasoning-fallback1-model:llama-3.3-70b-versatile}")
+    @Value("${ai.groq.reasoning-fallback1-model:openai/gpt-oss-20b}")
     private String groqReasoningFallback1ModelName;
 
     @Value("${ai.groq.enabled:false}")
@@ -157,8 +147,6 @@ public class SmartRoutingService {
             @Qualifier("geminiFallback5Model") StreamingChatModel geminiFallback5Model,
             @Qualifier("geminiFallback6Model") StreamingChatModel geminiFallback6Model,
             @Qualifier("geminiFallback7Model") StreamingChatModel geminiFallback7Model,
-            @Qualifier("gpt4oFallbackModel") StreamingChatModel gpt4oFallbackModel,
-            @Qualifier("deepSeekReasoningModel") StreamingChatModel deepSeekReasoningModel,
             @Qualifier("groqOssReasoningModel") @Nullable StreamingChatModel groqOssReasoningModel,
             @Qualifier("groqOssReasoningFallback1Model") @Nullable StreamingChatModel groqOssReasoningFallback1Model,
             @Qualifier("openRouterReasoningModel") @Nullable StreamingChatModel openRouterReasoningModel,
@@ -172,8 +160,6 @@ public class SmartRoutingService {
             @Qualifier("openRouterReasoningFallback8Model") @Nullable StreamingChatModel openRouterReasoningFallback8Model,
             @Qualifier("openRouterReasoningFallback9Model") @Nullable StreamingChatModel openRouterReasoningFallback9Model,
             @Qualifier("openRouterReasoningFallback10Model") @Nullable StreamingChatModel openRouterReasoningFallback10Model,
-            @Qualifier("gpt4oFallbackTextModel") StreamingChatModel gpt4oFallbackTextModel,
-            @Qualifier("deepSeekReasoningTextModel") StreamingChatModel deepSeekReasoningTextModel,
             @Qualifier("groqOssReasoningTextModel") @Nullable StreamingChatModel groqOssReasoningTextModel,
             @Qualifier("groqOssReasoningFallback1TextModel") @Nullable StreamingChatModel groqOssReasoningFallback1TextModel,
             @Qualifier("openRouterReasoningTextModel") @Nullable StreamingChatModel openRouterReasoningTextModel,
@@ -189,8 +175,6 @@ public class SmartRoutingService {
         this.geminiFallback5Model = geminiFallback5Model;
         this.geminiFallback6Model = geminiFallback6Model;
         this.geminiFallback7Model = geminiFallback7Model;
-        this.gpt4oFallbackModel = gpt4oFallbackModel;
-        this.deepSeekReasoningModel = deepSeekReasoningModel;
         this.groqOssReasoningModel = groqOssReasoningModel;
         this.groqOssReasoningFallback1Model = groqOssReasoningFallback1Model;
         this.openRouterReasoningModel = openRouterReasoningModel;
@@ -204,8 +188,6 @@ public class SmartRoutingService {
         this.openRouterReasoningFallback8Model = openRouterReasoningFallback8Model;
         this.openRouterReasoningFallback9Model = openRouterReasoningFallback9Model;
         this.openRouterReasoningFallback10Model = openRouterReasoningFallback10Model;
-        this.gpt4oFallbackTextModel = gpt4oFallbackTextModel;
-        this.deepSeekReasoningTextModel = deepSeekReasoningTextModel;
         this.groqOssReasoningTextModel = groqOssReasoningTextModel;
         this.groqOssReasoningFallback1TextModel = groqOssReasoningFallback1TextModel;
         this.openRouterReasoningTextModel = openRouterReasoningTextModel;
@@ -365,40 +347,44 @@ public class SmartRoutingService {
     }
 
     private StreamingChatModel getNextStreamingFallbackInternal(StreamingChatModel currentModel) {
-        String targetType = "reasoning";
-        if (currentModel == gpt4oFallbackTextModel
-                || currentModel == deepSeekReasoningTextModel
-                || currentModel == groqOssReasoningTextModel
-                || currentModel == groqOssReasoningFallback1TextModel
-                || currentModel == openRouterReasoningTextModel) {
-            targetType = "text";
-        }
+        String currentType = getModelType(currentModel);
+        String targetType = ("text".equalsIgnoreCase(currentType) || currentType.endsWith("text")) ? "text" : "reasoning";
 
         try {
             java.util.Optional<java.util.Map<String, Object>> priorityRaw = systemSettingPort.findJsonObjectByKey("ai.model_priority");
             if (priorityRaw.isPresent() && !priorityRaw.get().isEmpty()) {
                 Object modelsObj = priorityRaw.get().get("models");
                 if (modelsObj instanceof List<?> list) {
+                    String currentProvider = getModelProvider(currentModel);
+                    String currentModelName = getModelName(currentModel);
+
                     int currentIndex = -1;
-                    for (int i = 0; i < list.size(); i++) {
-                        Object item = list.get(i);
-                        if (item instanceof java.util.Map<?, ?> map) {
-                            String provider = map.containsKey("provider") ? String.valueOf(map.get("provider")).toUpperCase(Locale.ROOT) : "";
-                            String modelName = map.containsKey("model") ? String.valueOf(map.get("model")) : "";
-                            StreamingChatModel resReasoning = getModelByProviderAndName(provider, modelName, "reasoning");
-                            StreamingChatModel resText = getModelByProviderAndName(provider, modelName, "text");
-                            if (resReasoning == currentModel || resText == currentModel) {
-                                currentIndex = i;
-                                break;
+                    if (!"UNKNOWN".equalsIgnoreCase(currentProvider) && !"Unknown".equalsIgnoreCase(currentModelName)) {
+                        for (int i = 0; i < list.size(); i++) {
+                            Object item = list.get(i);
+                            if (item instanceof java.util.Map<?, ?> map) {
+                                String provider = map.containsKey("provider") ? String.valueOf(map.get("provider")).trim() : "";
+                                String modelName = map.containsKey("model") ? String.valueOf(map.get("model")).trim() : "";
+                                if (provider.equalsIgnoreCase(currentProvider) && modelName.equalsIgnoreCase(currentModelName)) {
+                                    currentIndex = i;
+                                    break;
+                                }
                             }
                         }
                     }
+
                     if (currentIndex != -1) {
                         for (int i = currentIndex + 1; i < list.size(); i++) {
                             Object item = list.get(i);
                             if (item instanceof java.util.Map<?, ?> map) {
-                                String provider = map.containsKey("provider") ? String.valueOf(map.get("provider")).toUpperCase(Locale.ROOT) : "";
-                                String modelName = map.containsKey("model") ? String.valueOf(map.get("model")) : "";
+                                String provider = map.containsKey("provider") ? String.valueOf(map.get("provider")).trim() : "";
+                                String modelName = map.containsKey("model") ? String.valueOf(map.get("model")).trim() : "";
+                                if (isRetiredModel(modelName)) {
+                                    continue;
+                                }
+                                if (provider.equalsIgnoreCase(currentProvider) && modelName.equalsIgnoreCase(currentModelName)) {
+                                    continue;
+                                }
                                 StreamingChatModel resolved = getModelByProviderAndName(provider, modelName, targetType);
                                 if (resolved != null && resolved != currentModel) {
                                     return resolved;
@@ -416,9 +402,6 @@ public class SmartRoutingService {
         if (isGeminiModel(currentModel)) {
             return getNextGeminiFallback(currentModel);
         }
-        if (isGpt4oFallbackModel(currentModel)) {
-            return currentModel;
-        }
         if (isOpenRouterReasoningModel(currentModel)) {
             return getNextOpenRouterReasoningFallback(currentModel);
         }
@@ -432,12 +415,6 @@ public class SmartRoutingService {
             return groqOssReasoningTextModel;
         }
         if (currentModel == groqOssReasoningFallback1TextModel) {
-            return currentModel;
-        }
-        if (currentModel == deepSeekReasoningModel) {
-            return currentModel;
-        }
-        if (currentModel == deepSeekReasoningTextModel) {
             return currentModel;
         }
         return currentModel;
@@ -486,14 +463,7 @@ public class SmartRoutingService {
     }
 
     public boolean isGeminiModel(StreamingChatModel model) {
-        return model == geminiPrimaryModel
-                || model == geminiFallback1Model
-                || model == geminiFallback2Model
-                || model == geminiFallback3Model
-                || model == geminiFallback4Model
-                || model == geminiFallback5Model
-                || model == geminiFallback6Model
-                || model == geminiFallback7Model;
+        return "GEMINI".equalsIgnoreCase(getModelProvider(model));
     }
 
     public boolean supportsLargeContextAndTools(StreamingChatModel model) {
@@ -518,9 +488,17 @@ public class SmartRoutingService {
                 || model == openRouterReasoningFallback10Model;
     }
 
-    public boolean isGpt4oFallbackModel(StreamingChatModel model) {
-        return model == gpt4oFallbackModel
-                || model == gpt4oFallbackTextModel;
+    public static boolean isRetiredModel(String modelName) {
+        if (modelName == null || modelName.isBlank()) {
+            return false;
+        }
+        String lower = modelName.trim().toLowerCase(Locale.ROOT);
+        return lower.contains("llama-3.3")
+                || lower.contains("llama-3.1-8b")
+                || lower.contains("llama-4-scout")
+                || lower.contains("gemini-2.0-flash")
+                || lower.contains("gpt-4o")
+                || lower.contains("deepseek-r1");
     }
 
     private StreamingChatModel resolveModelByPriority(String type) {
@@ -529,17 +507,19 @@ public class SmartRoutingService {
             if (priorityRaw.isPresent() && !priorityRaw.get().isEmpty()) {
                 Object modelsObj = priorityRaw.get().get("models");
                 if (modelsObj instanceof List<?> list && !list.isEmpty()) {
-                    int targetIndex = 0;
-                    if (targetIndex >= list.size()) {
-                        targetIndex = 0;
-                    }
-                    Object item = list.get(targetIndex);
-                    if (item instanceof java.util.Map<?, ?> map) {
-                        String provider = map.containsKey("provider") ? String.valueOf(map.get("provider")).toUpperCase(Locale.ROOT) : "";
-                        String modelName = map.containsKey("model") ? String.valueOf(map.get("model")) : "";
-                        StreamingChatModel resolved = getModelByProviderAndName(provider, modelName, type);
-                        if (resolved != null) {
-                            return resolved;
+                    for (int targetIndex = 0; targetIndex < list.size(); targetIndex++) {
+                        Object item = list.get(targetIndex);
+                        if (item instanceof java.util.Map<?, ?> map) {
+                            String provider = map.containsKey("provider") ? String.valueOf(map.get("provider")).toUpperCase(Locale.ROOT) : "";
+                            String modelName = map.containsKey("model") ? String.valueOf(map.get("model")) : "";
+                            if (isRetiredModel(modelName)) {
+                                log.warn("[SmartRouting] Skipping retired model from DB priority list: provider={}, model={}", provider, modelName);
+                                continue;
+                            }
+                            StreamingChatModel resolved = getModelByProviderAndName(provider, modelName, type);
+                            if (resolved != null) {
+                                return resolved;
+                            }
                         }
                     }
                 }
@@ -551,7 +531,10 @@ public class SmartRoutingService {
     }
 
     public StreamingChatModel getModelByProviderAndName(String provider, String modelName, String type) {
-        if (modelName == null || modelName.isBlank()) {
+        if (modelName == null || modelName.isBlank() || isRetiredModel(modelName)) {
+            if (isRetiredModel(modelName)) {
+                log.warn("[SmartRouting] Refusing to resolve retired model: provider={}, model={}", provider, modelName);
+            }
             return null;
         }
         StreamingChatModel dynamicModel = aiModelConfig.getOrCreateDynamicModel(provider, modelName, type);
@@ -618,12 +601,18 @@ public class SmartRoutingService {
     public StreamingChatModel getReasoningModel() {
         StreamingChatModel resolved = resolveModelByPriority("reasoning");
         if (resolved != null) return resolved;
+        if (groqEnabled && groqOssReasoningModel != null) {
+            return groqOssReasoningModel;
+        }
         return geminiPrimaryModel;
     }
 
     public StreamingChatModel getReasoningTextModel() {
         StreamingChatModel resolved = resolveModelByPriority("reasoning_text");
         if (resolved != null) return resolved;
+        if (groqEnabled && groqOssReasoningTextModel != null) {
+            return groqOssReasoningTextModel;
+        }
         return geminiPrimaryModel;
     }
 
@@ -643,11 +632,7 @@ public class SmartRoutingService {
         if (modelName == null) {
             return getPrimaryModel();
         }
-        if (modelName.equals(fallbackModelName)) {
-            return getFallbackTextModel();
-        }
-        if (modelName.equals(deepSeekReasoningModelName)
-                || modelName.equals(groqReasoningModelName)
+        if (modelName.equals(groqReasoningModelName)
                 || modelName.equals(groqReasoningFallback1ModelName)
                 || isOpenRouterReasoningModelName(modelName)) {
             return getReasoningTextModel();
@@ -671,8 +656,6 @@ public class SmartRoutingService {
         if (model == geminiFallback5Model) return geminiFallback5ModelName;
         if (model == geminiFallback6Model) return geminiFallback6ModelName;
         if (model == geminiFallback7Model) return geminiFallback7ModelName;
-        if (model == gpt4oFallbackModel || model == gpt4oFallbackTextModel) return fallbackModelName;
-        if (model == deepSeekReasoningModel || model == deepSeekReasoningTextModel) return deepSeekReasoningModelName;
         if (model == groqOssReasoningModel || model == groqOssReasoningTextModel) return groqReasoningModelName;
         if (model == groqOssReasoningFallback1Model || model == groqOssReasoningFallback1TextModel) return groqReasoningFallback1ModelName;
         if (model == openRouterReasoningModel || model == openRouterReasoningTextModel) return openRouterReasoningModelName;
@@ -687,6 +670,67 @@ public class SmartRoutingService {
         if (model == openRouterReasoningFallback9Model) return openRouterReasoningFallback9ModelName;
         if (model == openRouterReasoningFallback10Model) return openRouterReasoningFallback10ModelName;
         return model.getClass().getSimpleName();
+    }
+
+    public String getModelProvider(StreamingChatModel model) {
+        if (model == null) {
+            return "UNKNOWN";
+        }
+        if (aiModelConfig != null) {
+            String dynamicProvider = aiModelConfig.getModelProvider(model);
+            if (dynamicProvider != null && !dynamicProvider.isBlank() && !"UNKNOWN".equalsIgnoreCase(dynamicProvider)) {
+                return dynamicProvider;
+            }
+        }
+        if (model == geminiPrimaryModel
+                || model == geminiFallback1Model
+                || model == geminiFallback2Model
+                || model == geminiFallback3Model
+                || model == geminiFallback4Model
+                || model == geminiFallback5Model
+                || model == geminiFallback6Model
+                || model == geminiFallback7Model) {
+            return "GEMINI";
+        }
+        if (model == groqOssReasoningModel
+                || model == groqOssReasoningTextModel
+                || model == groqOssReasoningFallback1Model
+                || model == groqOssReasoningFallback1TextModel) {
+            return "GROQ";
+        }
+        if (model == openRouterReasoningModel
+                || model == openRouterReasoningTextModel
+                || model == openRouterReasoningFallback1Model
+                || model == openRouterReasoningFallback2Model
+                || model == openRouterReasoningFallback3Model
+                || model == openRouterReasoningFallback4Model
+                || model == openRouterReasoningFallback5Model
+                || model == openRouterReasoningFallback6Model
+                || model == openRouterReasoningFallback7Model
+                || model == openRouterReasoningFallback8Model
+                || model == openRouterReasoningFallback9Model
+                || model == openRouterReasoningFallback10Model) {
+            return "OPENROUTER";
+        }
+        return "UNKNOWN";
+    }
+
+    public String getModelType(StreamingChatModel model) {
+        if (model == null) {
+            return "reasoning";
+        }
+        if (model == groqOssReasoningTextModel
+                || model == groqOssReasoningFallback1TextModel
+                || model == openRouterReasoningTextModel) {
+            return "text";
+        }
+        if (aiModelConfig != null) {
+            String dynamicType = aiModelConfig.getModelType(model);
+            if (dynamicType != null && !dynamicType.isBlank()) {
+                return dynamicType;
+            }
+        }
+        return "reasoning";
     }
 
     private boolean isOpenRouterReasoningModelName(String modelName) {

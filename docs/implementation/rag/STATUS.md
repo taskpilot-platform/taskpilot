@@ -1,7 +1,7 @@
 # TaskPilot RAG Subsystem — Implementation Status
 
 ## Current State Summary
-- **Current phase**: Complete (All Phases 0–15 fully implemented and verified)
+- **Current phase**: Complete (All Phases 0–19 fully implemented and verified)
 - **Completed**:
   - Phase 0 — Repository inspection
   - Phase 1 — Baseline verification
@@ -20,12 +20,23 @@
   - Phase 15 — Controller & REST API (`ProjectDocumentController`, `ProjectDocumentService`, multipart S3 upload, async indexing, document lifecycle, re-indexing, knowledge search)
   - Phase 16 — Production Hardening & E2E Conversational Verification (Non-blocking transaction boundaries, 15m crash recovery with safe retry, and LangChain4j conversational tool flow integration test)
   - Phase 17 — Frontend UI & Browser UAT (`ProjectKnowledgeTab`, `DocumentUploadCard`, `DocumentList`, `KnowledgeSearchCard`, `KnowledgeHeader`, vitest 17/17 tests passing, manual UAT checklist)
+  - Phase 18 — Resumable Ingestion & Quota-Aware Embedding:
+    - PostgreSQL durable job queue (`DocumentJobClaimer`, `DocumentJobPoller`, atomic leasing via `FOR UPDATE SKIP LOCKED`).
+    - Staging table separation (`document_chunk_staging`, Flyway `V27`).
+    - Upfront text chunk persistence, version fencing (`processing_version`), and staged chunk adoption (`adoptOlderStagedChunks`).
+    - Dual-dimension rate limiting (`RpmRateLimiter`: 100 RPM, 30,000 TPM with sliding-window normal pacing and protected interactive headroom).
+    - Large document stress testing: 212-chunk DOCX survived 429 quota exhaustion with 0 chunk loss and achieved `READY` status.
+  - Phase 19 — Role-Based Access Control (RBAC) on Project Knowledge Base:
+    - Backend security gates in `ProjectDocumentController`: Manager-only for upload, retry, and delete (`requireProjectManager`); Member-permitted for document listing, detail inspection, and semantic search (`requireProjectMember`).
+    - Frontend adaptive UI in `ProjectKnowledgeTab`: Managers receive full upload card and delete/retry buttons; Members receive read-only banner explaining manager restriction with delete/retry actions hidden.
+    - Automated tests: 120/120 backend tests passing in `taskpilot-ai`, 10/10 in `taskpilot-projects`, 23/23 frontend tests passing in `taskpilot-frontend`.
+    - Live multi-user verification with Puppeteer screenshots (`rbac_1_member_knowledge_view.png`, `rbac_2_manager_knowledge_view.png`).
   - Secret Audit — 100% CLEAN: All 14 secret keys strictly read from environment/.env; 0 leaks across repository
 - **In progress**: None
 - **Blocked**: None
-- **Next action**: Full manual browser UAT verification per `UAT.md`.
-- **Last verified command**: `npm run build && npm test` (Frontend: 17/17 passed) & `.\mvnw.cmd test` (Backend: 99/99 passed)
-- **Last verification result**: BUILD SUCCESS (Frontend: 17/17 passed, Backend: 99/99 passed)
+- **Next action**: Final reporting documentation & project submission.
+- **Last verified command**: `npm run build && npm test` (Frontend: 23/23 passed) & `.\mvnw.cmd test` (Backend: 120/120 passed in taskpilot-ai)
+- **Last verification result**: BUILD SUCCESS (Frontend: 23/23 passed, Backend: 120/120 passed)
 
 ---
 

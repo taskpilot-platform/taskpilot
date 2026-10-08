@@ -102,7 +102,7 @@ public class TaskPilotAiTools {
                 new SkillAiTools(skillPort, pendingAiActionService),
                 new AhpAssignmentAiTools(autoAssignmentService, projectMemberPort, projectInsightsPort,
                         memberAnalyticsPort, taskCommandPort, pendingAiActionService),
-                new SystemAiTools(pendingAiActionService, smartQueryService, jdbcTemplate)
+                new SystemAiTools(pendingAiActionService, smartQueryService)
         );
     }
 
@@ -355,10 +355,6 @@ public class TaskPilotAiTools {
             @P("Optional. Sort direction: 'ASC' or 'DESC' (default 'ASC')") String sortDirection,
             @P("Optional. Maximum number of results to return (default 10, max 50).") Integer limit) {
         return taskAiTools.queryTasks(projectId, assigneeId, status, isOverdue, dueToday, unassignedOnly, searchTerm, sortBy, sortDirection, limit);
-    }
-
-    public Object executeQuerySql(@P("The SELECT SQL query statement to run") String sql) {
-        return systemAiTools.executeQuerySql(sql);
     }
 
     @Tool("Fetch subtasks belonging to a specific parent task ID.")

@@ -31,21 +31,78 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class AutoAssignmentService {
+    public static final long DEFAULT_EXPLANATION_TIMEOUT_MS = 5000L;
+    public static final String DEFAULT_FALLBACK_EXPLANATION =
+            "Đề xuất tự động dựa trên phân tích đa tiêu chí AHP, bao gồm mức độ phù hợp kỹ năng, khối lượng công việc và hiệu suất lịch sử. Vui lòng tham khảo điểm số chi tiết của các ứng viên ở trên.";
+
     private final ProjectMemberPort projectMemberPort;
     private final UserSkillPort userSkillPort;
     private final AiAuditPort aiAuditPort;
     private final UserPort userPort;
     private final ProjectPort projectPort;
     private final HeuristicStrategyFactory heuristicStrategyFactory;
+    private final StreamingChatModel explanationModel;
+    private final long explanationTimeoutMs;
+    private final String explanationModelName;
 
-    @Qualifier("deepSeekReasoningModel")
-    private final StreamingChatModel deepSeekModel;
+    @Autowired
+    public AutoAssignmentService(
+            ProjectMemberPort projectMemberPort,
+            UserSkillPort userSkillPort,
+            AiAuditPort aiAuditPort,
+            UserPort userPort,
+            ProjectPort projectPort,
+            HeuristicStrategyFactory heuristicStrategyFactory,
+            @Qualifier("geminiFlashModel") StreamingChatModel explanationModel,
+            @Value("${ai.assignment.explanation-timeout-ms:5000}") long explanationTimeoutMs,
+            @Value("${ai.gemini.model-name:gemini-3.5-flash}") String explanationModelName) {
+        this.projectMemberPort = projectMemberPort;
+        this.userSkillPort = userSkillPort;
+        this.aiAuditPort = aiAuditPort;
+        this.userPort = userPort;
+        this.projectPort = projectPort;
+        this.heuristicStrategyFactory = heuristicStrategyFactory;
+        this.explanationModel = explanationModel;
+        this.explanationTimeoutMs = explanationTimeoutMs;
+        this.explanationModelName = (explanationModelName != null && !explanationModelName.isBlank())
+                ? explanationModelName : "gemini-3.5-flash";
+    }
+
+    public AutoAssignmentService(
+            ProjectMemberPort projectMemberPort,
+            UserSkillPort userSkillPort,
+            AiAuditPort aiAuditPort,
+            UserPort userPort,
+            ProjectPort projectPort,
+            HeuristicStrategyFactory heuristicStrategyFactory,
+            StreamingChatModel explanationModel) {
+        this(projectMemberPort, userSkillPort, aiAuditPort, userPort, projectPort,
+                heuristicStrategyFactory, explanationModel, DEFAULT_EXPLANATION_TIMEOUT_MS, "gemini-3.5-flash");
+    }
+
+    public AutoAssignmentService(
+            ProjectMemberPort projectMemberPort,
+            UserSkillPort userSkillPort,
+            AiAuditPort aiAuditPort,
+            UserPort userPort,
+            ProjectPort projectPort,
+            HeuristicStrategyFactory heuristicStrategyFactory,
+            StreamingChatModel explanationModel,
+            long explanationTimeoutMs) {
+        this(projectMemberPort, userSkillPort, aiAuditPort, userPort, projectPort,
+                heuristicStrategyFactory, explanationModel, explanationTimeoutMs, "gemini-3.5-flash");
+    }
 
     private static final int PERFORMANCE_WINDOW_SIZE = 3;
     private static final double NEUTRAL_PERFORMANCE_PRIOR = 0.5;
@@ -298,6 +355,20 @@ public class AutoAssignmentService {
                         "Project heuristic mode is not configured for project: " + projectId));
     }
 
+    /**
+     * Generates a natural language explanation for top candidate recommendations.
+     * <p>
+     * Timeout & Concurrency Semantics:
+     * 1. Bounded Wait: Caller thread blocks on future.get(explanationTimeoutMs, TimeUnit.MILLISECONDS).
+     * 2. Timeout Fallback: If timeout expires, future.cancel(true) is called to release the caller,
+     *    and DEFAULT_FALLBACK_EXPLANATION is returned immediately.
+     * 3. Socket Lifecycle Note: future.cancel(true) terminates the local future awaiting completion;
+     *    the underlying LangChain4j HTTP socket connection may persist in the background until its socket-level
+     *    read timeout expires.
+     * 4. Interruption: If interrupted, thread interrupt status is restored and fallback is returned.
+     * 5. Invariant: Heuristic candidate scoring occurs prior to this method and is completely decoupled from
+     *    LLM availability.
+     */
     private String generateExplanation(List<CandidateScore> top3, List<String> requiredSkills,
             int taskDifficulty, Long userId, Long projectId) {
         try {
@@ -325,7 +396,7 @@ public class AutoAssignmentService {
                     String.join(", ", requiredSkills), taskDifficulty, candidateInfo);
             CompletableFuture<String> future = new CompletableFuture<>();
             StringBuilder fullResponse = new StringBuilder();
-            deepSeekModel.chat(List.of(SystemMessage.from(
+            explanationModel.chat(List.of(SystemMessage.from(
                     "You are a helpful project management assistant analyzing team assignment recommendations."),
                     UserMessage.from(prompt)), new StreamingChatResponseHandler() {
                         @Override
@@ -340,26 +411,41 @@ public class AutoAssignmentService {
 
                         @Override
                         public void onError(Throwable error) {
-                            log.warn("[AutoAssign] DeepSeek reasoning failed: {}",
-                                    error.getMessage());
-                            future.complete(
-                                    "AI explanation unavailable. Please refer to the scores above.");
+                            log.warn("[AutoAssign] LLM reasoning explanation failed: {}",
+                                     error != null ? error.getMessage() : "Unknown error");
+                            future.complete(DEFAULT_FALLBACK_EXPLANATION);
                         }
                     });
-            return future.get(); // Blocking wait for auto-assignment (non-streaming endpoint)
+            try {
+                return future.get(explanationTimeoutMs, TimeUnit.MILLISECONDS);
+            } catch (TimeoutException te) {
+                future.cancel(true);
+                log.warn("[AutoAssign] LLM explanation timed out after {}ms, using deterministic fallback", explanationTimeoutMs);
+                return DEFAULT_FALLBACK_EXPLANATION;
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                log.warn("[AutoAssign] LLM explanation interrupted, using deterministic fallback: {}", ie.getMessage());
+                return DEFAULT_FALLBACK_EXPLANATION;
+            } catch (ExecutionException ee) {
+                log.warn("[AutoAssign] LLM explanation execution exception, using deterministic fallback: {}", ee.getMessage());
+                return DEFAULT_FALLBACK_EXPLANATION;
+            }
         } catch (Exception e) {
-            log.error("[AutoAssign] Failed to generate AI explanation: {}", e.getMessage());
-            return "AI explanation could not be generated. Please review the candidate scores manually.";
+            log.warn("[AutoAssign] Failed to generate AI explanation, using deterministic fallback: {}", e.getMessage());
+            return DEFAULT_FALLBACK_EXPLANATION;
         }
     }
 
     private void saveAutoAssignLog(Long userId, Long projectId, List<String> requiredSkills,
             List<CandidateScore> candidates, String explanation) {
         try {
+            String actualModel = (explanation != null && !explanation.equals(DEFAULT_FALLBACK_EXPLANATION))
+                    ? explanationModelName
+                    : explanationModelName + " (fallback)";
             AiLogEntity log = AiLogEntity.builder().userId(userId).projectId(projectId)
                     .request("Auto-assignment request for skills: " + requiredSkills)
                     .response(explanation).actionTaken("autoAssignCandidates")
-                    .toolOutput(candidates).humanFeedback("PENDING").modelUsed("DeepSeek-R1")
+                    .toolOutput(candidates).humanFeedback("PENDING").modelUsed(actualModel)
                     .build();
             aiAuditPort.save(log);
         } catch (Exception e) {

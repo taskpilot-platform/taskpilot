@@ -94,6 +94,8 @@ management:
   health:
     mail:
       enabled: false
+    redis:
+      enabled: false
 
 ai:
   gemini:
@@ -106,8 +108,8 @@ ai:
     fallback2-model: ${AI_GEMINI_FALLBACK2_MODEL:gemini-3.1-flash-lite}
     fallback3-model: ${AI_GEMINI_FALLBACK3_MODEL:gemini-2.5-flash-lite}
     fallback4-model: ${AI_GEMINI_FALLBACK4_MODEL:gemini-2.5-pro}
-    fallback5-model: ${AI_GEMINI_FALLBACK5_MODEL:gemini-2.0-flash}
-    fallback6-model: ${AI_GEMINI_FALLBACK6_MODEL:gemini-2.0-flash-lite}
+    fallback5-model: ${AI_GEMINI_FALLBACK5_MODEL:gemini-3.5-flash-lite}
+    fallback6-model: ${AI_GEMINI_FALLBACK6_MODEL:gemini-3.8-flash}
     fallback7-model: ${AI_GEMINI_FALLBACK7_MODEL:gemini-3.1-pro-preview}
     waterfall-max-attempts: ${AI_GEMINI_WATERFALL_MAX_ATTEMPTS:2}
     use-for-tools: ${AI_GEMINI_USE_FOR_TOOLS:true}
@@ -115,19 +117,17 @@ ai:
     embedding-model: ${AI_GEMINI_EMBEDDING_MODEL:gemini-embedding-2}
     embedding-dimension: ${AI_GEMINI_EMBEDDING_DIMENSION:768}
 
-  github:
-    token: ${GITHUB_TOKEN:}
-    fallback-model: ${AI_GITHUB_FALLBACK_MODEL:gpt-4o}
-    reasoning-model: ${AI_GITHUB_REASONING_MODEL:DeepSeek-R1}
+  assignment:
+    explanation-timeout-ms: ${AI_ASSIGNMENT_EXPLANATION_TIMEOUT_MS:5000}
 
   groq:
     enabled: ${AI_GROQ_ENABLED:true}
     api-key: ${GROQ_API_KEY:}
     api-keys: ${GROQ_API_KEYS:}
     base-url: ${AI_GROQ_BASE_URL:https://api.groq.com/openai/v1}
-    reasoning-model: ${AI_GROQ_REASONING_MODEL:meta-llama/llama-4-scout-17b-16e-instruct}
-    reasoning-fallback1-model: ${AI_GROQ_REASONING_FALLBACK1_MODEL:llama-3.3-70b-versatile}
-    gatekeeper-model: ${AI_GROQ_GATEKEEPER_MODEL:llama-3.1-8b-instant}
+    reasoning-model: ${AI_GROQ_REASONING_MODEL:openai/gpt-oss-120b}
+    reasoning-fallback1-model: ${AI_GROQ_REASONING_FALLBACK1_MODEL:openai/gpt-oss-20b}
+    gatekeeper-model: ${AI_GROQ_GATEKEEPER_MODEL:openai/gpt-oss-20b}
 
   openrouter:
     enabled: ${AI_OPENROUTER_ENABLED:true}

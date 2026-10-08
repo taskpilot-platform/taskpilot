@@ -71,7 +71,7 @@ public class StreamingChatEngine {
 
     private static final int MAX_TOOL_ROUNDS = 4;
     private static final int MAX_CONSECUTIVE_SAME_TOOL_EXECUTIONS = 3;
-    private static final int GITHUB_MODELS_MAX_TOKENS = 32768;
+    private static final int DEFAULT_CONTEXT_MAX_TOKENS = 32768;
     private static final int LARGE_CONTEXT_MAX_TOKENS = 128_000;
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
@@ -321,7 +321,7 @@ public class StreamingChatEngine {
         }
 
         int modelBudget = routingService.supportsLargeContextAndTools(model)
-                ? LARGE_CONTEXT_MAX_TOKENS : GITHUB_MODELS_MAX_TOKENS;
+                ? LARGE_CONTEXT_MAX_TOKENS : DEFAULT_CONTEXT_MAX_TOKENS;
         int historyTokens = tokenCountEstimator.estimateTokenCountInMessages(sanitizedHistory);
         int toolSpecTokens = 0;
         if (toolSpecs != null) {
@@ -614,7 +614,7 @@ public class StreamingChatEngine {
                 }
 
                 if (requiresTools) {
-                    log.info("[Multi-Agent] Chặng 3: Executor finished. Forwarding result to Communicator (llama-3.3-70b-versatile) for streaming...");
+                    log.info("[Multi-Agent] Chặng 3: Executor finished. Forwarding result to Communicator for streaming...");
                     if (session.getTitle() == null || session.getTitle().isBlank()) {
                         postProcessor.generateSessionTitleViaGemmaAsync(session, userInput, rawResponseText);
                     }
@@ -626,8 +626,7 @@ public class StreamingChatEngine {
                     String allToolResultsText = toolCoordinator.formatAllToolResults(history);
                     String promptForCommunicator = buildCommunicatorPrompt(allToolResultsText, rawResponseText);
 
-                    StreamingChatModel groqModel = routingService.getModelByProviderAndName("GROQ", "llama-3.3-70b-versatile", "text");
-                    StreamingChatModel finalModel = groqModel != null ? groqModel : routingService.getReasoningTextModel();
+                    StreamingChatModel finalModel = routingService.getReasoningTextModel();
                     String finalModelName = routingService.getModelName(finalModel);
 
                     timeoutFallbackHandler.forceTextOnlyResponse(
@@ -679,7 +678,8 @@ public class StreamingChatEngine {
 
                 log.error("[SSE] Model {} failed for session {}: {}", modelName, sessionId, error.getMessage());
 
-                if (timeoutFallbackHandler.hasRemainingKeys(model, modelKeyAttempts)) {
+                boolean isNonRetryableModelError = isNonRetryableModelError(error);
+                if (!isNonRetryableModelError && timeoutFallbackHandler.hasRemainingKeys(model, modelKeyAttempts)) {
                     int nextAttempt = modelKeyAttempts + 1;
                     chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.THINKING, modelName, null, null);
                     sseTransport.safeSend(emitter, "model", modelName + " (" + timeoutFallbackHandler.getModelKeyLabel(model, nextAttempt) + ")", null);
@@ -688,6 +688,9 @@ public class StreamingChatEngine {
                             history, systemPrompt, model, modelName, startTime, isFallbackAttempt, clientMessageId,
                             requiresAHP, requiresTools, retryCount, nextAttempt);
                     return;
+                }
+                if (isNonRetryableModelError) {
+                    log.warn("[SSE] Model {} failed with permanent client error: {}. Skipping key rotation and escalating to fallback.", modelName, error.getMessage());
                 }
 
                 if (!isFallbackAttempt || routingService.hasStreamingFallbackAfter(model)) {
@@ -927,5 +930,20 @@ public class StreamingChatEngine {
                 + "   - Xem tất cả bình luận: [Xem bình luận](/comments)\n"
                 + "   Tuyệt đối KHÔNG dùng các URL tuyệt đối chứa http://localhost:5173 hay taskpilot-platform.netlify.app.\n"
                 + "5. Sử dụng tiếng Việt thân thiện, tự nhiên. Tuyệt đối không sinh ra thẻ <think> hay bất kỳ quá trình suy nghĩ nào khác. Viết trực tiếp câu trả lời của bạn.";
+    }
+
+    boolean isNonRetryableModelError(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            String msg = current.getMessage();
+            if (msg != null) {
+                String lower = msg.toLowerCase(java.util.Locale.ROOT);
+                if (lower.contains("404") || lower.contains("does not exist") || lower.contains("not found") || lower.contains("model_not_found")) {
+                    return true;
+                }
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 }

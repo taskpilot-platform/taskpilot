@@ -203,6 +203,85 @@ This document records all verification commands, test executions, and results.
   - Build Command: `npm run build` -> **BUILD SUCCESS (`tsc -b && vite build` passed with 0 errors)**
 - **Manual Browser UAT Checklist**:
   - Comprehensive guide and test matrix documented in `docs/implementation/rag/UAT.md`.
+  - **Browser UAT Screenshots**:
+    | Khởi tạo màn hình Tri thức | Tài liệu hoàn tất lập chỉ mục (READY) |
+    | :---: | :---: |
+    | ![Khởi tạo](assets/uat_1_knowledge_initial.png) | ![Sẵn sàng](assets/uat_2_document_ready.png) |
+    | Tìm kiếm ngữ nghĩa trực tiếp | Thẻ trích dẫn chi tiết |
+    | ![Tìm kiếm](assets/uat_3_search_results.png) | ![Chi tiết](assets/uat_4_search_results_card.png) |
+
+---
+
+## 12. Phase 18: Resumable Ingestion, Persistent Staging & Dual-Dimension Quota Admission Verification
+- **Targets**:
+  - **Persistent Staging Schema**: Flyway migration `V27__create_document_chunk_staging.sql` creating table `document_chunk_staging` with `(document_id, chunk_index, processing_version, text, embedding vector(768), token_count, created_at)`. Added state columns to `documents`: `processing_version INT`, `lease_until TIMESTAMPTZ`, `retry_count INT`, and `next_attempt_at TIMESTAMPTZ`.
+  - **Durable Coordination & Ingestion Pipeline**:
+    - Upfront text extraction & chunk persistence before invoking external embedding APIs.
+    - Fine-grained resumability checking: `WHERE document_id = ? AND processing_version = ? AND embedding IS NULL`.
+    - Version fencing preventing stale or zombie workers from overwriting newer jobs.
+    - Staged chunk adoption: `adoptOlderStagedChunks` allows newly claimed worker versions to adopt previously generated embeddings upon retry, avoiding duplicate API calls.
+    - Atomic publication with row lock: `SELECT ... FOR UPDATE` on `documents`, verifying status and version, copying chunks to `document_chunks` via `INSERT INTO ... SELECT`, and marking document `READY`.
+  - **Dual-Dimension Quota Admission Limiter (`RpmRateLimiter`)**:
+    - Sliding-window tracking of both request counts (100 RPM limit) and tokens (30,000 TPM limit).
+    - Chunk-based request accounting: Each segment in `batchEmbedContents` counts as 1 request against Gemini's `embed_content_free_tier_requests` quota.
+    - Normal pacing vs. `RETRY_WAIT`: Workers wait on condition variables up to `pacingWaitMs` (5000ms) without changing state. Provider 429 errors or timeouts transition to `RETRY_WAIT` with scheduled backoff.
+    - Dedicated interactive headroom: 10 RPM and 3,000 TPM reserved exclusively for real-time user searches and chat copilot.
+- **Automated Unit & Integration Tests**:
+  - `DocumentChunkStagingRepositoryTest`: **5/5 passed** (insert, batch update, remaining chunk detection, adoption across versions).
+  - `RpmRateLimiterTest`: **8/8 passed** (dual-dimension tracking, sliding-window eviction, interactive headroom reservation, condition timeout).
+  - `DocumentJobPollerAndEndToEndTest`: **3/3 passed** (atomic claiming with `SKIP LOCKED`, resumable recovery from staging, retry scheduling).
+  - `DocumentIngestionServiceImplTest`: **7/7 passed** (full staging workflow, version fencing, atomic publication).
+- **Large Document Stress Test Evidence**:
+  - Ingestion of large academic document: `OOAD PROJECT REPORT _ MD.docx` (212 chunks, ~140,000 characters).
+  - First attempt encountered Gemini API quota exhaustion: HTTP 429 (`RESOURCE_EXHAUSTED: embed_content_free_tier_requests, limit: 100`).
+  - Worker safely preserved all parsed chunks in `document_chunk_staging`, transitioned to `RETRY_WAIT` with backoff, adopted prior progress via `adoptOlderStagedChunks`, completed remaining batches, and atomically published all 212 vectors into `document_chunks`. Zero data loss, zero duplicated S3 reads.
+  - **Stress Test Screenshots**:
+    | Tài liệu đồ án OOAD 212 chunks hoàn tất lập chỉ mục (READY) | Kết quả tìm kiếm ngữ nghĩa vector 768 chiều |
+    | :---: | :---: |
+    | ![Tài liệu OOAD hoàn tất](assets/uat_5_ooad_report_ready.png) | ![Kết quả tìm kiếm ngữ nghĩa](assets/uat_6_ooad_search_results.png) |
+
+---
+
+## 13. Phase 19: Role-Based Access Control (RBAC) on Project Knowledge Base
+- **Targets**:
+  - **Policy Specification**:
+    - `PROJECT_MANAGER`: Full administrative authority (Upload documents, retry failed/staged documents, delete documents, view documents, semantic search).
+    - `PROJECT_MEMBER`: Read-only Knowledge view (View document list and status, inspect document metadata, execute semantic search in Knowledge tab, trigger AI Copilot RAG search via `searchProjectKnowledge` tool). Write actions (`POST /upload`, `POST /retry`, `DELETE /:docId`) are strictly forbidden.
+    - Non-Member: 403 Forbidden across all RAG and document endpoints.
+  - **Backend Security Enforcement**:
+    - In `ProjectDocumentController`: Upload, retry, and delete endpoints enforce `projectSecurityService.requireProjectManager(projectId, userId)`.
+    - Document listing, detail retrieval, and semantic search endpoints enforce `projectSecurityService.requireProjectMember(projectId, userId)`.
+  - **Frontend Adaptive UI**:
+    - In `ProjectKnowledgeTab`: Role is derived from project membership (`currentMember?.role === 'MANAGER'`).
+    - For `MANAGER`: Full drag-and-drop upload card is rendered, retry and delete buttons are displayed with confirmation dialogs.
+    - For `MEMBER`: Upload card is replaced by a clear informational banner explaining that document uploads are restricted to Project Managers. Delete and retry buttons are hidden from the document list.
+- **Automated Test Execution**:
+  - Backend: `ProjectDocumentControllerTest` passed with 17/17 tests verifying 403 Forbidden for members on mutation endpoints.
+  - Backend Suite: 120/120 tests passed in `taskpilot-ai`, 10/10 passed in `taskpilot-projects`.
+  - Frontend: `ProjectKnowledgeTab.test.tsx` passed with 6 test suites / 23 tests verifying manager controls vs member read-only banner.
+- **Live Multi-User & Multi-Role Verification Matrix**:
+  - Test accounts:
+    - User 3 (`dangphuthien2005@gmail.com`): `MANAGER` in Project 4, `MEMBER` in Project 18.
+    - User 16 (`member.uit@taskpilot.local`): `MEMBER` in Project 4, `MANAGER` in Project 18.
+  - **Live RBAC Screenshots**:
+    | User 16 (`MEMBER` trên Dự án 4) — Khóa form upload, ẩn nút xóa | User 3 (`MANAGER` trên Dự án 4) — Mở form upload, đầy đủ quyền |
+    | :---: | :---: |
+    | ![Giao diện thành viên](assets/rbac_1_member_knowledge_view.png) | ![Giao diện quản lý](assets/rbac_2_manager_knowledge_view.png) |
+  - Execution Results:
+    - **User 16 on Project 4 (`MEMBER`)**:
+      - UI: Informational banner shown, delete buttons hidden (`assets/rbac_1_member_knowledge_view.png`).
+      - `POST /api/projects/4/documents` $\rightarrow$ **HTTP 403 Forbidden** (AccessDeniedException).
+      - `POST /api/projects/4/documents/10/retry` $\rightarrow$ **HTTP 403 Forbidden**.
+      - `DELETE /api/projects/4/documents/10` $\rightarrow$ **HTTP 403 Forbidden**.
+      - `POST /api/projects/4/documents/search` $\rightarrow$ **HTTP 200 OK** (semantic results returned).
+    - **User 3 on Project 4 (`MANAGER`)**:
+      - UI: Upload dropzone active, delete/retry buttons present (`assets/rbac_2_manager_knowledge_view.png`).
+      - `POST /api/projects/4/documents/search` $\rightarrow$ **HTTP 200 OK**.
+      - Document upload and deletion permitted and functional.
+    - **Dual-Role Isolation across Projects**:
+      - User 16 on Project 18 (`MANAGER`): Ingestion, retry, and delete operations succeed.
+      - User 3 on Project 18 (`MEMBER`): Ingestion, retry, and delete operations rejected with 403 Forbidden.
+      - Confirmed zero role leakage across projects.
 
 ---
 
@@ -227,8 +306,14 @@ This document records all verification commands, test executions, and results.
 | **AI Tool** | TaskPilotAiTools | `KnowledgeAiToolsTest` & `RagEndToEndIntegrationTest` | COMPLETE | PASS (LangChain4j tool discovery & registry routing) |
 | **REST Controller** | Document API | `ProjectDocumentControllerTest` & `ProjectDocumentServiceImplTest` | COMPLETE | PASS (17/17 tests: upload, list, delete, retry, search) |
 | **Conversational E2E**| AI tool calling | `RagConversationalFlowIntegrationTest` | COMPLETE | PASS (4/4 tests: grounded output, 403 guard, irrelevant fallback) |
-| **Backend Regression**| 7 modules | `.\mvnw.cmd test` | COMPLETE | PASS (99/99 tests, 0 failures, 24.7s) |
-| **Frontend UI Suite** | Vitest / RTL | `npm test` in `taskpilot-frontend` | COMPLETE | PASS (17/17 tests, 5 suites, 100%) |
+| **Resumable Staging** | Flyway V27 & DB | `DocumentChunkStagingRepositoryTest` | COMPLETE | PASS (5/5 tests: upfront text, version adoption) |
+| **Quota Admission** | Dual RPM/TPM | `RpmRateLimiterTest` | COMPLETE | PASS (8/8 tests: 100 RPM, 30k TPM, headroom, pacing) |
+| **Job Queue & Poller**| PostgreSQL claim | `DocumentJobPollerAndEndToEndTest` | COMPLETE | PASS (3/3 tests: SKIP LOCKED, version fencing) |
+| **Large Doc Ingestion**| 212 chunks stress | Manual live upload & poller run | COMPLETE | PASS (survived 429 quota exhaustion, published 212 vectors) |
+| **Knowledge Base RBAC**| Manager/Member | `ProjectDocumentControllerTest` & `ProjectKnowledgeTab.test.tsx` | COMPLETE | PASS (Backend 403 on member mutations, Frontend banner & controls) |
+| **Multi-User Live UAT**| Cross-project RBAC | Puppeteer multi-user execution matrix | COMPLETE | PASS (Project 4 vs Project 18 verified live with screenshots) |
+| **Backend Total** | taskpilot-ai | `.\mvnw.cmd test -pl taskpilot-ai` | COMPLETE | PASS (120/120 tests, 0 failures, 0 errors) |
+| **Frontend Total** | Vitest / RTL | `npm test` in `taskpilot-frontend` | COMPLETE | PASS (23/23 tests, 6 test suites, 100%) |
 | **Frontend Build** | TypeScript / Vite | `npm run build` in `taskpilot-frontend` | COMPLETE | PASS (`tsc -b && vite build` 0 errors) |
-| **Browser UAT** | Manual checklist | `docs/implementation/rag/UAT.md` | COMPLETE | Documented & ready for verification |
+| **Browser UAT** | Manual checklist | `docs/implementation/rag/UAT.md` | COMPLETE | Verified live & documented with screenshots |
 

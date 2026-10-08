@@ -36,10 +36,13 @@ TaskPilot is a **modular monolith** with clean module separation (`taskpilot-inf
 │  DocumentIngestionService (DocumentIngestionServiceImpl)                    │
 │         │ 1. Check Staging: document_chunk_staging has rows for version?    │
 │         │    IF NOT:                                                        │
-│         │      - Download file from StorageService (S3StorageServiceImpl)   │
-│         │      - Extract text using Apache Tika (DocumentTextExtractor)     │
-│         │      - Chunk text deterministically using DocumentChunker         │
-│         │      - Insert all text chunks into document_chunk_staging (nulls) │
+│         │      - Adopt older staged chunks if prior retries exist           │
+│         │        (UPDATE document_chunk_staging SET version = claimed)      │
+│         │      - IF STILL NOT:                                              │
+│         │          - Download file from StorageService                      │
+│         │          - Extract text using Apache Tika                         │
+│         │          - Chunk text deterministically using DocumentChunker     │
+│         │          - Insert all text chunks into staging (embedding = NULL) │
 │         │    IF YES:                                                        │
 │         │      - Reuse existing staged text chunks (skip S3/Tika/chunking)  │
 │         │                                                                   │
@@ -48,7 +51,7 @@ TaskPilot is a **modular monolith** with clean module separation (`taskpilot-inf
 │         │    WHERE document_id = ? AND processing_version = ?               │
 │         │      AND embedding IS NULL                                        │
 │         │    ORDER BY chunk_index ASC;                                      │
-│         │    Partition into batches of size <= maxBatchSize (default: 100)  │
+│         │    Partition into batches of size <= maxBatchSize (default: 20)   │
 │         │    For each batch:                                                │
 │         │      - EmbeddingGateway.embedForIngestion(batchTexts)             │
 │         │      - UPDATE document_chunk_staging SET embedding = ?            │
@@ -71,11 +74,12 @@ TaskPilot is a **modular monolith** with clean module separation (`taskpilot-inf
 │         │ embedForSearch(query)  /  embedForIngestion(texts)                │
 │         ▼                                                                   │
 │  RpmRateLimiter (Dual Dimension: RPM + TPM, Sliding 60-Second Window)       │
-│         ├── Tracks AdmissionRecord(timestamp, tokens)                       │
-│         ├── Global Limit: maxRpm (100), maxTpm (30,000)                     │
+│         ├── Tracks AdmissionRecord(timestamp, requestCount, tokens)         │
+│         │   (Google counts 1 request per chunk in embed_content_free_tier)  │
+│         ├── Global Limit: maxRpm (80), maxTpm (30,000)                      │
 │         ├── Interactive Reservation: interactiveHeadroom (10), TpmHeadroom  │
 │         ├── Background Capacity: maxRpm - Headroom, maxTpm - TpmHeadroom    │
-│         └── Normal Pacing: acquireBackgroundWithPacing(tokens, maxWaitMs)   │
+│         └── Normal Pacing: acquireBackgroundWithPacing(count, tokens, wait) │
 │             Awaits capacity on condition variable instead of busy sleep     │
 │                                                                             │
 │  [ Canonical Embedding Provider ]                                           │
