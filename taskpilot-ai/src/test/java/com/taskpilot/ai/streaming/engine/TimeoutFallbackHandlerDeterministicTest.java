@@ -81,6 +81,9 @@ class TimeoutFallbackHandlerDeterministicTest {
         when(confirmationParser.appendTaskPilotBlocks(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     }
 
+    private static final String EXPECTED_TERMINAL_DEGRADATION =
+            "I retrieved the requested data, but the AI service could not finish formatting the response. Please try again shortly.";
+
     @Test
     @DisplayName("Test E: Finalizer remains silent -> 25s watchdog wins, fallback text finalized, late callbacks ignored")
     void testE_finalizerRemainsSilent_watchdogWinsOnce() {
@@ -124,9 +127,9 @@ class TimeoutFallbackHandlerDeterministicTest {
                 tokenCaptor.capture(), anyLong(), eq("client-msg-e"), errorCaptor.capture()
         );
 
-        assertThat(respCaptor.getValue()).contains("Mình đã lấy dữ liệu bằng công cụ nội bộ, nhưng bước diễn giải cuối của model phản hồi quá lâu");
-        // Verify token count formula: 185 / 4 = 46
-        assertThat(tokenCaptor.getValue()).isEqualTo(46);
+        assertThat(respCaptor.getValue()).isEqualTo(EXPECTED_TERMINAL_DEGRADATION);
+        // Verify token count formula: 118 / 4 = 29
+        assertThat(tokenCaptor.getValue()).isEqualTo(29);
         assertThat(errorCaptor.getValue()).isEqualTo("terminalCause=FINALIZER_TIMEOUT_BEFORE_FIRST_TOKEN");
 
         // Verify SSE safe complete called once
@@ -171,11 +174,13 @@ class TimeoutFallbackHandlerDeterministicTest {
         assertThat(capturedOutcome.get().watchdogWon()).isFalse();
         assertThat(capturedOutcome.get().finalizationExecuted()).isTrue();
 
+        ArgumentCaptor<String> respCaptor = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> errorCaptor = ArgumentCaptor.forClass(String.class);
         verify(postProcessor, times(1)).saveSessionMessagesAndLogsAsync(
-                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyInt(), anyLong(), any(), errorCaptor.capture()
+                any(), any(), any(), any(), any(), respCaptor.capture(), any(), any(), any(), any(), anyInt(), anyLong(), any(), errorCaptor.capture()
         );
 
+        assertThat(respCaptor.getValue()).isEqualTo(EXPECTED_TERMINAL_DEGRADATION);
         assertThat(errorCaptor.getValue())
                 .isEqualTo("terminalCause=FINALIZER_MODEL_ERROR_BEFORE_FIRST_TOKEN; exceptionClass=java.io.IOException");
 
@@ -220,7 +225,7 @@ class TimeoutFallbackHandlerDeterministicTest {
         verify(postProcessor, times(1)).saveSessionMessagesAndLogsAsync(
                 any(), any(), any(), any(), any(), respCaptor.capture(), any(), any(), any(), any(), anyInt(), anyLong(), any(), errorCaptor.capture()
         );
-        assertThat(respCaptor.getValue()).contains("Mình đã lấy dữ liệu bằng công cụ nội bộ, nhưng bước diễn giải cuối của model phản hồi quá lâu");
+        assertThat(respCaptor.getValue()).isEqualTo(EXPECTED_TERMINAL_DEGRADATION);
         assertThat(errorCaptor.getValue())
                 .isEqualTo("terminalCause=FINALIZER_MODEL_ERROR_AFTER_PARTIAL; exceptionClass=java.lang.RuntimeException");
     }
@@ -366,7 +371,7 @@ class TimeoutFallbackHandlerDeterministicTest {
                 anyInt(), anyLong(), eq("client-msg-a"), errCaptor.capture()
         );
         assertThat(respCaptor.getValue()).contains("Dữ liệu dự án từ fallback model");
-        assertThat(respCaptor.getValue()).doesNotContain("bước diễn giải cuối của model phản hồi quá lâu");
+        assertThat(respCaptor.getValue()).doesNotContain(EXPECTED_TERMINAL_DEGRADATION);
         assertThat(errCaptor.getValue()).isNull();
 
         // - SSE done emitted once
@@ -427,7 +432,7 @@ class TimeoutFallbackHandlerDeterministicTest {
                 respCaptor.capture(), any(), any(), any(), eq("fake-fallback-model"),
                 anyInt(), anyLong(), eq("client-msg-b"), errCaptor.capture()
         );
-        assertThat(respCaptor.getValue()).contains("Mình đã lấy dữ liệu bằng công cụ nội bộ, nhưng bước diễn giải cuối của model phản hồi quá lâu");
+        assertThat(respCaptor.getValue()).isEqualTo(EXPECTED_TERMINAL_DEGRADATION);
 
         // - final diagnostic reflects the actionable fallback failure class
         assertThat(errCaptor.getValue())
@@ -482,7 +487,7 @@ class TimeoutFallbackHandlerDeterministicTest {
                 respCaptor.capture(), any(), any(), any(), eq("fake-finalizer-model"),
                 anyInt(), anyLong(), eq("client-msg-c"), errCaptor.capture()
         );
-        assertThat(respCaptor.getValue()).contains("bước diễn giải cuối của model phản hồi quá lâu");
+        assertThat(respCaptor.getValue()).isEqualTo(EXPECTED_TERMINAL_DEGRADATION);
         assertThat(errCaptor.getValue())
                 .isEqualTo("terminalCause=FINALIZER_MODEL_ERROR_AFTER_PARTIAL; exceptionClass=com.taskpilot.ai.streaming.engine.TimeoutFallbackHandlerDeterministicTest$RateLimitException");
 

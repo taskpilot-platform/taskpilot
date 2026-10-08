@@ -135,8 +135,7 @@ public class TimeoutFallbackHandler {
             return "Mình đã chuẩn bị thao tác ghi dữ liệu và cần bạn phê duyệt trong thẻ xác nhận bên dưới. "
                     + "Bước diễn giải cuối của model phản hồi quá lâu nên mình hiển thị ngay hành động cần xác nhận.";
         }
-        return "Mình đã lấy dữ liệu bằng công cụ nội bộ, nhưng bước diễn giải cuối của model phản hồi quá lâu. "
-                + "Bạn thử gửi lại yêu cầu ngắn hơn hoặc yêu cầu phân công trực tiếp cho một task cụ thể nhé.";
+        return "I retrieved the requested data, but the AI service could not finish formatting the response. Please try again shortly.";
     }
 
     public void forceTextOnlyResponse(
