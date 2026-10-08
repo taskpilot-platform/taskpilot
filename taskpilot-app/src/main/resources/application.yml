@@ -94,6 +94,8 @@ management:
   health:
     mail:
       enabled: false
+    redis:
+      enabled: false
 
 ai:
   gemini:
