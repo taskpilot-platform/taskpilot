@@ -15,8 +15,7 @@ import java.time.Instant;
 public class ProjectChatMessageEntity {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "project_chat_messages_id_seq_gen")
-    @SequenceGenerator(name = "project_chat_messages_id_seq_gen", sequenceName = "project_chat_messages_id_seq", allocationSize = 1)
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @Column(name = "project_id", nullable = false)

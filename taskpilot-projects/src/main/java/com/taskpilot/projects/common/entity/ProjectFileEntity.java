@@ -15,8 +15,7 @@ import java.time.Instant;
 public class ProjectFileEntity {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "project_files_id_seq_gen")
-    @SequenceGenerator(name = "project_files_id_seq_gen", sequenceName = "project_files_id_seq", allocationSize = 1)
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @Column(name = "project_id", nullable = false)
