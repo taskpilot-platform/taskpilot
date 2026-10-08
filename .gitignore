@@ -36,6 +36,12 @@ build/
 *.pptx
 report/
 *.log
+# Binary image assets (stored in report repo)
+*.png
+*.jpg
+*.jpeg
+*.webp
+docs/**/assets/
 # Test scripts
 scripts/ai-test-agent.js
 scripts/verify-hf-deploy.sh
