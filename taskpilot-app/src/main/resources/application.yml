@@ -199,3 +199,10 @@ rag:
     poll-interval-ms: 3000
     daily-quota-reset-buffer: ${RAG_EMBEDDING_DAILY_RESET_BUFFER:5m}
 
+livekit:
+  url: ${LIVEKIT_URL:wss://taskpilot-collab-m3oqfj4g.livekit.cloud}
+  api-key: ${LIVEKIT_API_KEY:}
+  api-secret: ${LIVEKIT_API_SECRET:}
+  empty-timeout-seconds: ${LIVEKIT_EMPTY_TIMEOUT_SECONDS:300}
+  max-participants: ${LIVEKIT_MAX_PARTICIPANTS:15}
+
