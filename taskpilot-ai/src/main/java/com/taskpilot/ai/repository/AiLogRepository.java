@@ -17,8 +17,8 @@ public interface AiLogRepository extends JpaRepository<AiLogEntity, Long> {
                         SELECT l FROM AiLogEntity l
                         WHERE (:userId IS NULL OR l.userId = :userId)
                           AND (:projectId IS NULL OR l.projectId = :projectId)
-                          AND (:from IS NULL OR l.createdAt >= :from)
-                          AND (:to IS NULL OR l.createdAt <= :to)
+                          AND (CAST(:from AS Instant) IS NULL OR l.createdAt >= :from)
+                          AND (CAST(:to AS Instant) IS NULL OR l.createdAt <= :to)
                         ORDER BY l.createdAt DESC
                         """)
         Page<AiLogEntity> findByFilters(
