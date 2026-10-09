@@ -96,6 +96,10 @@
             <version>1.20.4</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>com.github.gavlyukovskiy</groupId>
+            <artifactId>p6spy-spring-boot-starter</artifactId>
+        </dependency>
     </dependencies>
 
 

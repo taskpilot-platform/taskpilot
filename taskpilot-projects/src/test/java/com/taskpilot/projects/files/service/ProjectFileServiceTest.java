@@ -6,6 +6,7 @@ import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.infrastructure.storage.StorageService;
+import com.taskpilot.infrastructure.storage.googledrive.GoogleDriveService;
 import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.entity.ProjectFileEntity;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
@@ -44,6 +45,9 @@ class ProjectFileServiceTest {
 
     @Mock
     private StorageService storageService;
+
+    @Mock
+    private GoogleDriveService googleDriveService;
 
     @Mock
     private ProjectSecurityService projectSecurityService;

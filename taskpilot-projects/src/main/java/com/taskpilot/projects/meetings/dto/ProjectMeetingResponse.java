@@ -18,6 +18,8 @@ public record ProjectMeetingResponse(
         ProjectMeetingStatus status,
         Boolean recordingEnabled,
         Long recordingFileId,
+        Instant scheduledStartTime,
+        Instant scheduledEndTime,
         Instant startedAt,
         Instant endedAt,
         Long durationSeconds,

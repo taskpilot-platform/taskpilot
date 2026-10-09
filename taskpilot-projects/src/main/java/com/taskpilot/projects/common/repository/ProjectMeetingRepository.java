@@ -22,4 +22,6 @@ public interface ProjectMeetingRepository extends JpaRepository<ProjectMeetingEn
     Optional<ProjectMeetingEntity> findFirstByProjectIdAndStatusOrderByStartedAtDesc(Long projectId, ProjectMeetingStatus status);
 
     long countByProjectIdAndStatus(Long projectId, ProjectMeetingStatus status);
+
+    List<ProjectMeetingEntity> findByProjectIdInOrderByCreatedAtDesc(List<Long> projectIds);
 }

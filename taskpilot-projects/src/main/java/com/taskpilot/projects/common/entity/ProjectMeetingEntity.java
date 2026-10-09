@@ -46,6 +46,12 @@ public class ProjectMeetingEntity {
     @Column(name = "recording_file_id")
     private Long recordingFileId;
 
+    @Column(name = "scheduled_start_time")
+    private Instant scheduledStartTime;
+
+    @Column(name = "scheduled_end_time")
+    private Instant scheduledEndTime;
+
     @Column(name = "started_at")
     @Builder.Default
     private Instant startedAt = Instant.now();

@@ -17,7 +17,7 @@ import java.io.File;
 @EnableScheduling
 @EnableJpaAuditing
 @EnableSpringDataWebSupport(pageSerializationMode = EnableSpringDataWebSupport.PageSerializationMode.VIA_DTO)
-@SpringBootApplication(scanBasePackages = "com.taskpilot")
+@SpringBootApplication(scanBasePackages = {"com.taskpilot", "vn.elca.training.util"})
 @EnableJpaRepositories(basePackages = "com.taskpilot")
 @EntityScan(basePackages = "com.taskpilot")
 public class TaskPilotApplication {

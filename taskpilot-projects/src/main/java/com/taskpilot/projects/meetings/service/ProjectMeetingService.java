@@ -51,15 +51,24 @@ public class ProjectMeetingService {
 
         String roomName = "tp-proj-" + projectId + "-m-" + UUID.randomUUID().toString().substring(0, 8);
 
+        boolean isScheduled = request.scheduledStartTime() != null 
+                && request.scheduledStartTime().isAfter(Instant.now());
+        ProjectMeetingStatus initialStatus = isScheduled 
+                ? ProjectMeetingStatus.SCHEDULED 
+                : ProjectMeetingStatus.ACTIVE;
+        Instant startedAt = isScheduled ? null : Instant.now();
+
         ProjectMeetingEntity meeting = ProjectMeetingEntity.builder()
                 .projectId(projectId)
                 .hostId(userId)
                 .title(request.title().trim())
                 .description(request.description() != null ? request.description().trim() : null)
                 .roomName(roomName)
-                .status(ProjectMeetingStatus.ACTIVE)
+                .status(initialStatus)
                 .recordingEnabled(Boolean.TRUE.equals(request.recordingEnabled()))
-                .startedAt(Instant.now())
+                .scheduledStartTime(request.scheduledStartTime())
+                .scheduledEndTime(request.scheduledEndTime())
+                .startedAt(startedAt)
                 .createdAt(Instant.now())
                 .updatedAt(Instant.now())
                 .build();
@@ -129,6 +138,14 @@ public class ProjectMeetingService {
 
         if (meeting.getStatus() == ProjectMeetingStatus.ENDED) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "This meeting has already ended");
+        }
+
+        if (meeting.getStatus() == ProjectMeetingStatus.SCHEDULED) {
+            meeting.setStatus(ProjectMeetingStatus.ACTIVE);
+            if (meeting.getStartedAt() == null) {
+                meeting.setStartedAt(Instant.now());
+            }
+            meetingRepository.save(meeting);
         }
 
         boolean isHost = Objects.equals(meeting.getHostId(), userId) || isProjectManager(projectId, userId);
@@ -292,6 +309,8 @@ public class ProjectMeetingService {
                 .status(entity.getStatus())
                 .recordingEnabled(entity.getRecordingEnabled())
                 .recordingFileId(entity.getRecordingFileId())
+                .scheduledStartTime(entity.getScheduledStartTime())
+                .scheduledEndTime(entity.getScheduledEndTime())
                 .startedAt(entity.getStartedAt())
                 .endedAt(entity.getEndedAt())
                 .durationSeconds(durationSeconds)
@@ -299,6 +318,20 @@ public class ProjectMeetingService {
                 .totalParticipantsCount(totalCount)
                 .isHost(isHost)
                 .build();
+    }
+
+    @Transactional(readOnly = true)
+    public List<ProjectMeetingResponse> getMyMeetings(String userEmail) {
+        Long userId = getUserId(userEmail);
+        List<ProjectMemberEntity> memberships = projectMemberRepository.findByUserId(userId);
+        if (memberships.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<Long> projectIds = memberships.stream().map(ProjectMemberEntity::getProjectId).distinct().toList();
+        return meetingRepository.findByProjectIdInOrderByCreatedAtDesc(projectIds)
+                .stream()
+                .map(m -> mapToResponse(m, userId))
+                .collect(Collectors.toList());
     }
 
     private boolean isProjectManager(Long projectId, Long userId) {

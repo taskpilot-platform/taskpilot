@@ -5,6 +5,8 @@ import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.infrastructure.storage.StorageService;
+import com.taskpilot.infrastructure.storage.googledrive.GoogleDriveFileDto;
+import com.taskpilot.infrastructure.storage.googledrive.GoogleDriveService;
 import com.taskpilot.projects.common.entity.ProjectFileEntity;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
 import com.taskpilot.projects.common.enums.MemberRole;
@@ -38,6 +40,7 @@ public class ProjectFileService {
 
     private final ProjectFileRepository projectFileRepository;
     private final StorageService storageService;
+    private final GoogleDriveService googleDriveService;
     private final ProjectSecurityService projectSecurityService;
     private final ProjectMemberRepository projectMemberRepository;
     private final UserIdentityPort userIdentityPort;
@@ -63,11 +66,54 @@ public class ProjectFileService {
 
         String folder = "projects/" + projectId + "/files";
         String storageKey;
-        try {
-            storageKey = storageService.uploadFile(file, folder, DEFAULT_STORAGE_BUCKET);
-        } catch (IOException e) {
-            log.error("Failed to upload file to S3: {}", e.getMessage(), e);
-            throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR.value(), "Failed to upload file to storage");
+        String storageBucket = DEFAULT_STORAGE_BUCKET;
+        String updatedDescription = description;
+
+        boolean isVideoOrRecording = (file.getContentType() != null && file.getContentType().startsWith("video/"))
+                || originalName.endsWith(".webm")
+                || originalName.endsWith(".mp4")
+                || (description != null && description.contains("cuộc họp"));
+
+        if (googleDriveService != null && googleDriveService.isConfigured() && isVideoOrRecording) {
+            try {
+                GoogleDriveFileDto driveDto = googleDriveService.uploadFile(file);
+                storageKey = driveDto.getFileId();
+                storageBucket = "googledrive";
+                if (updatedDescription == null || updatedDescription.isBlank()) {
+                    updatedDescription = driveDto.getWebViewLink();
+                } else if (!updatedDescription.contains(driveDto.getWebViewLink())) {
+                    updatedDescription = updatedDescription + " | " + driveDto.getWebViewLink();
+                }
+                log.info("Uploaded video/recording to Google Drive 5TB: fileId={}, link={}", driveDto.getFileId(), driveDto.getWebViewLink());
+            } catch (Exception driveEx) {
+                log.warn("Google Drive upload failed, falling back to S3: {}", driveEx.getMessage());
+                try {
+                    storageKey = storageService.uploadFile(file, folder, DEFAULT_STORAGE_BUCKET);
+                } catch (IOException e) {
+                    log.error("Failed to upload file to S3: {}", e.getMessage(), e);
+                    throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR.value(), "Failed to upload file to storage");
+                }
+            }
+        } else {
+            try {
+                storageKey = storageService.uploadFile(file, folder, DEFAULT_STORAGE_BUCKET);
+            } catch (IOException e) {
+                if (googleDriveService != null && googleDriveService.isConfigured()) {
+                    try {
+                        GoogleDriveFileDto driveDto = googleDriveService.uploadFile(file);
+                        storageKey = driveDto.getFileId();
+                        storageBucket = "googledrive";
+                        updatedDescription = (updatedDescription != null ? updatedDescription + " | " : "") + driveDto.getWebViewLink();
+                        log.info("S3 upload failed, automatic fallback to Google Drive 5TB succeeded: fileId={}", driveDto.getFileId());
+                    } catch (Exception driveEx) {
+                        log.error("Both S3 and Google Drive failed: {}", driveEx.getMessage());
+                        throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR.value(), "Failed to upload file to storage");
+                    }
+                } else {
+                    log.error("Failed to upload file to S3: {}", e.getMessage(), e);
+                    throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR.value(), "Failed to upload file to storage");
+                }
+            }
         }
 
         ProjectFileEntity entity = ProjectFileEntity.builder()
@@ -78,8 +124,8 @@ public class ProjectFileService {
                 .fileSize(file.getSize())
                 .contentType(file.getContentType())
                 .storageKey(storageKey)
-                .storageBucket(DEFAULT_STORAGE_BUCKET)
-                .description(description)
+                .storageBucket(storageBucket)
+                .description(updatedDescription)
                 .createdAt(Instant.now())
                 .updatedAt(Instant.now())
                 .build();
@@ -125,10 +171,15 @@ public class ProjectFileService {
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "File not found"));
 
         try {
-            InputStream is = storageService.downloadFile(entity.getStorageBucket(), entity.getStorageKey());
+            InputStream is;
+            if ("googledrive".equalsIgnoreCase(entity.getStorageBucket()) && googleDriveService != null) {
+                is = googleDriveService.downloadFile(entity.getStorageKey());
+            } else {
+                is = storageService.downloadFile(entity.getStorageBucket(), entity.getStorageKey());
+            }
             return new FileDownloadResource(entity.getOriginalName(), entity.getContentType(), entity.getFileSize(), is);
         } catch (IOException e) {
-            log.error("Failed to download file from S3: {}", e.getMessage(), e);
+            log.error("Failed to download file from storage: {}", e.getMessage(), e);
             throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR.value(), "Failed to download file from storage");
         }
     }
@@ -153,9 +204,13 @@ public class ProjectFileService {
         }
 
         try {
-            storageService.deleteFile(entity.getStorageBucket(), entity.getStorageKey());
+            if ("googledrive".equalsIgnoreCase(entity.getStorageBucket()) && googleDriveService != null) {
+                googleDriveService.deleteFile(entity.getStorageKey());
+            } else {
+                storageService.deleteFile(entity.getStorageBucket(), entity.getStorageKey());
+            }
         } catch (Exception e) {
-            log.warn("S3 delete failed for key {}: {}", entity.getStorageKey(), e.getMessage());
+            log.warn("Delete failed for key {}: {}", entity.getStorageKey(), e.getMessage());
         }
 
         projectFileRepository.delete(entity);

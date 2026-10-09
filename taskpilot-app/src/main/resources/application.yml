@@ -15,8 +15,13 @@ spring:
   servlet:
     multipart:
       enabled: true
-      max-file-size: ${SPRING_MULTIPART_MAX_FILE_SIZE:25MB}
-      max-request-size: ${SPRING_MULTIPART_MAX_REQUEST_SIZE:30MB}
+      max-file-size: ${SPRING_MULTIPART_MAX_FILE_SIZE:500MB}
+      max-request-size: ${SPRING_MULTIPART_MAX_REQUEST_SIZE:500MB}
+  messages:
+    basename: i18n/messages
+    encoding: UTF-8
+    fallback-to-system-locale: false
+
   flyway:
     enabled: true
     baseline-on-migrate: true
@@ -186,6 +191,13 @@ supabase:
     document-bucket: ${SUPABASE_S3_DOCUMENT_BUCKET:documents}
     public-url: ${SUPABASE_S3_PUBLIC_URL:https://xxxx.supabase.co/storage/v1/object/public/avatars}
 
+google:
+  drive:
+    client-id: ${GOOGLE_DRIVE_CLIENT_ID:}
+    client-secret: ${GOOGLE_DRIVE_CLIENT_SECRET:}
+    refresh-token: ${GOOGLE_DRIVE_REFRESH_TOKEN:}
+    folder-id: ${GOOGLE_DRIVE_FOLDER_ID:}
+
 rag:
   embedding:
     max-rpm: ${GEMINI_EMBEDDING_MAX_RPM:80}
@@ -205,4 +217,12 @@ livekit:
   api-secret: ${LIVEKIT_API_SECRET:}
   empty-timeout-seconds: ${LIVEKIT_EMPTY_TIMEOUT_SECONDS:300}
   max-participants: ${LIVEKIT_MAX_PARTICIPANTS:15}
+
+decorator:
+  datasource:
+    p6spy:
+      enable-logging: ${P6SPY_LOGGING_ENABLED:true}
+      multiline: true
+      logging: slf4j
+      custom-format: vn.elca.training.util.P6SpySqlFormatter
 
