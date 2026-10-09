@@ -17,7 +17,11 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
+@Tag("live")
+@EnabledIfEnvironmentVariable(named = "GOOGLE_DRIVE_LIVE_TEST", matches = "true")
 public class GoogleDriveLiveCheckTest {
 
     private Map<String, String> loadEnv() {
@@ -58,10 +62,11 @@ public class GoogleDriveLiveCheckTest {
         System.out.println("Testing Google Drive with Folder ID: " + folderId);
         System.out.println("Client ID starts with: " + (clientId != null ? clientId.substring(0, Math.min(10, clientId.length())) : "null"));
 
-        assertThat(clientId).isNotBlank();
-        assertThat(clientSecret).isNotBlank();
-        assertThat(refreshToken).isNotBlank();
-        assertThat(folderId).isNotBlank();
+        org.junit.jupiter.api.Assumptions.assumeTrue(clientId != null && !clientId.isBlank()
+                        && clientSecret != null && !clientSecret.isBlank()
+                        && refreshToken != null && !refreshToken.isBlank()
+                        && folderId != null && !folderId.isBlank(),
+                "Skipping live Google Drive connectivity test: Credentials not configured in environment or .env");
 
         UserCredentials credentials = UserCredentials.newBuilder()
                 .setClientId(clientId.trim())
