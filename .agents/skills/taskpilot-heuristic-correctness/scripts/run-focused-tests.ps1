@@ -1,6 +1,6 @@
 # PowerShell script to run focused heuristic correctness tests
 param(
-    [string]$TestPattern = "ScoreRangeTest,HeuristicStrategyTest"
+    [string]$TestPattern = "ScoreRangeTest,HeuristicStrategyTest,HeuristicRankingCharacterizationTest,SkillFitSemanticsCharacterizationTest,PayloadExposureCharacterizationTest"
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,7 +19,7 @@ try {
         throw "Maven wrapper .\mvnw.cmd not found at repository root: $RepoRoot"
     }
 
-    $mvnArgs = @("test", "-pl", "taskpilot-ai", "-Dtest=$TestPattern", "-DfailIfNoTests=false")
+    $mvnArgs = @("test", "-pl", "taskpilot-ai", "-Dtest=$TestPattern", "-DfailIfNoTests=false", "-o")
     Write-Host "Executing: $mvnCmd $($mvnArgs -join ' ')" -ForegroundColor Yellow
     
     & $mvnCmd $mvnArgs
