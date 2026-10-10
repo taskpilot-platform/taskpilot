@@ -36,6 +36,7 @@ import com.taskpilot.contracts.skill.port.out.SkillPort;
 import com.taskpilot.contracts.assignment.port.out.UserPort;
 import org.springframework.context.ApplicationEventPublisher;
 import com.taskpilot.contracts.user.event.TaskAssignedEvent;
+import com.taskpilot.contracts.assignment.event.TaskCompletedLifecycleEvent;
 
 import lombok.RequiredArgsConstructor;
 
@@ -229,8 +230,7 @@ public class TaskService {
             task.setTitle(request.title());
         if (request.description() != null)
             task.setDescription(request.description());
-        if (request.status() != null)
-            task.setStatus(request.status());
+        boolean enteredDone = applyStatusTransition(task, request.status());
         if (request.priority() != null)
             task.setPriority(request.priority());
         if (request.position() != null)
@@ -257,6 +257,8 @@ public class TaskService {
             task.setDueDate(request.dueDate());
 
         taskRepository.save(task);
+
+        publishCompletionEventIfEnteredDone(enteredDone, task);
 
         if (request.labelIds() != null) {
             List<Long> distinctLabelIds = request.labelIds().stream().distinct().toList();
@@ -344,10 +346,12 @@ public class TaskService {
         projectSecurityService.validateMember(task.getProjectId(), userId);
         projectSecurityService.validateProjectNotArchived(task.getProjectId());
 
-        task.setStatus(request.status());
+        boolean enteredDone = applyStatusTransition(task, request.status());
         task.setPosition(request.position());
 
         taskRepository.save(task);
+
+        publishCompletionEventIfEnteredDone(enteredDone, task);
         return mapToDtoWithLabels(task);
     }
 
@@ -373,5 +377,32 @@ public class TaskService {
         task.setSprintId(request.sprintId());
         taskRepository.save(task);
         return mapToDtoWithLabels(task);
+    }
+
+    private boolean applyStatusTransition(TaskEntity task, TaskStatus newStatus) {
+        if (newStatus != null && !newStatus.equals(task.getStatus())) {
+            TaskStatus oldStatus = task.getStatus();
+            task.setStatus(newStatus);
+            if (newStatus == TaskStatus.DONE && oldStatus != TaskStatus.DONE) {
+                if (task.getCompletedAt() == null) {
+                    task.setCompletedAt(Instant.now());
+                }
+                return true;
+            } else if (newStatus != TaskStatus.DONE && oldStatus == TaskStatus.DONE) {
+                task.setCompletedAt(null);
+            }
+        }
+        return false;
+    }
+
+    private void publishCompletionEventIfEnteredDone(boolean enteredDone, TaskEntity task) {
+        if (enteredDone) {
+            eventPublisher.publishEvent(new TaskCompletedLifecycleEvent(
+                    task.getId(),
+                    task.getProjectId(),
+                    task.getAssigneeId(),
+                    task.getCompletedAt(),
+                    task.getDueDate()));
+        }
     }
 }

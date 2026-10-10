@@ -478,3 +478,54 @@ Statuses in this register are unambiguous:
     - `TD-P2C-WORKLOAD-QUERY-PORT-SEPARATION`:
       - Detail: The measured workload query is temporarily placed on `ProjectMemberPort` to avoid circular module dependencies between `taskpilot-projects` and `taskpilot-ai`.
       - Exit Condition: In a future module decoupling phase, extract a dedicated `WorkloadQueryPort` in `taskpilot-contracts`.
+
+---
+
+### Decision H-023: Minimal Task Outcome Foundation (Phase 2D)
+- **Status**: `IMPLEMENTED`
+- **Context & Purpose**:
+  - Implements a minimal, reproducible task-outcome record linking:
+    `recommendation snapshot → PM terminal decision → assigned task → observed completion outcome`.
+  - Phase 2D answers:
+    - Was the task completed?
+    - Was it completed on time or late?
+    - When was the outcome observed?
+    - Which snapshot and PM decision led to the assignment?
+    - Is the outcome valid enough for a future Adaptive dataset?
+  - Phase 2D does NOT calculate employee performance scores, delivery reliability scores, or Adaptive weights.
+- **Decision & Invariants**:
+  - **Outcome Types & Strict Semantics**:
+    - **Production Deadline Type & Rule**:
+      - Production declaration: `TaskEntity.dueDate` is `Instant` (matches `TaskCompletedLifecycleEvent.dueDate` and `RecommendationTaskOutcomeEntity.dueAt`).
+      - Direct instant timestamp comparison is used without calendar-day conversion:
+        - `completedAt <= dueDate` → `COMPLETED_ON_TIME` (completed before or exactly at deadline).
+        - `completedAt > dueDate` → `COMPLETED_LATE` (completed after deadline).
+    - `INCOMPLETE_OVERDUE`: Task not completed (`status != DONE`) and `observedAt > dueAt` (deadline passed). Evaluated on demand only; no background scheduler.
+    - `NOT_YET_OBSERVABLE`: Task not completed (`status != DONE`) and deadline not passed or not set. Evaluated on demand only; absence of outcome means unknown.
+    - `EXCLUDED`: Excluded from learning outcomes. Specific reasons:
+      - `MISSING_DUE_DATE`: Completed task without `dueDate` (missing due date is not treated as failure or late).
+      - `MISSING_COMPLETION_TIMESTAMP`: Completed task without `completedAt` timestamp.
+      - `ASSIGNEE_MISMATCH`: Final assigned task member does not match the decision's `selectedCandidateId`.
+  - **Linkage Integrity & Non-Assignment Decisions**:
+    - `snapshotId`, `decisionId`, `projectId`, and `taskId` must strictly agree. Mismatches are rejected.
+    - Non-assignment decisions (`REJECTED`, `CANCELED`, `EXPIRED`) produce no assignment outcome.
+    - `UNOBSERVED` snapshots produce no learning outcome.
+    - Minimal task outcome is deadline-based operational evidence about an assignment result, not a direct employee performance score.
+  - **Capture Boundary & Execution Ordering**:
+    - Boundary: Task transitions to `DONE` status in `TaskService` → commits task transaction.
+    - Strict Post-Commit Listener: `TaskOutcomeEventListener` uses `@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)` without fallback execution (`fallbackExecution = false`).
+      - No active transaction → listener creates no outcome.
+      - Rolled-back task transaction → listener creates no outcome.
+      - Committed task transaction → listener invokes outcome persistence.
+    - Isolated Outcome Transaction: Outcome persistence executes in an isolated `@Transactional(propagation = Propagation.REQUIRES_NEW)` across a separate Spring-managed bean boundary without self-invocation.
+    - Deduplication: Unique constraint `uk_task_outcomes_decision_task` on `(decision_id, task_id)` prevents duplicate final outcomes.
+    - Authorization: Project membership required for read access; actor identity comes from authenticated context; zero PII or internal ranking scores stored or returned.
+  - **Accepted Technical Debt**:
+    - `TD-P2D-OUTCOME-PERSISTENCE-AFTER-TASK-COMPLETION`:
+      - Risk: A task may complete successfully while its outcome record is missing if secondary telemetry persistence fails.
+      - Mitigation: Task state update commits first; outcome persistence failure is caught and logged without failing the task update. Future dataset building excludes decisions without valid outcome evidence. Log `taskId`, `snapshotId`, `decisionId`, and outcome type without PII.
+      - Exit Condition: Add an outbox or reconciliation process before production Adaptive dataset collection. Do not implement an outbox in Phase 2D.
+    - `TD-P2D-REOPEN-HISTORY`:
+      - Risk: Reopened tasks (`DONE` -> non-`DONE`) retain historical outcome from first completion. If task is re-completed later, the original outcome record for `(decision, task)` is preserved and not overwritten.
+      - Mitigation: Truthful and bounded reopen behavior: on reopen, `completedAt` is cleared on `tasks` table, but the original outcome record is kept immutable. First stored outcome for `(decision, task)` pair represents original assignment fulfillment. Re-completion does not overwrite existing outcome record.
+      - Exit Condition: A future phase may add multi-cycle lifecycle outcome versioning if iterative rework modeling is required.
