@@ -161,6 +161,10 @@ public class HeuristicConfigProvider {
             HeuristicNormalization load = HeuristicNormalization.fromString(
                     valueAsString(modeMap.getOrDefault("load", "BENCHMARK_BENEFIT")),
                     mode + ".load");
+            if (load == HeuristicNormalization.BENCHMARK_COST) {
+                throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR.value(),
+                        "Invalid heuristic normalization for " + mode + ": BENCHMARK_COST is incompatible with subtractive workload scoring (H-003)");
+            }
             HeuristicNormalization perf = HeuristicNormalization.fromString(
                     valueAsString(modeMap.getOrDefault("perf", "BENCHMARK_BENEFIT")),
                     mode + ".perf");

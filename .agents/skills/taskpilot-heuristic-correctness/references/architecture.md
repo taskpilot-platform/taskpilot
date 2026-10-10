@@ -48,8 +48,8 @@ This document maps the end-to-end execution flow of task assignment recommendati
 8. Candidate Ranking & Contract Partitioning (H-010, H-012)
    ├── Derives fixed-point rankingKey = Math.round(fullPrecisionScore * 1_000_000_000L) (1e9 scale validated in Phase 0)
    ├── Sorts by: (1) rankingKey descending, (2) raw Fit descending, (3) userId ascending
-   ├── When ranking keys, raw Skill Fit, and other evidence cannot distinguish candidates, assign INSUFFICIENT_TO_DIFFERENTIATE status (H-013)
-   ├── Tags scoringModelVersion = "relative-explanation-safe-v2" (mandatory in serialized contract/logs; optional in prominent PM display) (H-014, H-015)
+   ├── When raw Skill Fit cannot distinguish candidates (or differences stem solely from UNVERIFIED workload or DEFAULT performance), assign INSUFFICIENT_TO_DIFFERENTIATE status (H-013 amended)
+   ├── Tags presentationContractVersion = "allowlisted-view-v1", scoringModelVersion = "relative-rounded-v1" (mandatory in serialized contract/logs; optional in prominent PM display) (H-014, H-015)
    └── Assembles allowlisted user-facing view (omits internal ranking state, totalScore, confidence, email, internal IDs) (H-016)
    │
    ▼

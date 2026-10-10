@@ -9,7 +9,7 @@ public record RecommendAndAssignResult(
         Long selectedMemberId,
         String selectedMemberName,
         String reason,
-        AutoAssignmentResponse recommendation,
+        RecommendationView recommendation,
         TaskAssignmentResultDto assignment,
         String message) {
 }

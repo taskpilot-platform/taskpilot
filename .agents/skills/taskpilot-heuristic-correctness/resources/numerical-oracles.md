@@ -176,11 +176,12 @@
 
 ---
 
-## N-015: Scoring Model Version
+## N-015: Presentation Contract and Scoring Model Version
 - **Expected Contract**:
-  - New Phase 1 recommendation outputs include:
-    $$\text{scoringModelVersion} = \text{"relative-explanation-safe-v2"}$$
-  - `scoringModelVersion` is mandatory in serialized recommendation contract, persisted tool-output logs where applicable, and future structured snapshots.
+  - New Phase 1 B1 recommendation outputs include:
+    $$\text{presentationContractVersion} = \text{"allowlisted-view-v1"}$$
+    $$\text{scoringModelVersion} = \text{"relative-rounded-v1"}$$
+  - `presentationContractVersion` and `scoringModelVersion` are mandatory in serialized recommendation contract, persisted tool-output logs where applicable, and future structured snapshots.
   - Prominent PM-facing display is optional (it may appear only in expandable technical details unless business requirements approve primary display).
 - **Governing Decision**: H-014, H-015 (`APPROVED_FOR_PHASE_1`).
 

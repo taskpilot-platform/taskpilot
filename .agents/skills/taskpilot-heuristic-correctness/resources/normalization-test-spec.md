@@ -37,7 +37,7 @@ This specification defines the 30 required test suites and scenarios for verifyi
 14. **Reversed Input Ordering (N-010)**: Verify that submitting candidates in reversed order yields identical final ranking.
 15. **Raw Fit Tie-Break**: Verify that when fixed-point ranking keys are identical, candidates are ordered by raw Skill Fit descending.
 16. **userId Final Tie-Break**: Verify that when ranking keys and raw Fit are identical, candidates are ordered deterministically by `userId` ascending.
-17. **Full Tie Explanation State (H-013)**: Verify that `INSUFFICIENT_TO_DIFFERENTIATE` applies only when internal ranking keys are equal, raw Skill Fit values are equal or unavailable, and all other business evidence is identical (`userId` ordering is the only remaining distinction). A ranking-key tie with different raw Skill Fit is not a full business tie.
+17. **Full Tie Explanation State (H-013 amended)**: Verify that `INSUFFICIENT_TO_DIFFERENTIATE` applies when candidates cannot be meaningfully distinguished (raw Skill Fit values are equal, unavailable, or below $10^9$ quantization; unverified workload or default performance alone do not differentiate).
 18. **Missing Member Skills (F3)**: Verify that an empty member skill profile results in data status `INSUFFICIENT_DATA`.
 19. **Missing Task-Required Skills (F4, F5)**: Verify that empty/null task requirements yield data status `INSUFFICIENT_DATA` rather than claims of perfect match.
 20. **Measured Zero Match (F2)**: Verify that zero matching skills among available skills yields data status `MEASURED` with value 0.0.
@@ -45,7 +45,7 @@ This specification defines the 30 required test suites and scenarios for verifyi
 22. **UNVERIFIED Workload Wording (N-013)**: Verify that unverified workload is accompanied by approved wording `"Chưa có dữ liệu workload đáng tin cậy"`.
 23. **Payload Allowlist (H-010, H-016)**: Verify that any object containing internal ranking state is not serialized directly into user-facing AI tool output. `CandidateScore` currently mixes internal ranking and presentation concerns; Phase 1 establishes an allowlisted presentation boundary.
 24. **confidenceScore Omitted from View (H-019)**: Verify that `confidenceScore` is completely excluded from user-facing allowlisted view.
-25. **scoringModelVersion Present (H-014, H-015)**: Verify that new recommendation outputs contain `scoringModelVersion = "relative-explanation-safe-v2"`. `scoringModelVersion` is mandatory in serialized recommendation contract, persisted tool-output logs, and future structured snapshots; prominent PM-facing display is optional.
+25. **scoringModelVersion and presentationContractVersion Present (H-014, H-015)**: Verify that new recommendation outputs contain `presentationContractVersion = "allowlisted-view-v1"` and `scoringModelVersion = "relative-rounded-v1"`. Both versions are mandatory in serialized recommendation contract, persisted tool-output logs, and future structured snapshots; prominent PM-facing display is optional.
 26. **Invalid Workload Normalization Rejected (N-002)**: Verify that combining `BENCHMARK_COST` with subtractive scoring fails closed or throws validation exception.
 27. **Missing heuristic.weights Behavior Characterized Separately**: Characterize the HTTP 500 `BusinessException` thrown when system settings are missing (source-proven in `references/current-runtime.md`).
 28. **No Shared Database (N-007)**: Verify that tests execute purely in memory without reading or writing database records.

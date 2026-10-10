@@ -1,0 +1,36 @@
+{
+  "projectId": 100,
+  "requiredSkills": [
+    "Java",
+    "Spring Boot"
+  ],
+  "candidates": [
+    {
+      "rank": 1,
+      "candidateId": 10,
+      "displayName": "Alice Engineer",
+      "presentationFitValue": 0.85,
+      "fitStatus": "MEASURED",
+      "storedWorkloadValue": 20,
+      "workloadStatus": "UNVERIFIED",
+      "performanceStatus": "DEFAULT",
+      "memberStatus": "AVAILABLE"
+    },
+    {
+      "rank": 2,
+      "candidateId": 20,
+      "displayName": "Bob Developer",
+      "presentationFitValue": 0.6,
+      "fitStatus": "MEASURED",
+      "storedWorkloadValue": 45,
+      "workloadStatus": "UNVERIFIED",
+      "performanceStatus": "DEFAULT",
+      "memberStatus": "AVAILABLE"
+    }
+  ],
+  "differentiationStatus": "DIFFERENTIATED",
+  "presentationContractVersion": "allowlisted-view-v1",
+  "scoringModelVersion": "relative-neutral-fixed-point-v2",
+  "heuristicMode": "BALANCED",
+  "aiExplanation": "Alice Engineer is recommended at rank 1 with 85% skill fit (MEASURED). Stored workload value is unverified and performance is default."
+}

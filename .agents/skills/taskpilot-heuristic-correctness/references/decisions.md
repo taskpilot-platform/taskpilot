@@ -237,7 +237,12 @@ Statuses in this register are unambiguous:
 
 ### Decision H-013: Full-tie recommendation semantics
 - **Status**: `APPROVED_FOR_PHASE_1`
-- **Decision**:
+- **Amended**: 2026-10-10
+- **Reason**:
+  The original wording conflated internal ranking-key differences with meaningful user-facing differentiation, even when the difference came only from UNVERIFIED workload or DEFAULT performance.
+- **Revised contract**:
+  Use deterministic ranking internally, but derive user-facing differentiation only from MEASURED Skill Fit or another explicitly trusted criterion.
+- **Original Decision**:
   - Deterministic ordering is required even when available evidence cannot meaningfully distinguish candidates.
   - `INSUFFICIENT_TO_DIFFERENTIATE` applies only when:
     - internal ranking keys are equal;
@@ -255,14 +260,19 @@ Statuses in this register are unambiguous:
 
 ---
 
-### Decision H-014: Scoring model versioning
+### Decision H-014: Scoring model and presentation contract versioning
 - **Status**: `APPROVED_FOR_PHASE_1`
+- **In-Place Amendment Note**:
+  - In Phase 1 B1, the user-facing presentation boundary is decoupled from the underlying ranking engine.
+  - User-facing presentation contract version: `presentationContractVersion = "allowlisted-view-v1"`.
+  - Underlying candidate scoring model version:
+    - Phase 1 B1 (unmodified relative rounded scoring): `scoringModelVersion = "relative-rounded-v1"`.
+    - Future Step A (fixed-point neutral tie-breaking): `scoringModelVersion = "relative-neutral-fixed-point-v2"`.
+  - The legacy draft token `relative-explanation-safe-v2` is superseded and purged.
 - **Decision**:
-  - Every new recommendation output produced after Phase 1 must identify its scoring contract version.
-  - Phase 1 version: `relative-explanation-safe-v2`.
-  - Minimum payload field: `scoringModelVersion`.
-  - `scoringModelVersion` is mandatory in:
-    - serialized recommendation contract;
+  - Every new recommendation output produced after Phase 1 B1 must identify its presentation contract version (`presentationContractVersion`) and scoring model version (`scoringModelVersion`).
+  - Mandatory in:
+    - serialized recommendation contract (`RecommendationView`);
     - persisted tool-output logs where applicable;
     - future structured snapshots.
   - Prominent PM-facing display is optional. It may appear only in expandable technical details unless business requirements approve primary display.

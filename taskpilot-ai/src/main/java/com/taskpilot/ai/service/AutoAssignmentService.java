@@ -3,6 +3,11 @@ package com.taskpilot.ai.service;
 import com.taskpilot.ai.assignment.port.out.AiAuditPort;
 import com.taskpilot.ai.dto.AutoAssignmentResponse;
 import com.taskpilot.ai.dto.CandidateScore;
+import com.taskpilot.ai.dto.InternalCandidateRanking;
+import com.taskpilot.ai.dto.MetricDataStatus;
+import com.taskpilot.ai.dto.RecommendationDifferentiationStatus;
+import com.taskpilot.ai.dto.RecommendationView;
+import com.taskpilot.ai.dto.RecommendedCandidateView;
 import com.taskpilot.ai.entity.AiLogEntity;
 import com.taskpilot.ai.heuristic.HeuristicStrategy;
 import com.taskpilot.ai.heuristic.HeuristicStrategyFactory;
@@ -44,7 +49,7 @@ import org.springframework.beans.factory.annotation.Value;
 public class AutoAssignmentService {
     public static final long DEFAULT_EXPLANATION_TIMEOUT_MS = 5000L;
     public static final String DEFAULT_FALLBACK_EXPLANATION =
-            "Đề xuất tự động dựa trên phân tích đa tiêu chí AHP, bao gồm mức độ phù hợp kỹ năng, khối lượng công việc và hiệu suất lịch sử. Vui lòng tham khảo điểm số chi tiết của các ứng viên ở trên.";
+            "Đề xuất dựa trên phân tích mức độ phù hợp kỹ năng và các tiêu chí phân công. Dữ liệu khối lượng công việc hiện chưa có chứng thực độc lập và hiệu suất ở mức mặc định ban đầu.";
 
     private final ProjectMemberPort projectMemberPort;
     private final UserSkillPort userSkillPort;
@@ -132,6 +137,27 @@ public class AutoAssignmentService {
                 .build();
     }
 
+    public void validateProjectMembership(Long projectId, Long userId) {
+        if (projectId == null) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Project ID is required");
+        }
+        if (userId == null || !projectMemberPort.isProjectMember(projectId, userId)) {
+            throw new BusinessException(HttpStatus.FORBIDDEN.value(),
+                    "User " + userId + " is not authorized to view recommendations for project " + projectId);
+        }
+    }
+
+    public void validateProjectManager(Long projectId, Long userId) {
+        if (projectId == null) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Project ID is required");
+        }
+        if (userId == null || !projectMemberPort.isProjectMember(projectId, userId)
+                || !projectMemberPort.isProjectManager(projectId, userId)) {
+            throw new BusinessException(HttpStatus.FORBIDDEN.value(),
+                    "User " + userId + " is not authorized as MANAGER for project " + projectId);
+        }
+    }
+
     @Transactional(readOnly = true)
     public AutoAssignmentResponse recommendCandidates(Long projectId, List<String> requiredSkills,
             int taskDifficulty, Long requestingUserId) {
@@ -182,6 +208,181 @@ public class AutoAssignmentService {
                 .build();
     }
 
+    @Transactional(readOnly = true)
+    public RecommendationView recommendView(Long projectId, List<String> requiredSkills,
+            int taskDifficulty, Long requestingUserId) {
+        RecommendationView base = recommendCandidatesView(projectId, requiredSkills, taskDifficulty, requestingUserId, Set.of(), Set.of());
+        if (base.candidates() == null || base.candidates().isEmpty()) {
+            return base;
+        }
+
+        List<RecommendedCandidateView> top3 = base.candidates().stream().limit(3).toList();
+        String explanation = generateExplanationForView(top3, base.requiredSkills(), taskDifficulty,
+                base.differentiationStatus(), requestingUserId, projectId);
+
+        saveAutoAssignLog(requestingUserId, projectId, base.requiredSkills(), base.candidates(), explanation);
+
+        return RecommendationView.builder()
+                .projectId(base.projectId())
+                .requiredSkills(base.requiredSkills())
+                .heuristicMode(base.heuristicMode())
+                .differentiationStatus(base.differentiationStatus())
+                .candidates(base.candidates())
+                .aiExplanation(explanation)
+                .presentationContractVersion(base.presentationContractVersion())
+                .scoringModelVersion(base.scoringModelVersion())
+                .build();
+    }
+
+    @Transactional(readOnly = true)
+    public RecommendationView recommendCandidatesView(Long projectId, List<String> requiredSkills,
+            int taskDifficulty, Long requestingUserId, Set<Long> includeUserIds, Set<Long> excludeUserIds) {
+        validateProjectMembership(projectId, requestingUserId);
+        List<String> safeRequiredSkills = requiredSkills == null ? Collections.emptyList() : requiredSkills;
+        String mode = resolveHeuristicMode(projectId);
+        HeuristicStrategy strategy = heuristicStrategyFactory.resolve(mode);
+        List<ProjectMemberDto> members = projectMemberPort.findProjectMembers(projectId);
+        Set<Long> safeIncludeUserIds = includeUserIds == null ? Set.of() : includeUserIds;
+        Set<Long> safeExcludeUserIds = excludeUserIds == null ? Set.of() : excludeUserIds;
+        if (!safeIncludeUserIds.isEmpty() || !safeExcludeUserIds.isEmpty()) {
+            members = members.stream()
+                    .filter(member -> safeIncludeUserIds.isEmpty() || safeIncludeUserIds.contains(member.userId()))
+                    .filter(member -> !safeExcludeUserIds.contains(member.userId()))
+                    .toList();
+        }
+
+        if (members.isEmpty()) {
+            return RecommendationView.builder().projectId(projectId)
+                    .requiredSkills(safeRequiredSkills)
+                    .candidates(Collections.emptyList())
+                    .differentiationStatus(RecommendationDifferentiationStatus.UNKNOWN)
+                    .presentationContractVersion(RecommendationView.PRESENTATION_CONTRACT_VERSION)
+                    .scoringModelVersion(RecommendationView.SCORING_MODEL_VERSION)
+                    .heuristicMode(mode)
+                    .aiExplanation("No matching members found in this project.")
+                    .build();
+        }
+
+        List<InternalCandidateRanking> internalRankings = computeInternalCandidates(
+                members, safeRequiredSkills, strategy, mode);
+
+        if (internalRankings.isEmpty()) {
+            return RecommendationView.builder().projectId(projectId)
+                    .requiredSkills(safeRequiredSkills)
+                    .candidates(Collections.emptyList())
+                    .differentiationStatus(RecommendationDifferentiationStatus.UNKNOWN)
+                    .presentationContractVersion(RecommendationView.PRESENTATION_CONTRACT_VERSION)
+                    .scoringModelVersion(RecommendationView.SCORING_MODEL_VERSION)
+                    .heuristicMode(mode)
+                    .aiExplanation("No eligible members are currently available for assignment.")
+                    .build();
+        }
+
+        RecommendationDifferentiationStatus differentiationStatus = evaluateDifferentiationStatus(internalRankings);
+
+        List<RecommendedCandidateView> candidateViews = new ArrayList<>(internalRankings.size());
+        int rank = 1;
+        for (InternalCandidateRanking ic : internalRankings) {
+            candidateViews.add(ic.toView(rank++));
+        }
+
+        return RecommendationView.builder().projectId(projectId)
+                .requiredSkills(safeRequiredSkills)
+                .candidates(candidateViews)
+                .differentiationStatus(differentiationStatus)
+                .presentationContractVersion(RecommendationView.PRESENTATION_CONTRACT_VERSION)
+                .scoringModelVersion(RecommendationView.SCORING_MODEL_VERSION)
+                .heuristicMode(mode)
+                .aiExplanation(null)
+                .build();
+    }
+
+    public static RecommendationDifferentiationStatus evaluateDifferentiationStatus(List<InternalCandidateRanking> internalRankings) {
+        if (internalRankings == null || internalRankings.size() <= 1) {
+            return RecommendationDifferentiationStatus.UNKNOWN;
+        }
+        boolean anyMissingMeasuredFit = internalRankings.stream()
+                .anyMatch(c -> c.fitStatus() != MetricDataStatus.MEASURED);
+        if (anyMissingMeasuredFit) {
+            return RecommendationDifferentiationStatus.INSUFFICIENT_TO_DIFFERENTIATE;
+        }
+        double firstFit = internalRankings.get(0).rankingRawFit();
+        boolean allFitEqual = internalRankings.stream()
+                .allMatch(c -> Math.abs(c.rankingRawFit() - firstFit) < 1e-9);
+        return allFitEqual
+                ? RecommendationDifferentiationStatus.INSUFFICIENT_TO_DIFFERENTIATE
+                : RecommendationDifferentiationStatus.DIFFERENTIATED;
+    }
+
+    public List<InternalCandidateRanking> computeInternalCandidates(
+            List<ProjectMemberDto> members,
+            List<String> requiredSkills,
+            HeuristicStrategy strategy,
+            String mode) {
+        List<RawCandidate> rawCandidates = members.stream()
+                .map(member -> userPort.findById(member.userId())
+                        .map(user -> buildRawCandidate(user, member.performanceScore(), requiredSkills))
+                        .orElse(null))
+                .filter(Objects::nonNull)
+                .toList();
+
+        if (rawCandidates.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<RawScores> rawScores = rawCandidates.stream().map(RawCandidate::rawScores).toList();
+        ScoreRanges ranges = ScoreRanges.from(rawScores);
+
+        return rawCandidates.stream()
+                .map(raw -> buildInternalCandidateRanking(raw, strategy, ranges, mode, requiredSkills))
+                .sorted(InternalCandidateRanking.STEP_A_COMPARATOR)
+                .collect(Collectors.toList());
+    }
+
+    private InternalCandidateRanking buildInternalCandidateRanking(
+            RawCandidate raw,
+            HeuristicStrategy strategy,
+            ScoreRanges ranges,
+            String mode,
+            List<String> requiredSkills) {
+        NormalizedScores normalized = strategy.normalizeNeutral(raw.rawScores(), ranges);
+        double totalScore = strategy.score(normalized);
+        long rankingKey = Math.round(totalScore * 1_000_000_000L);
+
+        MetricDataStatus fitStatus;
+        Double presentationFitValue;
+        if (requiredSkills == null || requiredSkills.isEmpty()) {
+            fitStatus = MetricDataStatus.INSUFFICIENT_DATA;
+            presentationFitValue = null;
+        } else if (!raw.hasUserSkills()) {
+            fitStatus = MetricDataStatus.INSUFFICIENT_DATA;
+            presentationFitValue = null;
+        } else {
+            fitStatus = MetricDataStatus.MEASURED;
+            presentationFitValue = raw.rawScores().fit();
+        }
+
+        return InternalCandidateRanking.builder()
+                .userId(raw.user().id())
+                .fullName(raw.user().fullName())
+                .email(raw.user().email())
+                .rankingRawFit(raw.rawScores().fit())
+                .presentationFitValue(presentationFitValue)
+                .storedWorkloadValue(raw.currentWorkload())
+                .derivedPerformanceInput(raw.rawScores().performance())
+                .normalizedScores(normalized)
+                .fullPrecisionScore(totalScore)
+                .rankingKey(rankingKey)
+                .roundedScore(round2(totalScore))
+                .confidence(raw.confidence())
+                .status(raw.user().status())
+                .heuristicMode(mode)
+                .fitStatus(fitStatus)
+                .workloadStatus(MetricDataStatus.UNVERIFIED)
+                .performanceStatus(MetricDataStatus.DEFAULT)
+                .build();
+    }
+
     private List<CandidateScore> computeCandidates(
             List<ProjectMemberDto> members,
             List<String> requiredSkills,
@@ -222,7 +423,7 @@ public class AutoAssignmentService {
                 projectPerformancePrior);
 
         return new RawCandidate(user, new RawScores(fitScore, loadScore, performanceSnapshot.performanceScore()),
-                performanceSnapshot.confidence(), workload);
+                performanceSnapshot.confidence(), workload, userSkills != null && !userSkills.isEmpty());
     }
 
     private CandidateScore buildCandidateScore(RawCandidate raw,
@@ -369,31 +570,82 @@ public class AutoAssignmentService {
      * 5. Invariant: Heuristic candidate scoring occurs prior to this method and is completely decoupled from
      *    LLM availability.
      */
-    private String generateExplanation(List<CandidateScore> top3, List<String> requiredSkills,
-            int taskDifficulty, Long userId, Long projectId) {
-        try {
-            StringBuilder candidateInfo = new StringBuilder();
-            for (int i = 0; i < top3.size(); i++) {
-                CandidateScore c = top3.get(i);
+    public String buildExplanationPrompt(
+            List<RecommendedCandidateView> candidates,
+            List<String> requiredSkills,
+            int taskDifficulty,
+            RecommendationDifferentiationStatus differentiationStatus) {
+        StringBuilder candidateInfo = new StringBuilder();
+        if (candidates != null) {
+            for (RecommendedCandidateView c : candidates) {
+                String fitDisplay;
+                if (c.fitStatus() == MetricDataStatus.MEASURED && c.presentationFitValue() != null) {
+                    fitDisplay = String.format("%.0f%% (MEASURED)", c.presentationFitValue() * 100);
+                } else if (c.fitStatus() == MetricDataStatus.INSUFFICIENT_DATA) {
+                    fitDisplay = "Chưa có dữ liệu kỹ năng (INSUFFICIENT_DATA)";
+                } else {
+                    fitDisplay = "Chưa xác thực (UNVERIFIED)";
+                }
+
+                String workloadDisplay;
+                if (c.storedWorkloadValue() != null) {
+                    workloadDisplay = String.format("%d điểm (UNVERIFIED: Chưa có dữ liệu workload đáng tin cậy)", c.storedWorkloadValue());
+                } else {
+                    workloadDisplay = "Chưa có dữ liệu workload đáng tin cậy (UNVERIFIED)";
+                }
+
+                String performanceDisplay = "Mặc định 0.50 (DEFAULT: Chưa đủ dữ liệu hiệu suất)";
+
                 candidateInfo.append(String.format(
-                        "%d. %s (Fit: %.0f%%, Load: %.0f%%, Performance: %.0f%%, Total: %.2f, Mode: %s)\n",
-                        i + 1, c.getFullName(), c.getFitScore() * 100, c.getLoadScore() * 100,
-                        c.getPerformanceScore() * 100,
-                        c.getTotalScore(),
-                        c.getHeuristicMode()));
-                candidateInfo.append(String.format("   Status: %s, Confidence: %.0f%%%n",
-                        c.getStatus(), c.getConfidenceScore() * 100));
+                        "%d. %s (Trạng thái: %s)\n" +
+                        "   - Phù hợp kỹ năng: %s\n" +
+                        "   - Khối lượng công việc lưu trữ: %s\n" +
+                        "   - Hiệu suất: %s\n",
+                        c.rank(),
+                        c.displayName(),
+                        c.memberStatus() != null ? c.memberStatus() : "AVAILABLE",
+                        fitDisplay,
+                        workloadDisplay,
+                        performanceDisplay));
             }
-            String prompt = String.format(
-                    """
-                            Based on the Heuristic scoring analysis for a task requiring skills [%s] with difficulty level %d/10:
-                            Top candidates:
-                            %s
-                            Please provide a concise explanation (2-3 sentences per candidate) of why each person is recommended,
-                            highlighting their strengths and any considerations the project manager should be aware of.
-                            Respond in the same language as the task context.
-                            """,
-                    String.join(", ", requiredSkills), taskDifficulty, candidateInfo);
+        }
+
+        String diffNotice = "";
+        if (differentiationStatus == RecommendationDifferentiationStatus.INSUFFICIENT_TO_DIFFERENTIATE) {
+            diffNotice = "\nLƯU Ý QUAN TRỌNG: Các ứng viên có điểm số tương đương nhau. Dữ liệu hiện tại KHÔNG ĐỦ để phân biệt ai vượt trội hơn. Tuyệt đối KHÔNG khẳng định ứng viên nào là 'tốt nhất' hoặc 'vượt trội'.\n";
+        }
+
+        return String.format(
+                """
+                Dựa trên phân tích phân công công việc cho nhiệm vụ yêu cầu kỹ năng [%s] (độ khó: %d/10):
+                Danh sách ứng viên:
+                %s
+                %s
+                Yêu cầu giải thích:
+                1. Đưa ra nhận xét ngắn gọn (2-3 câu mỗi ứng viên) về sự phù hợp.
+                2. KHÔNG khẳng định ứng viên có 'hiệu suất lịch sử xuất sắc' vì dữ liệu hiệu suất chỉ là mức mặc định (DEFAULT: Chưa đủ dữ liệu hiệu suất).
+                3. KHÔNG khẳng định ứng viên 'hoàn toàn rảnh rỗi' từ khối lượng công việc lưu trữ (UNVERIFIED: Chưa có dữ liệu workload đáng tin cậy).
+                4. Nếu kỹ năng là INSUFFICIENT_DATA, ghi rõ chưa đủ dữ liệu kỹ năng để đánh giá.
+                5. Phản hồi bằng tiếng Việt ngắn gọn, chuyên nghiệp.
+                """,
+                String.join(", ", requiredSkills != null ? requiredSkills : Collections.emptyList()),
+                taskDifficulty,
+                candidateInfo.toString(),
+                diffNotice);
+    }
+
+    public String generateExplanationForView(
+            List<RecommendedCandidateView> candidates,
+            List<String> requiredSkills,
+            int taskDifficulty,
+            RecommendationDifferentiationStatus differentiationStatus,
+            Long userId,
+            Long projectId) {
+        if (candidates == null || candidates.isEmpty()) {
+            return DEFAULT_FALLBACK_EXPLANATION;
+        }
+        try {
+            String prompt = buildExplanationPrompt(candidates, requiredSkills, taskDifficulty, differentiationStatus);
             CompletableFuture<String> future = new CompletableFuture<>();
             StringBuilder fullResponse = new StringBuilder();
             explanationModel.chat(List.of(SystemMessage.from(
@@ -436,8 +688,36 @@ public class AutoAssignmentService {
         }
     }
 
+    private String generateExplanation(List<CandidateScore> top3, List<String> requiredSkills,
+            int taskDifficulty, Long userId, Long projectId) {
+        if (top3 == null || top3.isEmpty()) {
+            return DEFAULT_FALLBACK_EXPLANATION;
+        }
+        List<RecommendedCandidateView> candidateViews = new ArrayList<>();
+        int rank = 1;
+        boolean hasReqs = requiredSkills != null && !requiredSkills.isEmpty();
+        for (CandidateScore cs : top3) {
+            candidateViews.add(RecommendedCandidateView.builder()
+                    .rank(rank++)
+                    .candidateId(cs.getUserId())
+                    .displayName(cs.getFullName())
+                    .presentationFitValue(hasReqs ? cs.getFitScore() : null)
+                    .fitStatus(hasReqs ? MetricDataStatus.MEASURED : MetricDataStatus.INSUFFICIENT_DATA)
+                    .storedWorkloadValue(cs.getCurrentWorkload())
+                    .workloadStatus(MetricDataStatus.UNVERIFIED)
+                    .performanceStatus(MetricDataStatus.DEFAULT)
+                    .memberStatus(cs.getStatus() != null ? cs.getStatus() : "AVAILABLE")
+                    .build());
+        }
+        return generateExplanationForView(candidateViews, requiredSkills, taskDifficulty,
+                RecommendationDifferentiationStatus.UNKNOWN, userId, projectId);
+    }
+
     private void saveAutoAssignLog(Long userId, Long projectId, List<String> requiredSkills,
-            List<CandidateScore> candidates, String explanation) {
+            Object toolOutput, String explanation) {
+        if (aiAuditPort == null) {
+            return;
+        }
         try {
             String actualModel = (explanation != null && !explanation.equals(DEFAULT_FALLBACK_EXPLANATION))
                     ? explanationModelName
@@ -445,7 +725,7 @@ public class AutoAssignmentService {
             AiLogEntity log = AiLogEntity.builder().userId(userId).projectId(projectId)
                     .request("Auto-assignment request for skills: " + requiredSkills)
                     .response(explanation).actionTaken("autoAssignCandidates")
-                    .toolOutput(candidates).humanFeedback("PENDING").modelUsed(actualModel)
+                    .toolOutput(toolOutput).humanFeedback("PENDING").modelUsed(actualModel)
                     .build();
             aiAuditPort.save(log);
         } catch (Exception e) {
@@ -454,7 +734,7 @@ public class AutoAssignmentService {
     }
 
     private record RawCandidate(UserProfileDto user, RawScores rawScores, double confidence,
-            int currentWorkload) {
+            int currentWorkload, boolean hasUserSkills) {
     }
 
     private record PerformanceSnapshot(double performanceScore, double confidence) {

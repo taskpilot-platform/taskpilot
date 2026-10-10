@@ -51,7 +51,7 @@ This document defines the mandatory verification gates and rules required to val
   - `confidenceScore` is completely absent from user-facing views (H-019).
   - Relative `totalScore` is completely absent from user-facing views.
   - User `email` is absent unless explicitly approved and required.
-  - `scoringModelVersion` is mandatory in serialized recommendation contract, persisted tool-output logs, and future structured snapshots; prominent PM-facing display is optional (H-014, H-015).
+  - `presentationContractVersion` and `scoringModelVersion` are mandatory in serialized recommendation contract, persisted tool-output logs, and future structured snapshots; prominent PM-facing display is optional (H-014, H-015).
 
 ---
 
@@ -65,7 +65,7 @@ This document defines the mandatory verification gates and rules required to val
   - No false `Load: 100%` on equal zero workload.
   - No false `Performance: 100%` on equal default performance.
   - Single candidate does not show artificial 100% scores across criteria.
-  - `INSUFFICIENT_TO_DIFFERENTIATE` applies only when internal ranking keys are equal, raw Skill Fit values are equal or unavailable, and all other applicable business evidence cannot distinguish candidates (`userId` ordering is the only remaining distinction). A ranking-key tie with different raw Skill Fit is not a full business tie. Full ties must never be presented as candidate superiority (H-013).
+  - `INSUFFICIENT_TO_DIFFERENTIATE` applies when candidates cannot be meaningfully distinguished (raw Skill Fit values are equal, unavailable, or below $10^9$ fixed-point quantization; differences from UNVERIFIED workload or DEFAULT performance alone do not differentiate). Technical tie-breaking must never be presented as candidate superiority (H-013 amended).
 
 ---
 

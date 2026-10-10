@@ -196,13 +196,13 @@ public class AiChatController {
     @Operation(summary = "Request AI auto-assignment recommendations")
     @PostMapping("/auto-assign")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')") // PM role is project-level, checked in service
-    public ApiResponse<AutoAssignmentResponse> autoAssign(
+    public ApiResponse<RecommendationView> autoAssign(
             @Valid @RequestBody AutoAssignmentRequest request,
             Authentication authentication) {
         Long userId = resolveUserId(authentication);
         log.info("[AutoAssign] Request from user {} for project {}", userId,
                 request.projectId());
-        AutoAssignmentResponse response = autoAssignmentService.recommend(request.projectId(),
+        RecommendationView response = autoAssignmentService.recommendView(request.projectId(),
                 request.requiredSkills(), request.taskDifficulty(), userId);
         return ApiResponse.success(response);
     }

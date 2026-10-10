@@ -2,12 +2,19 @@
 param(
     [string[]]$AllowedTrackedPrefixes = @(
         ".agents/skills/taskpilot-heuristic-correctness/",
+        "taskpilot-ai/src/main/java/com/taskpilot/ai/dto/",
+        "taskpilot-ai/src/main/java/com/taskpilot/ai/service/AutoAssignmentService.java",
+        "taskpilot-ai/src/main/java/com/taskpilot/ai/tools/TaskPilotAiTools.java",
+        "taskpilot-ai/src/main/java/com/taskpilot/ai/tools/domain/AhpAssignmentAiTools.java",
+        "taskpilot-ai/src/main/java/com/taskpilot/ai/controller/AiChatController.java",
         "taskpilot-ai/src/main/java/com/taskpilot/ai/heuristic/",
-        "taskpilot-ai/src/test/java/com/taskpilot/ai/heuristic/"
+        "taskpilot-ai/src/test/java/com/taskpilot/ai/"
     ),
     [string[]]$AllowedUntrackedPrefixes = @(
         ".agents/skills/taskpilot-heuristic-correctness/",
-        "taskpilot-ai/src/test/java/com/taskpilot/ai/heuristic/"
+        "taskpilot-ai/src/main/java/com/taskpilot/ai/dto/",
+        "taskpilot-ai/src/test/java/com/taskpilot/ai/",
+        "taskpilot-ai/src/test/resources/"
     )
 )
 

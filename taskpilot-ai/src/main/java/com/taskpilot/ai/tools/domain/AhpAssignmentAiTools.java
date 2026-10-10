@@ -1,9 +1,10 @@
 package com.taskpilot.ai.tools.domain;
 
 import com.taskpilot.ai.dto.AutoAssignmentResponse;
-import com.taskpilot.ai.dto.CandidateScore;
 import com.taskpilot.ai.dto.ConfirmationRequiredDto;
 import com.taskpilot.ai.dto.RecommendAndAssignResult;
+import com.taskpilot.ai.dto.RecommendationView;
+import com.taskpilot.ai.dto.RecommendedCandidateView;
 import com.taskpilot.ai.service.AutoAssignmentService;
 import com.taskpilot.ai.service.PendingAiActionService;
 import com.taskpilot.ai.tools.ToolExecutionContext;
@@ -114,6 +115,9 @@ public class AhpAssignmentAiTools {
 
         Long resolvedTaskId = toLong(taskId);
         Long resolvedMemberId = toLong(memberId);
+        TaskDetailDto task = taskCommandPort.getTaskDetails(resolvedTaskId, userId);
+        autoAssignmentService.validateProjectManager(task.projectId(), userId);
+
         return pendingAiActionService.create(
                 userId,
                 sessionId,
@@ -121,7 +125,10 @@ public class AhpAssignmentAiTools {
                 "Assign task " + taskId + " to member " + memberId,
                 args("taskId", resolvedTaskId, "memberId", resolvedMemberId, "reason", safeReason),
                 null,
-                () -> taskCommandPort.assignTaskToMember(resolvedTaskId, resolvedMemberId, safeReason, userId, false));
+                () -> {
+                    autoAssignmentService.validateProjectManager(task.projectId(), userId);
+                    return taskCommandPort.assignTaskToMember(resolvedTaskId, resolvedMemberId, safeReason, userId, false);
+                });
     }
 
 
@@ -136,6 +143,7 @@ public class AhpAssignmentAiTools {
 
         Long resolvedTaskId = toLong(taskId);
         TaskDetailDto task = taskCommandPort.getTaskDetails(resolvedTaskId, userId);
+        autoAssignmentService.validateProjectManager(task.projectId(), userId);
         ProjectMemberDto member = resolveProjectMemberByName(projectInsightsPort, task.projectId(), memberName, userId);
         String safeReason = hasText(reason)
                 ? reason
@@ -150,7 +158,10 @@ public class AhpAssignmentAiTools {
                         "reason", safeReason, "source", "user_specified_assignee"),
                 Map.of("taskId", resolvedTaskId, "memberId", member.memberId(), "memberName", member.fullName(),
                         "projectId", task.projectId(), "reason", safeReason),
-                () -> taskCommandPort.assignTaskToMember(resolvedTaskId, member.memberId(), safeReason, userId, false));
+                () -> {
+                    autoAssignmentService.validateProjectManager(task.projectId(), userId);
+                    return taskCommandPort.assignTaskToMember(resolvedTaskId, member.memberId(), safeReason, userId, false);
+                });
     }
 
 
@@ -168,12 +179,13 @@ public class AhpAssignmentAiTools {
         Long resolvedTaskId = toLong(taskId);
         TaskDetailDto task = taskCommandPort.getTaskDetails(resolvedTaskId, userId);
         Long resolvedProjectId = hasText(projectId) ? toLong(projectId) : task.projectId();
+        autoAssignmentService.validateProjectManager(resolvedProjectId, userId);
         String resolvedSkills = hasText(skills) ? skills : task.requiredSkills();
         boolean shouldPersistProvidedSkills = hasText(skills) && !hasText(task.requiredSkills());
 
         if (!hasText(resolvedSkills)) {
             return new RecommendAndAssignResult(false, resolvedTaskId, resolvedProjectId, null, null, reason,
-                    null, null,
+                    (RecommendationView) null, null,
                     "Task " + taskId + " is missing required skills. Please provide skills before assigning.");
         }
 
@@ -183,55 +195,58 @@ public class AhpAssignmentAiTools {
         }
         int resolvedDifficulty = Math.max(1, Math.min(10, parsedDifficulty));
 
-        AutoAssignmentResponse recommendation = autoAssignmentService.recommendCandidates(
+        RecommendationView recommendationView = autoAssignmentService.recommendCandidatesView(
                 resolvedProjectId,
                 parseSkills(resolvedSkills),
                 resolvedDifficulty,
-                userId);
+                userId,
+                Set.of(),
+                Set.of());
 
-        if (recommendation.candidates() == null || recommendation.candidates().isEmpty()) {
+        if (recommendationView == null || recommendationView.candidates() == null || recommendationView.candidates().isEmpty()) {
             return new RecommendAndAssignResult(false, resolvedTaskId, resolvedProjectId, null, null, reason,
-                    recommendation, null,
+                    recommendationView, null,
                     "No eligible candidate found for task " + taskId + ".");
         }
 
-        CandidateScore selected = recommendation.candidates().get(0);
+        RecommendedCandidateView selected = recommendationView.candidates().get(0);
         String safeReason = hasText(reason)
                 ? reason
                 : "AI selected the top-ranked candidate based on skill fit, workload, and project heuristic mode.";
         RecommendAndAssignResult preview = new RecommendAndAssignResult(false, resolvedTaskId, resolvedProjectId,
-                selected.getUserId(), selected.getFullName(), safeReason, recommendation, null,
-                "Ready to assign task " + taskId + " to " + selected.getFullName() + " after confirmation.");
+                selected.candidateId(), selected.displayName(), safeReason, recommendationView, null,
+                "Ready to assign task " + taskId + " to " + selected.displayName() + " after confirmation.");
 
         return pendingAiActionService.create(
                 userId,
                 sessionId,
                 "recommendAndAssignTask",
                 (shouldPersistProvidedSkills ? "Save required skills and assign task " : "Assign task ")
-                        + taskId + " to " + selected.getFullName() + " (top recommended candidate)",
+                        + taskId + " to " + selected.displayName() + " (top recommended candidate)",
                 args("taskId", resolvedTaskId, "projectId", resolvedProjectId, "skills", resolvedSkills,
-                        "difficulty", resolvedDifficulty, "memberId", selected.getUserId(), "reason", safeReason,
+                        "difficulty", resolvedDifficulty, "memberId", selected.candidateId(), "reason", safeReason,
                         "persistSkills", shouldPersistProvidedSkills),
                 preview,
                 () -> {
+                    autoAssignmentService.validateProjectManager(resolvedProjectId, userId);
                     if (shouldPersistProvidedSkills) {
                         taskCommandPort.updateTaskRequiredSkills(resolvedTaskId, resolvedSkills, userId);
                     }
                     TaskAssignmentResultDto assignment = taskCommandPort.assignTaskToMember(
                             resolvedTaskId,
-                            selected.getUserId(),
+                            selected.candidateId(),
                             safeReason,
                             userId,
                             false);
-                    return new RecommendAndAssignResult(true, resolvedTaskId, resolvedProjectId, selected.getUserId(),
-                            selected.getFullName(), safeReason, recommendation, assignment,
-                            "Task " + taskId + " assigned to " + selected.getFullName() + ".");
+                    return new RecommendAndAssignResult(true, resolvedTaskId, resolvedProjectId, selected.candidateId(),
+                            selected.displayName(), safeReason, recommendationView, assignment,
+                            "Task " + taskId + " assigned to " + selected.displayName() + ".");
                 });
     }
 
 
     @Tool("Recommend ranked candidates for a project based on skills and difficulty (1-10, default is 5). Read-only.")
-    public AutoAssignmentResponse recommendAssignmentCandidates(
+    public RecommendationView recommendAssignmentCandidates(
             @P("The project ID") String projectId,
             @P("Comma-separated list of required skill names") String skills,
             @P("Task difficulty 1-10. Note: send as string like '5'") String difficulty) {
@@ -245,12 +260,12 @@ public class AhpAssignmentAiTools {
         int safeDifficulty = Math.max(1, Math.min(10, parsedDifficulty));
         List<String> requiredSkills = parseSkills(skills);
 
-        return autoAssignmentService.recommendCandidates(toLong(projectId), requiredSkills, safeDifficulty, userId);
+        return autoAssignmentService.recommendCandidatesView(toLong(projectId), requiredSkills, safeDifficulty, userId, Set.of(), Set.of());
     }
 
 
     @Tool("Recommend and compare candidates specifically for a task ID, reading its metrics automatically. Supports filters. Read-only.")
-    public AutoAssignmentResponse recommendTaskAssignmentCandidates(
+    public RecommendationView recommendTaskAssignmentCandidates(
             @P("The ID of the task") String taskId,
             @P("Optional comma-separated required skill names or IDs. Use this when the task is missing skills and the user provided them in a form.") String skills,
             @P("Optional task difficulty 1-10. If omitted, task difficulty is used. Note: send as string like '5'") String difficulty,
@@ -282,7 +297,7 @@ public class AhpAssignmentAiTools {
             try { parsedDifficulty = Integer.parseInt(difficulty.trim()); } catch (Exception ignored) {}
         }
         int resolvedDifficulty = Math.max(1, Math.min(10, parsedDifficulty));
-        AutoAssignmentResponse response = autoAssignmentService.recommendCandidates(
+        RecommendationView response = autoAssignmentService.recommendCandidatesView(
                 projectId,
                 parseSkills(resolvedSkills),
                 resolvedDifficulty,
@@ -293,13 +308,18 @@ public class AhpAssignmentAiTools {
         String explanation = response.aiExplanation();
         if ((explanation == null || explanation.isBlank()) && isTruthy(excludeCurrentAssignee) && task.assigneeName() != null) {
             explanation = "Excluded current assignee " + task.assigneeName() + " for this recommendation.";
+            return RecommendationView.builder()
+                    .projectId(response.projectId())
+                    .requiredSkills(response.requiredSkills())
+                    .candidates(response.candidates())
+                    .differentiationStatus(response.differentiationStatus())
+                    .presentationContractVersion(response.presentationContractVersion())
+                    .scoringModelVersion(response.scoringModelVersion())
+                    .heuristicMode(response.heuristicMode())
+                    .aiExplanation(explanation)
+                    .build();
         }
-        return AutoAssignmentResponse.builder()
-                .projectId(response.projectId())
-                .requiredSkills(response.requiredSkills())
-                .candidates(response.candidates())
-                .aiExplanation(explanation)
-                .build();
+        return response;
     }
 
 
