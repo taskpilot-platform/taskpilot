@@ -26,7 +26,7 @@ Statuses in this register are unambiguous:
 
 ---
 
-## 2. Decision Catalog (H-001 through H-016, H-018, H-019)
+## 2. Decision Catalog (H-001 through H-016, H-018, H-019, H-020)
 
 ### Decision H-001: Candidate score model
 - **Status**: `APPROVED_FOR_PHASE_1`
@@ -356,3 +356,24 @@ Statuses in this register are unambiguous:
   - Therefore Phase 1 user-facing output must omit `confidenceScore`.
   - The internal field may remain temporarily if required for backward compatibility, but it must not appear through the user-facing allowlisted view.
   - A genuine confidence model is deferred until trustworthy performance-cycle or task-outcome evidence exists.
+
+---
+
+### Decision H-020: Recommendation Snapshot Foundation (Phase 2A)
+- **Status**: `IMPLEMENTED`
+- **Context & Purpose**:
+  - Phase 1 closed with an allowlisted recommendation presentation contract and neutral Step A scoring.
+  - Phase 2A establishes an immutable, append-only persistence foundation capturing recommendation snapshots whenever user-facing candidate recommendations are evaluated.
+  - Enables future Phase 2B+ capabilities (PM decision pairing, alternative weight recalculation, shadow comparisons) without mutating active production weights or leaking internal state.
+- **Decision & Invariants**:
+  - **Append-Only & Immutability**: Recommendation snapshots and candidate rows are immutable once persisted.
+  - **Comprehensive Audit State**:
+    - Snapshot metadata: `snapshotId`, `requestedByUserId`, `projectId`, `taskId` (nullable), `createdAt`, `heuristicMode`, `presentationContractVersion`, `scoringModelVersion`, `differentiationStatus`, `requiredSkills`, `recommendedCandidateId`, `candidateCount`, `requestSource`, `fitWeight`, `loadWeight`, `performanceWeight`, `normalizationContract`.
+    - Candidate evidence rows: `candidateId`, `rank`, `rankingKey`, `fullPrecisionScore`, `rankingRawFit`, `presentationFitValue`, `fitStatus`, `storedWorkloadValue`, `workloadStatus`, `derivedPerformanceInput`, `performanceStatus`, `memberStatus`, `selectedAsRecommendation`.
+  - **Privacy & Security Invariant**: Candidate rows must NEVER persist PII (`email`, `displayName`, `fullName`), uncalibrated `confidenceScore`, normalized scores, or LLM prompt bodies.
+  - **Proposed Candidate Recording**: The snapshot records the candidate the system actually proposed: the rank-1 candidate whenever candidateCount > 0 (setting selectedAsRecommendation = true for that candidate only) independent of differentiationStatus, because Phase 2B needs the proposed candidate for decision-pair learning, while Phase 8 filters on differentiationStatus. differentiationStatus remains stored as is.
+  - **Failure Policies**:
+    - Read-only recommendation paths (`REST`, `AI_TOOL_PROJECT_RECOMMENDATION`, `AI_TOOL_TASK_RECOMMENDATION`) fail open: errors during snapshot capture are caught and logged, returning `RecommendationView` to prevent degrading user read experience.
+    - Write-preview path (`AI_TOOL_RECOMMEND_AND_ASSIGN`) fails closed: snapshot capture must succeed to link `snapshotId` with the pending action preview and arguments. If snapshot persistence fails, exception propagates to abort pending action creation.
+  - **Contract Preservation**: The user-facing `RecommendationView` JSON presentation schema remains strictly unchanged and must never expose `snapshotId` or internal ranking keys.
+

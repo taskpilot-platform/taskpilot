@@ -257,6 +257,7 @@ class AllowlistedRecommendationContractTest {
                 .heuristicMode("BALANCED")
                 .build();
 
+        String testSnapshotId = "rec-snap-test-12345";
         RecommendAndAssignResult preview = new RecommendAndAssignResult(
                 false,
                 76L,
@@ -266,7 +267,8 @@ class AllowlistedRecommendationContractTest {
                 "Best candidate for the task",
                 recommendationView,
                 null,
-                "Ready to assign task 76 to Alice Engineer after confirmation."
+                "Ready to assign task 76 to Alice Engineer after confirmation.",
+                testSnapshotId
         );
 
         ConfirmationRequiredDto confirmationDto = new ConfirmationRequiredDto(
@@ -274,7 +276,7 @@ class AllowlistedRecommendationContractTest {
                 "act-12345",
                 "recommendAndAssignTask",
                 "Assign task 76 to Alice Engineer (42)",
-                Map.of("taskId", 76L, "projectId", 10L, "selectedMemberId", 42L),
+                Map.of("taskId", 76L, "projectId", 10L, "selectedMemberId", 42L, "snapshotId", testSnapshotId),
                 preview,
                 Instant.parse("2026-10-10T12:00:00Z")
         );
@@ -294,9 +296,12 @@ class AllowlistedRecommendationContractTest {
         assertEquals(10L, previewNode.path("projectId").asLong());
         assertEquals(42L, previewNode.path("selectedMemberId").asLong());
         assertEquals("Alice Engineer", previewNode.path("selectedMemberName").asText());
+        assertEquals(testSnapshotId, previewNode.path("snapshotId").asText());
+        assertEquals(testSnapshotId, root.path("arguments").path("snapshotId").asText());
 
         // Recommendation level within preview
         JsonNode recNode = previewNode.path("recommendation");
+        assertFalse(recNode.has("snapshotId"), "RecommendationView must not contain snapshotId");
         assertEquals("allowlisted-view-v1", recNode.path("presentationContractVersion").asText());
         assertEquals("relative-neutral-fixed-point-v2", recNode.path("scoringModelVersion").asText());
         assertEquals("UNKNOWN", recNode.path("differentiationStatus").asText());

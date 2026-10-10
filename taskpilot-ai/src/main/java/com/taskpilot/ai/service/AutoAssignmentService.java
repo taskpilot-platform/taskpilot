@@ -6,9 +6,11 @@ import com.taskpilot.ai.dto.CandidateScore;
 import com.taskpilot.ai.dto.InternalCandidateRanking;
 import com.taskpilot.ai.dto.MetricDataStatus;
 import com.taskpilot.ai.dto.RecommendationDifferentiationStatus;
+import com.taskpilot.ai.dto.RecommendationRequestSource;
 import com.taskpilot.ai.dto.RecommendationView;
 import com.taskpilot.ai.dto.RecommendedCandidateView;
 import com.taskpilot.ai.entity.AiLogEntity;
+import com.taskpilot.ai.entity.RecommendationSnapshotEntity;
 import com.taskpilot.ai.heuristic.HeuristicStrategy;
 import com.taskpilot.ai.heuristic.HeuristicStrategyFactory;
 import com.taskpilot.ai.heuristic.NormalizedScores;
@@ -60,6 +62,7 @@ public class AutoAssignmentService {
     private final StreamingChatModel explanationModel;
     private final long explanationTimeoutMs;
     private final String explanationModelName;
+    private RecommendationSnapshotService recommendationSnapshotService;
 
     @Autowired
     public AutoAssignmentService(
@@ -71,7 +74,8 @@ public class AutoAssignmentService {
             HeuristicStrategyFactory heuristicStrategyFactory,
             @Qualifier("geminiFlashModel") StreamingChatModel explanationModel,
             @Value("${ai.assignment.explanation-timeout-ms:5000}") long explanationTimeoutMs,
-            @Value("${ai.gemini.model-name:gemini-3.5-flash}") String explanationModelName) {
+            @Value("${ai.gemini.model-name:gemini-3.5-flash}") String explanationModelName,
+            @Autowired(required = false) RecommendationSnapshotService recommendationSnapshotService) {
         this.projectMemberPort = projectMemberPort;
         this.userSkillPort = userSkillPort;
         this.aiAuditPort = aiAuditPort;
@@ -82,6 +86,21 @@ public class AutoAssignmentService {
         this.explanationTimeoutMs = explanationTimeoutMs;
         this.explanationModelName = (explanationModelName != null && !explanationModelName.isBlank())
                 ? explanationModelName : "gemini-3.5-flash";
+        this.recommendationSnapshotService = recommendationSnapshotService;
+    }
+
+    public AutoAssignmentService(
+            ProjectMemberPort projectMemberPort,
+            UserSkillPort userSkillPort,
+            AiAuditPort aiAuditPort,
+            UserPort userPort,
+            ProjectPort projectPort,
+            HeuristicStrategyFactory heuristicStrategyFactory,
+            @Qualifier("geminiFlashModel") StreamingChatModel explanationModel,
+            @Value("${ai.assignment.explanation-timeout-ms:5000}") long explanationTimeoutMs,
+            @Value("${ai.gemini.model-name:gemini-3.5-flash}") String explanationModelName) {
+        this(projectMemberPort, userSkillPort, aiAuditPort, userPort, projectPort,
+                heuristicStrategyFactory, explanationModel, explanationTimeoutMs, explanationModelName, null);
     }
 
     public AutoAssignmentService(
@@ -93,7 +112,7 @@ public class AutoAssignmentService {
             HeuristicStrategyFactory heuristicStrategyFactory,
             StreamingChatModel explanationModel) {
         this(projectMemberPort, userSkillPort, aiAuditPort, userPort, projectPort,
-                heuristicStrategyFactory, explanationModel, DEFAULT_EXPLANATION_TIMEOUT_MS, "gemini-3.5-flash");
+                heuristicStrategyFactory, explanationModel, DEFAULT_EXPLANATION_TIMEOUT_MS, "gemini-3.5-flash", null);
     }
 
     public AutoAssignmentService(
@@ -106,8 +125,25 @@ public class AutoAssignmentService {
             StreamingChatModel explanationModel,
             long explanationTimeoutMs) {
         this(projectMemberPort, userSkillPort, aiAuditPort, userPort, projectPort,
-                heuristicStrategyFactory, explanationModel, explanationTimeoutMs, "gemini-3.5-flash");
+                heuristicStrategyFactory, explanationModel, explanationTimeoutMs, "gemini-3.5-flash", null);
     }
+
+    public void setRecommendationSnapshotService(RecommendationSnapshotService recommendationSnapshotService) {
+        this.recommendationSnapshotService = recommendationSnapshotService;
+    }
+
+    public record EvaluationContext(
+            RecommendationView view,
+            List<InternalCandidateRanking> internalRankings,
+            HeuristicStrategy strategy,
+            String heuristicMode,
+            RecommendationDifferentiationStatus differentiationStatus
+    ) {}
+
+    public record SnapshotEvaluationResult(
+            RecommendationView view,
+            String snapshotId
+    ) {}
 
     private static final int PERFORMANCE_WINDOW_SIZE = 3;
     private static final double NEUTRAL_PERFORMANCE_PRIOR = 0.5;
@@ -211,31 +247,132 @@ public class AutoAssignmentService {
     @Transactional(readOnly = true)
     public RecommendationView recommendView(Long projectId, List<String> requiredSkills,
             int taskDifficulty, Long requestingUserId) {
-        RecommendationView base = recommendCandidatesView(projectId, requiredSkills, taskDifficulty, requestingUserId, Set.of(), Set.of());
-        if (base.candidates() == null || base.candidates().isEmpty()) {
-            return base;
+        EvaluationContext ctx = evaluateCandidatesContext(projectId, requiredSkills, taskDifficulty, requestingUserId, Set.of(), Set.of());
+        if (ctx.view().candidates() == null || ctx.view().candidates().isEmpty()) {
+            if (recommendationSnapshotService != null) {
+                try {
+                    recommendationSnapshotService.createSnapshot(
+                            requestingUserId,
+                            projectId,
+                            null,
+                            ctx.view().requiredSkills(),
+                            ctx.heuristicMode(),
+                            ctx.strategy(),
+                            ctx.differentiationStatus(),
+                            Collections.emptyList(),
+                            RecommendationRequestSource.REST
+                    );
+                } catch (Exception e) {
+                    log.error("[AutoAssign] Failed to persist recommendation snapshot for REST request on project {}: {}",
+                            projectId, e.getMessage(), e);
+                }
+            }
+            return ctx.view();
         }
 
-        List<RecommendedCandidateView> top3 = base.candidates().stream().limit(3).toList();
-        String explanation = generateExplanationForView(top3, base.requiredSkills(), taskDifficulty,
-                base.differentiationStatus(), requestingUserId, projectId);
+        List<RecommendedCandidateView> top3 = ctx.view().candidates().stream().limit(3).toList();
+        String explanation = generateExplanationForView(top3, ctx.view().requiredSkills(), taskDifficulty,
+                ctx.differentiationStatus(), requestingUserId, projectId);
 
-        saveAutoAssignLog(requestingUserId, projectId, base.requiredSkills(), base.candidates(), explanation);
+        saveAutoAssignLog(requestingUserId, projectId, ctx.view().requiredSkills(), ctx.view().candidates(), explanation);
+
+        if (recommendationSnapshotService != null) {
+            try {
+                recommendationSnapshotService.createSnapshot(
+                        requestingUserId,
+                        projectId,
+                        null,
+                        ctx.view().requiredSkills(),
+                        ctx.heuristicMode(),
+                        ctx.strategy(),
+                        ctx.differentiationStatus(),
+                        ctx.internalRankings(),
+                        RecommendationRequestSource.REST
+                );
+            } catch (Exception e) {
+                log.error("[AutoAssign] Failed to persist recommendation snapshot for REST request on project {}: {}",
+                        projectId, e.getMessage(), e);
+            }
+        }
 
         return RecommendationView.builder()
-                .projectId(base.projectId())
-                .requiredSkills(base.requiredSkills())
-                .heuristicMode(base.heuristicMode())
-                .differentiationStatus(base.differentiationStatus())
-                .candidates(base.candidates())
+                .projectId(ctx.view().projectId())
+                .requiredSkills(ctx.view().requiredSkills())
+                .heuristicMode(ctx.view().heuristicMode())
+                .differentiationStatus(ctx.differentiationStatus())
+                .candidates(ctx.view().candidates())
                 .aiExplanation(explanation)
-                .presentationContractVersion(base.presentationContractVersion())
-                .scoringModelVersion(base.scoringModelVersion())
+                .presentationContractVersion(ctx.view().presentationContractVersion())
+                .scoringModelVersion(ctx.view().scoringModelVersion())
                 .build();
     }
 
     @Transactional(readOnly = true)
     public RecommendationView recommendCandidatesView(Long projectId, List<String> requiredSkills,
+            int taskDifficulty, Long requestingUserId, Set<Long> includeUserIds, Set<Long> excludeUserIds) {
+        return evaluateCandidatesContext(projectId, requiredSkills, taskDifficulty, requestingUserId, includeUserIds, excludeUserIds).view();
+    }
+
+    @Transactional(readOnly = true)
+    public RecommendationView recommendCandidatesViewWithSnapshot(
+            Long projectId,
+            Long taskId,
+            List<String> requiredSkills,
+            int taskDifficulty,
+            Long requestingUserId,
+            Set<Long> includeUserIds,
+            Set<Long> excludeUserIds,
+            RecommendationRequestSource requestSource) {
+        EvaluationContext ctx = evaluateCandidatesContext(projectId, requiredSkills, taskDifficulty, requestingUserId, includeUserIds, excludeUserIds);
+        if (recommendationSnapshotService != null) {
+            try {
+                recommendationSnapshotService.createSnapshot(
+                        requestingUserId,
+                        projectId,
+                        taskId,
+                        requiredSkills,
+                        ctx.heuristicMode(),
+                        ctx.strategy(),
+                        ctx.differentiationStatus(),
+                        ctx.internalRankings(),
+                        requestSource
+                );
+            } catch (Exception e) {
+                log.error("[AutoAssign] Failed to persist recommendation snapshot for project {} from {}: {}",
+                        projectId, requestSource, e.getMessage(), e);
+            }
+        }
+        return ctx.view();
+    }
+
+    public SnapshotEvaluationResult recommendCandidatesForPreview(
+            Long projectId,
+            Long taskId,
+            List<String> requiredSkills,
+            int taskDifficulty,
+            Long requestingUserId,
+            Set<Long> includeUserIds,
+            Set<Long> excludeUserIds) {
+        EvaluationContext ctx = evaluateCandidatesContext(projectId, requiredSkills, taskDifficulty, requestingUserId, includeUserIds, excludeUserIds);
+        String snapshotId = null;
+        if (recommendationSnapshotService != null) {
+            RecommendationSnapshotEntity snapshot = recommendationSnapshotService.createSnapshot(
+                    requestingUserId,
+                    projectId,
+                    taskId,
+                    requiredSkills,
+                    ctx.heuristicMode(),
+                    ctx.strategy(),
+                    ctx.differentiationStatus(),
+                    ctx.internalRankings(),
+                    RecommendationRequestSource.AI_TOOL_RECOMMEND_AND_ASSIGN
+            );
+            snapshotId = snapshot != null ? snapshot.getSnapshotId() : null;
+        }
+        return new SnapshotEvaluationResult(ctx.view(), snapshotId);
+    }
+
+    public EvaluationContext evaluateCandidatesContext(Long projectId, List<String> requiredSkills,
             int taskDifficulty, Long requestingUserId, Set<Long> includeUserIds, Set<Long> excludeUserIds) {
         validateProjectMembership(projectId, requestingUserId);
         List<String> safeRequiredSkills = requiredSkills == null ? Collections.emptyList() : requiredSkills;
@@ -252,7 +389,7 @@ public class AutoAssignmentService {
         }
 
         if (members.isEmpty()) {
-            return RecommendationView.builder().projectId(projectId)
+            RecommendationView emptyView = RecommendationView.builder().projectId(projectId)
                     .requiredSkills(safeRequiredSkills)
                     .candidates(Collections.emptyList())
                     .differentiationStatus(RecommendationDifferentiationStatus.UNKNOWN)
@@ -261,13 +398,14 @@ public class AutoAssignmentService {
                     .heuristicMode(mode)
                     .aiExplanation("No matching members found in this project.")
                     .build();
+            return new EvaluationContext(emptyView, Collections.emptyList(), strategy, mode, RecommendationDifferentiationStatus.UNKNOWN);
         }
 
         List<InternalCandidateRanking> internalRankings = computeInternalCandidates(
                 members, safeRequiredSkills, strategy, mode);
 
         if (internalRankings.isEmpty()) {
-            return RecommendationView.builder().projectId(projectId)
+            RecommendationView emptyView = RecommendationView.builder().projectId(projectId)
                     .requiredSkills(safeRequiredSkills)
                     .candidates(Collections.emptyList())
                     .differentiationStatus(RecommendationDifferentiationStatus.UNKNOWN)
@@ -276,6 +414,7 @@ public class AutoAssignmentService {
                     .heuristicMode(mode)
                     .aiExplanation("No eligible members are currently available for assignment.")
                     .build();
+            return new EvaluationContext(emptyView, Collections.emptyList(), strategy, mode, RecommendationDifferentiationStatus.UNKNOWN);
         }
 
         RecommendationDifferentiationStatus differentiationStatus = evaluateDifferentiationStatus(internalRankings);
@@ -286,7 +425,7 @@ public class AutoAssignmentService {
             candidateViews.add(ic.toView(rank++));
         }
 
-        return RecommendationView.builder().projectId(projectId)
+        RecommendationView view = RecommendationView.builder().projectId(projectId)
                 .requiredSkills(safeRequiredSkills)
                 .candidates(candidateViews)
                 .differentiationStatus(differentiationStatus)
@@ -295,6 +434,8 @@ public class AutoAssignmentService {
                 .heuristicMode(mode)
                 .aiExplanation(null)
                 .build();
+
+        return new EvaluationContext(view, internalRankings, strategy, mode, differentiationStatus);
     }
 
     public static RecommendationDifferentiationStatus evaluateDifferentiationStatus(List<InternalCandidateRanking> internalRankings) {
