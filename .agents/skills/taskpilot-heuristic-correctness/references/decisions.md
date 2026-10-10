@@ -26,7 +26,7 @@ Statuses in this register are unambiguous:
 
 ---
 
-## 2. Decision Catalog (H-001 through H-016, H-018, H-019, H-020)
+## 2. Decision Catalog (H-001 through H-016, H-018, H-019, H-020, H-021)
 
 ### Decision H-001: Candidate score model
 - **Status**: `APPROVED_FOR_PHASE_1`
@@ -377,3 +377,48 @@ Statuses in this register are unambiguous:
     - Write-preview path (`AI_TOOL_RECOMMEND_AND_ASSIGN`) fails closed: snapshot capture must succeed to link `snapshotId` with the pending action preview and arguments. If snapshot persistence fails, exception propagates to abort pending action creation.
   - **Contract Preservation**: The user-facing `RecommendationView` JSON presentation schema remains strictly unchanged and must never expose `snapshotId` or internal ranking keys.
 
+---
+
+### Decision H-021: PM Decision Events (Phase 2B)
+- **Status**: `IMPLEMENTED`
+- **Context & Purpose**:
+  - Phase 2A established immutable, append-only recommendation snapshots.
+  - Phase 2B establishes structured, append-only PM decision events linked to recommendation snapshots to capture authentic human-in-the-loop decisions (`ACCEPTED`, `OVERRIDDEN`, `REJECTED`, `CANCELED`, `EXPIRED`).
+  - Sets the foundation for decision-pair learning and shadow comparisons without mutating active production weights or leaking internal state.
+- **Decision & Invariants**:
+  - **Supported Decision Semantics**:
+    - `ACCEPTED`: Selected candidate equals the snapshot rank-1 candidate.
+    - `OVERRIDDEN`: Selected candidate differs from the snapshot rank-1 candidate and was present in the snapshot candidate list.
+    - `REJECTED`: No candidate selected (explicit rejection of recommendation).
+    - `CANCELED`: The confirmation flow was canceled.
+    - `EXPIRED`: The pending action expired without a PM decision.
+  - **Decision Source & Authorization**:
+    - `decisionSource`: Enums `USER` or `SYSTEM`.
+      - `ACCEPTED`: `decisionSource = USER`, non-null authenticated PM actor.
+      - `OVERRIDDEN`: `decisionSource = USER`, non-null authenticated PM actor.
+      - `REJECTED`: `decisionSource = USER`, non-null authenticated PM actor.
+      - `CANCELED`: `decisionSource = USER`, non-null authenticated PM actor.
+      - `EXPIRED`: `decisionSource = SYSTEM`, `decidedByUserId = null` (original requester remains available on linked snapshot).
+    - Only a current project `MANAGER` may record USER decisions (`ACCEPTED`, `OVERRIDDEN`, `REJECTED`, `CANCELED`). Authorization must be verified at decision time.
+    - The decision actor must come from authenticated context, never request body or LLM arguments.
+    - `EXPIRED` is recorded exclusively by the system expiration workflow with a null actor.
+  - **State Transition Rules**:
+    - At most one terminal decision per snapshot.
+    - After a snapshot receives a terminal decision, any subsequent decision attempt is rejected (HTTP 409 Conflict).
+    - Database uniqueness constraint on `snapshot_id` enforces this invariant at the database layer.
+  - **Phase 8 Data Semantics & UNOBSERVED Classification**:
+    - In Phase 8 preference learning pipelines, recommendation snapshots that have no terminal decision event are classified as `UNOBSERVED` (neither accepted nor rejected).
+    - In-memory pending actions lost across application restarts or crashes without triggering `EXPIRED` leave orphaned snapshots in the `UNOBSERVED` state without corrupting training data.
+  - **Failure Semantics & Accepted Technical Debt**:
+    - Execution ordering: `validate MANAGER authorization` → `execute task assignment` → `record PM decision event`.
+    - Authorization or assignment failures: if authorization fails or task assignment execution throws an exception, no decision event is recorded.
+    - Post-assignment decision persistence failure: if task assignment succeeds and commits, but subsequent decision persistence fails (e.g., transient DB error, concurrent duplicate), the task assignment remains effective and is NOT rolled back. Rolling back a successful business assignment due to secondary telemetry failure would degrade user workflow reliability.
+    - Diagnostic logging: on post-assignment decision failure, the application logs a structured error with execution context (`snapshotId`, `projectId`, `taskId`, `selectedCandidateId`, `actorId`) without PII.
+    - **Debt 1**: `TD-P2B-POST-ASSIGNMENT-DECISION-PERSISTENCE`.
+      - Risk: Orphaned snapshot without terminal decision when assignment succeeded.
+      - Mitigation & Exit Condition: Structured error logging enables audit detection. Exit condition is introducing a transactional outbox pattern or background reconciliation job in a future hardening phase.
+    - **Debt 2**: `TD-P2B-PENDING-ACTION-DURABILITY`.
+      - Risk: Unobserved / lost decision events during process restarts or crashes before in-memory expiration fires.
+      - Mitigation & Exit Condition: Unobserved snapshots are ignored by Phase 8 learning pipelines. Exit condition is introducing a durable pending-action store or database-backed expiration worker in a future phase.
+  - **Privacy & Audit Invariant**:
+    - Decision events must never persist email, internal ranking scores, or free-text LLM prompt bodies. Note length is bounded (max 1000 characters).

@@ -285,6 +285,23 @@ public class TaskPilotAiTools {
         return ahpAssignmentAiTools.recommendAndAssignTask(taskId, projectId, skills, difficulty, reason);
     }
 
+    @Tool("Assign a task to an alternative candidate from a recommendation snapshot, overriding the recommendation. Requires confirmation.")
+    public Object overrideRecommendationAndAssignTask(
+            @P("The ID of the task to assign") String taskId,
+            @P("The ID of the candidate member to assign from the snapshot") String memberId,
+            @P("The recommendation snapshot ID being overridden") String snapshotId,
+            @P("Reason for choosing this candidate over the recommendation") String reason) {
+        return ahpAssignmentAiTools.overrideRecommendationAndAssignTask(taskId, memberId, snapshotId, reason);
+    }
+
+    @Tool("Record a manager's decision to reject a task assignment recommendation without choosing an alternative.")
+    public Object recordRecommendationRejection(
+            @P("The ID of the recommendation snapshot") String snapshotId,
+            @P("Optional reason code for the rejection (e.g. NO_SUITABLE_CANDIDATE, TASK_POSTPONED)") String reasonCode,
+            @P("Optional note explaining the rejection") String note) {
+        return ahpAssignmentAiTools.recordRecommendationRejection(snapshotId, reasonCode, note);
+    }
+
     @Tool("Update required skills for a task (comma-separated skill names). Requires confirmation.")
     public Object updateTaskRequiredSkills(
             @P("The ID of the task") Long taskId,
