@@ -9,6 +9,8 @@ import com.taskpilot.ai.dto.RecommendationDifferentiationStatus;
 import com.taskpilot.ai.dto.RecommendationRequestSource;
 import com.taskpilot.ai.dto.RecommendationView;
 import com.taskpilot.ai.dto.RecommendedCandidateView;
+import com.taskpilot.ai.dto.WorkloadMeasurement;
+import java.time.Instant;
 import com.taskpilot.ai.entity.AiLogEntity;
 import com.taskpilot.ai.entity.RecommendationSnapshotEntity;
 import com.taskpilot.ai.heuristic.HeuristicStrategy;
@@ -402,7 +404,7 @@ public class AutoAssignmentService {
         }
 
         List<InternalCandidateRanking> internalRankings = computeInternalCandidates(
-                members, safeRequiredSkills, strategy, mode);
+                members, safeRequiredSkills, strategy, mode, projectId);
 
         if (internalRankings.isEmpty()) {
             RecommendationView emptyView = RecommendationView.builder().projectId(projectId)
@@ -460,9 +462,42 @@ public class AutoAssignmentService {
             List<String> requiredSkills,
             HeuristicStrategy strategy,
             String mode) {
+        return computeInternalCandidates(members, requiredSkills, strategy, mode, null);
+    }
+
+    public List<InternalCandidateRanking> computeInternalCandidates(
+            List<ProjectMemberDto> members,
+            List<String> requiredSkills,
+            HeuristicStrategy strategy,
+            String mode,
+            Long projectId) {
+        Map<Long, Integer> measuredCounts = null;
+        Instant measuredAt = null;
+        if (projectId != null && projectMemberPort != null) {
+            try {
+                measuredCounts = projectMemberPort.countActiveAssignedTasksByProject(projectId);
+                measuredAt = Instant.now();
+            } catch (Exception e) {
+                log.warn("[AutoAssign] Failed to query active assigned tasks for project {}, falling back to unverified workload: {}",
+                        projectId, e.getMessage());
+            }
+        }
+
+        final Map<Long, Integer> finalCounts = measuredCounts;
+        final Instant finalMeasuredAt = measuredAt;
+
         List<RawCandidate> rawCandidates = members.stream()
                 .map(member -> userPort.findById(member.userId())
-                        .map(user -> buildRawCandidate(user, member.performanceScore(), requiredSkills))
+                        .map(user -> {
+                            WorkloadMeasurement measurement;
+                            if (finalCounts != null) {
+                                int activeCount = finalCounts.getOrDefault(member.userId(), 0);
+                                measurement = WorkloadMeasurement.measured(activeCount, finalMeasuredAt);
+                            } else {
+                                measurement = WorkloadMeasurement.unverified(user.currentWorkload());
+                            }
+                            return buildRawCandidate(user, member.performanceScore(), requiredSkills, measurement);
+                        })
                         .orElse(null))
                 .filter(Objects::nonNull)
                 .toList();
@@ -509,7 +544,7 @@ public class AutoAssignmentService {
                 .email(raw.user().email())
                 .rankingRawFit(raw.rawScores().fit())
                 .presentationFitValue(presentationFitValue)
-                .storedWorkloadValue(raw.currentWorkload())
+                .storedWorkloadValue(raw.workloadMeasurement() != null ? raw.workloadMeasurement().value() : raw.currentWorkload())
                 .derivedPerformanceInput(raw.rawScores().performance())
                 .normalizedScores(normalized)
                 .fullPrecisionScore(totalScore)
@@ -519,8 +554,11 @@ public class AutoAssignmentService {
                 .status(raw.user().status())
                 .heuristicMode(mode)
                 .fitStatus(fitStatus)
-                .workloadStatus(MetricDataStatus.UNVERIFIED)
+                .workloadStatus(raw.workloadMeasurement() != null ? raw.workloadMeasurement().status() : MetricDataStatus.UNVERIFIED)
                 .performanceStatus(MetricDataStatus.DEFAULT)
+                .workloadUnit(raw.workloadMeasurement() != null ? raw.workloadMeasurement().unit() : null)
+                .workloadScope(raw.workloadMeasurement() != null ? raw.workloadMeasurement().scope() : null)
+                .workloadMeasuredAt(raw.workloadMeasurement() != null ? raw.workloadMeasurement().measuredAt() : null)
                 .build();
     }
 
@@ -551,6 +589,11 @@ public class AutoAssignmentService {
 
     private RawCandidate buildRawCandidate(UserProfileDto user, double projectPerformancePrior,
             List<String> requiredSkills) {
+        return buildRawCandidate(user, projectPerformancePrior, requiredSkills, WorkloadMeasurement.unverified(user.currentWorkload()));
+    }
+
+    private RawCandidate buildRawCandidate(UserProfileDto user, double projectPerformancePrior,
+            List<String> requiredSkills, WorkloadMeasurement workloadMeasurement) {
         if (isUnavailable(user.status())) {
             return null;
         }
@@ -558,13 +601,21 @@ public class AutoAssignmentService {
         List<UserSkillDto> userSkills = userSkillPort.findByUserIdWithSkill(user.id());
 
         double fitScore = calculateFitScore(userSkills, requiredSkills);
-        int workload = user.currentWorkload();
-        double loadScore = normalizeLoad(workload);
+        WorkloadMeasurement safeMeasurement = workloadMeasurement != null
+                ? workloadMeasurement
+                : WorkloadMeasurement.unverified(user.currentWorkload());
+        double loadScore;
+        if (safeMeasurement.status() == MetricDataStatus.MEASURED) {
+            loadScore = (double) safeMeasurement.value();
+        } else {
+            loadScore = normalizeLoad(user.currentWorkload());
+        }
         PerformanceSnapshot performanceSnapshot = calculateTimeDecayPerformanceScore(user.id(),
                 projectPerformancePrior);
 
         return new RawCandidate(user, new RawScores(fitScore, loadScore, performanceSnapshot.performanceScore()),
-                performanceSnapshot.confidence(), workload, userSkills != null && !userSkills.isEmpty());
+                performanceSnapshot.confidence(), safeMeasurement.value(), userSkills != null && !userSkills.isEmpty(),
+                safeMeasurement);
     }
 
     private CandidateScore buildCandidateScore(RawCandidate raw,
@@ -729,7 +780,10 @@ public class AutoAssignmentService {
                 }
 
                 String workloadDisplay;
-                if (c.storedWorkloadValue() != null) {
+                if (c.workloadStatus() == MetricDataStatus.MEASURED) {
+                    workloadDisplay = String.format("Số công việc đang hoạt động: %d (MEASURED)",
+                            c.storedWorkloadValue() != null ? c.storedWorkloadValue() : 0);
+                } else if (c.storedWorkloadValue() != null) {
                     workloadDisplay = String.format("%d điểm (UNVERIFIED: Chưa có dữ liệu workload đáng tin cậy)", c.storedWorkloadValue());
                 } else {
                     workloadDisplay = "Chưa có dữ liệu workload đáng tin cậy (UNVERIFIED)";
@@ -875,7 +929,7 @@ public class AutoAssignmentService {
     }
 
     private record RawCandidate(UserProfileDto user, RawScores rawScores, double confidence,
-            int currentWorkload, boolean hasUserSkills) {
+            int currentWorkload, boolean hasUserSkills, WorkloadMeasurement workloadMeasurement) {
     }
 
     private record PerformanceSnapshot(double performanceScore, double confidence) {

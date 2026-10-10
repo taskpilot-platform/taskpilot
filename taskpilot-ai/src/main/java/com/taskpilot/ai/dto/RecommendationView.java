@@ -31,7 +31,7 @@ public record RecommendationView(
         String heuristicMode,
         String aiExplanation
 ) {
-    public static final String PRESENTATION_CONTRACT_VERSION = "allowlisted-view-v1";
+    public static final String PRESENTATION_CONTRACT_VERSION = "allowlisted-view-v2";
     public static final String SCORING_MODEL_VERSION = "relative-neutral-fixed-point-v2";
 
     public RecommendationView {

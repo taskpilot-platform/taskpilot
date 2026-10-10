@@ -109,8 +109,8 @@ class AllowlistedRecommendationContractTest {
         // --- Root Level Allowlist Verification ---
         assertEquals(10L, root.path("projectId").asLong());
         assertEquals("Java", root.path("requiredSkills").get(0).asText());
-        assertEquals("allowlisted-view-v1", root.path("presentationContractVersion").asText(),
-                "presentationContractVersion must be allowlisted-view-v1 (H-014)");
+        assertEquals("allowlisted-view-v2", root.path("presentationContractVersion").asText(),
+                "presentationContractVersion must be allowlisted-view-v2 (H-014, H-022)");
         assertEquals("relative-neutral-fixed-point-v2", root.path("scoringModelVersion").asText(),
                 "scoringModelVersion must be relative-neutral-fixed-point-v2 (H-014)");
         assertEquals("UNKNOWN", root.path("differentiationStatus").asText(),
@@ -302,7 +302,7 @@ class AllowlistedRecommendationContractTest {
         // Recommendation level within preview
         JsonNode recNode = previewNode.path("recommendation");
         assertFalse(recNode.has("snapshotId"), "RecommendationView must not contain snapshotId");
-        assertEquals("allowlisted-view-v1", recNode.path("presentationContractVersion").asText());
+        assertEquals("allowlisted-view-v2", recNode.path("presentationContractVersion").asText());
         assertEquals("relative-neutral-fixed-point-v2", recNode.path("scoringModelVersion").asText());
         assertEquals("UNKNOWN", recNode.path("differentiationStatus").asText());
 
@@ -349,8 +349,11 @@ class AllowlistedRecommendationContractTest {
                 .displayName("Alice Engineer")
                 .presentationFitValue(0.85)
                 .fitStatus(MetricDataStatus.MEASURED)
-                .storedWorkloadValue(20)
-                .workloadStatus(MetricDataStatus.UNVERIFIED)
+                .storedWorkloadValue(2)
+                .workloadStatus(MetricDataStatus.MEASURED)
+                .workloadUnit("ACTIVE_TASK_COUNT")
+                .workloadScope("PROJECT")
+                .workloadMeasuredAt(Instant.parse("2026-10-10T12:00:00Z"))
                 .performanceStatus(MetricDataStatus.DEFAULT)
                 .memberStatus("AVAILABLE")
                 .build();
@@ -363,6 +366,7 @@ class AllowlistedRecommendationContractTest {
                 .fitStatus(MetricDataStatus.MEASURED)
                 .storedWorkloadValue(45)
                 .workloadStatus(MetricDataStatus.UNVERIFIED)
+                .workloadScope("PROJECT")
                 .performanceStatus(MetricDataStatus.DEFAULT)
                 .memberStatus("AVAILABLE")
                 .build();
@@ -391,7 +395,7 @@ class AllowlistedRecommendationContractTest {
         assertEquals(fixtureNode, serializedNode, "Serialized RecommendationView must match canonical fixture JsonNode");
 
         // 4. Assert forbidden fields absent recursively and required versions present
-        assertEquals("allowlisted-view-v1", serializedNode.path("presentationContractVersion").asText());
+        assertEquals("allowlisted-view-v2", serializedNode.path("presentationContractVersion").asText());
         assertEquals("relative-neutral-fixed-point-v2", serializedNode.path("scoringModelVersion").asText());
         assertEquals("DIFFERENTIATED", serializedNode.path("differentiationStatus").asText());
 
@@ -436,7 +440,7 @@ class AllowlistedRecommendationContractTest {
                 .differentiationStatus(RecommendationDifferentiationStatus.DIFFERENTIATED)
                 .candidates(List.of(c1))
                 .aiExplanation("Preview explanation")
-                .presentationContractVersion("allowlisted-view-v1")
+                .presentationContractVersion("allowlisted-view-v2")
                 .scoringModelVersion("relative-neutral-fixed-point-v2")
                 .build();
 

@@ -393,7 +393,7 @@ class Phase1RecommendationPipelineConvergenceTest {
         );
 
         for (RecommendationView v : List.of(restView, toolView, taskView)) {
-            assertEquals("allowlisted-view-v1", v.presentationContractVersion());
+            assertEquals("allowlisted-view-v2", v.presentationContractVersion());
             assertEquals("relative-neutral-fixed-point-v2", v.scoringModelVersion());
         }
     }

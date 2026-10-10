@@ -333,7 +333,7 @@ class StepAScoringCorrectionTest {
                 .projectId(10L)
                 .build();
 
-        assertEquals("allowlisted-view-v1", view.presentationContractVersion());
+        assertEquals("allowlisted-view-v2", view.presentationContractVersion());
         assertEquals("relative-neutral-fixed-point-v2", view.scoringModelVersion(),
                 "Step A must set scoringModelVersion to relative-neutral-fixed-point-v2 (H-014)");
     }

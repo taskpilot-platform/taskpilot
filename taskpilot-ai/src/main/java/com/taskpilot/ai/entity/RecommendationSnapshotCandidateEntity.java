@@ -57,6 +57,15 @@ public class RecommendationSnapshotCandidateEntity {
     @Column(name = "workload_status", nullable = false, length = 32)
     private MetricDataStatus workloadStatus;
 
+    @Column(name = "workload_unit", length = 32)
+    private String workloadUnit;
+
+    @Column(name = "workload_scope", length = 32)
+    private String workloadScope;
+
+    @Column(name = "workload_measured_at")
+    private java.time.Instant workloadMeasuredAt;
+
     @Column(name = "derived_performance_input", nullable = false)
     private Double derivedPerformanceInput;
 

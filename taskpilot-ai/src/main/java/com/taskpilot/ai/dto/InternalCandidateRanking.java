@@ -30,7 +30,10 @@ public record InternalCandidateRanking(
         String heuristicMode,
         MetricDataStatus fitStatus,
         MetricDataStatus workloadStatus,
-        MetricDataStatus performanceStatus
+        MetricDataStatus performanceStatus,
+        String workloadUnit,
+        String workloadScope,
+        java.time.Instant workloadMeasuredAt
 ) {
     public static final Comparator<InternalCandidateRanking> STEP_A_COMPARATOR = Comparator
             .<InternalCandidateRanking>comparingLong(InternalCandidateRanking::rankingKey).reversed()
@@ -46,6 +49,9 @@ public record InternalCandidateRanking(
                 .fitStatus(fitStatus)
                 .storedWorkloadValue(storedWorkloadValue)
                 .workloadStatus(workloadStatus)
+                .workloadUnit(workloadUnit)
+                .workloadScope(workloadScope)
+                .workloadMeasuredAt(workloadMeasuredAt)
                 .performanceStatus(performanceStatus)
                 .memberStatus(status)
                 .build();

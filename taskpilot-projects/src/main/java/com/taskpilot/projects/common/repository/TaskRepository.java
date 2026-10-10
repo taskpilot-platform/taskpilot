@@ -45,4 +45,14 @@ public interface TaskRepository extends JpaRepository<TaskEntity, Long>, TaskSea
     @Meta(comment = "TaskRepository.countTasksByStatusNative")
     @NativeQuery("SELECT status, COUNT(*) FROM tasks WHERE project_id = :projectId GROUP BY status")
     List<Object[]> countTasksByStatusNative(@Param("projectId") Long projectId);
+
+    @Meta(comment = "TaskRepository.countActiveAssignedTasksByProject")
+    @Query("SELECT t.assigneeId, COUNT(t) FROM TaskEntity t " +
+           "WHERE t.projectId = :projectId " +
+           "AND t.assigneeId IS NOT NULL " +
+           "AND t.status NOT IN :terminalStatuses " +
+           "GROUP BY t.assigneeId")
+    List<Object[]> countActiveAssignedTasksByProject(
+            @Param("projectId") Long projectId,
+            @Param("terminalStatuses") java.util.Collection<TaskStatus> terminalStatuses);
 }

@@ -11,8 +11,11 @@
       "displayName": "Alice Engineer",
       "presentationFitValue": 0.85,
       "fitStatus": "MEASURED",
-      "storedWorkloadValue": 20,
-      "workloadStatus": "UNVERIFIED",
+      "storedWorkloadValue": 2,
+      "workloadStatus": "MEASURED",
+      "workloadUnit": "ACTIVE_TASK_COUNT",
+      "workloadScope": "PROJECT",
+      "workloadMeasuredAt": "2026-10-10T12:00:00Z",
       "performanceStatus": "DEFAULT",
       "memberStatus": "AVAILABLE"
     },
@@ -24,12 +27,13 @@
       "fitStatus": "MEASURED",
       "storedWorkloadValue": 45,
       "workloadStatus": "UNVERIFIED",
+      "workloadScope": "PROJECT",
       "performanceStatus": "DEFAULT",
       "memberStatus": "AVAILABLE"
     }
   ],
   "differentiationStatus": "DIFFERENTIATED",
-  "presentationContractVersion": "allowlisted-view-v1",
+  "presentationContractVersion": "allowlisted-view-v2",
   "scoringModelVersion": "relative-neutral-fixed-point-v2",
   "heuristicMode": "BALANCED",
   "aiExplanation": "Alice Engineer is recommended at rank 1 with 85% skill fit (MEASURED). Stored workload value is unverified and performance is default."

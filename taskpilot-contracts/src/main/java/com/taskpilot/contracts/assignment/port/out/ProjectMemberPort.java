@@ -17,4 +17,12 @@ public interface ProjectMemberPort {
     boolean isProjectMember(Long projectId, Long userId);
 
     boolean isProjectManager(Long projectId, Long userId);
+
+    default java.util.Map<Long, Integer> countActiveAssignedTasksByProject(Long projectId) {
+        return java.util.Map.of();
+    }
+
+    default int countActiveAssignedTasks(Long projectId, Long memberId) {
+        return countActiveAssignedTasksByProject(projectId).getOrDefault(memberId, 0);
+    }
 }

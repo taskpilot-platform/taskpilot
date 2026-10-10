@@ -12,9 +12,15 @@ import com.taskpilot.contracts.assignment.dto.ProjectDueDto;
 import com.taskpilot.contracts.assignment.dto.ProjectMemberDto;
 import com.taskpilot.contracts.assignment.port.out.ProjectMemberPort;
 import com.taskpilot.contracts.assignment.port.out.ProjectPort;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Set;
+
 import com.taskpilot.projects.common.enums.MemberRole;
+import com.taskpilot.projects.common.enums.TaskStatus;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
 import com.taskpilot.projects.common.repository.ProjectRepository;
+import com.taskpilot.projects.common.repository.TaskRepository;
 
 import lombok.RequiredArgsConstructor;
 
@@ -22,9 +28,11 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class ProjectModuleAdapter implements ProjectMemberPort, ProjectPort {
         private static final double DEFAULT_PERFORMANCE_SCORE = 0.5;
+        private static final Set<TaskStatus> TERMINAL_TASK_STATUSES = Set.of(TaskStatus.DONE);
 
         private final ProjectMemberRepository projectMemberRepository;
         private final ProjectRepository projectRepository;
+        private final TaskRepository taskRepository;
 
         @Override
         public List<ProjectMemberDto> findProjectMembers(Long projectId) {
@@ -82,5 +90,20 @@ public class ProjectModuleAdapter implements ProjectMemberPort, ProjectPort {
                 return projectMemberRepository.findByProjectIdAndUserId(projectId, userId)
                                 .map(member -> member.getRole() == MemberRole.MANAGER)
                                 .orElse(false);
+        }
+
+        @Override
+        public Map<Long, Integer> countActiveAssignedTasksByProject(Long projectId) {
+                if (projectId == null) {
+                        return Map.of();
+                }
+                List<Object[]> rows = taskRepository.countActiveAssignedTasksByProject(projectId, TERMINAL_TASK_STATUSES);
+                Map<Long, Integer> counts = new HashMap<>();
+                for (Object[] row : rows) {
+                        if (row != null && row.length >= 2 && row[0] instanceof Long assigneeId && row[1] instanceof Number count) {
+                                counts.put(assigneeId, count.intValue());
+                        }
+                }
+                return counts;
         }
 }

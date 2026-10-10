@@ -422,3 +422,59 @@ Statuses in this register are unambiguous:
       - Mitigation & Exit Condition: Unobserved snapshots are ignored by Phase 8 learning pipelines. Exit condition is introducing a durable pending-action store or database-backed expiration worker in a future phase.
   - **Privacy & Audit Invariant**:
     - Decision events must never persist email, internal ranking scores, or free-text LLM prompt bodies. Note length is bounded (max 1000 characters).
+
+---
+
+### Decision H-022: Measured Workload Active Task Count (Phase 2C)
+- **Status**: `IMPLEMENTED`
+- **Context & Purpose**:
+  - Phase 1 and Phase 2A/2B relied on an unverified stored workload metric (`MetricDataStatus.UNVERIFIED`) originating from administrative user profiles.
+  - Phase 2C replaces the unverified stored workload with a genuine measured workload metric at recommendation time:
+    - Metric: `activeAssignedTaskCount`
+    - Unit: `ACTIVE_TASK_COUNT`
+    - Status: `MEASURED`
+    - Scope: `PROJECT`
+    - Timestamp: `workloadMeasuredAt` (application clock at recommendation time)
+  - Captures actual operational load without requiring background writers or cached counters.
+- **Decision & Invariants**:
+  - **Authoritative Task-Count Definition & Query**:
+    - `activeAssignedTaskCount` = count of active, non-terminal tasks currently assigned to a project member at recommendation time.
+    - Query implementation: Single batch aggregation `TaskRepository.countActiveAssignedTasksByProject(projectId, terminalStatuses)` exposed via `ProjectMemberPort.countActiveAssignedTasksByProject(projectId)`.
+    - Status inclusion/exclusion:
+      - Active statuses: `TaskStatus.TODO`, `TaskStatus.IN_PROGRESS`, `TaskStatus.REVIEW`.
+      - Terminal status strictly excluded: `TaskStatus.DONE`.
+      - Unassigned tasks (`assigneeId IS NULL`) are strictly excluded.
+      - Cross-project tasks (`projectId != :projectId`) are strictly excluded.
+    - **Architectural Rationale**: Avoids `MemberAnalyticsPort` / `AiQueryModuleAdapter` overhead (which loads full entities into memory, queries `userPort` N+1 times, and requires `requesterUserId`). The batch query performs a single `GROUP BY assignee_id` query backed by index `idx_tasks_project_assignee_status`.
+  - **Ranking & Heuristic Formula Integration**:
+    - Raw load score = `(double) activeAssignedTaskCount`.
+    - Evaluated through neutral Min-Max normalization in `ScoreRanges` / `HeuristicStrategy`.
+    - Workload monotonicity preserved: members with fewer active assigned tasks receive lower load penalty (higher net score).
+    - Equal-range handling: if all candidates have identical active task counts (e.g., all 0 or all 2), normalized load contribution is 0.0 (neutral).
+  - **Explicit Allowlisted Presentation Contract (`allowlisted-view-v2`)**:
+    - Presentation contract version bumped to `allowlisted-view-v2`.
+    - `RecommendedCandidateView` explicitly exposes:
+      - `storedWorkloadValue`: Integer (holds measured task count when measured, or stored profile value when unverified).
+      - `workloadStatus`: `MEASURED` | `UNVERIFIED`.
+      - `workloadUnit`: `"ACTIVE_TASK_COUNT"` when measured, null/omitted when unverified.
+      - `workloadScope`: `"PROJECT"`.
+      - `workloadMeasuredAt`: ISO-8601 application timestamp when measured, null/omitted when unverified.
+    - Canonical fixtures (`phase1-recommendation-view.json`) updated in backend and frontend with identical SHA-256 hash.
+  - **Frontend UI Guardrail**:
+    - Frontend (`RecommendationCard.tsx`, `aiChatHelpers.ts`) MUST NOT infer `ACTIVE_TASK_COUNT` from `workloadStatus === "MEASURED"` alone.
+    - Rendering requirement: `candidate.workloadStatus === "MEASURED" && candidate.workloadUnit === "ACTIVE_TASK_COUNT"` is required to render `"Số công việc đang hoạt động: <count>"`.
+    - Any missing or unknown unit falls back to unverified presentation: `"Giá trị workload đã lưu: <val> (Chưa có dữ liệu workload đáng tin cậy)"`.
+    - Strictly forbids appending `%` or capacity language (e.g., `"công suất"`, `"tải %"`) when status is `MEASURED`.
+  - **Database Persistence & Migration V36**:
+    - Added columns to `recommendation_snapshot_candidates`:
+      - `workload_unit VARCHAR(32)` (e.g., `'ACTIVE_TASK_COUNT'`)
+      - `workload_scope VARCHAR(32)` (e.g., `'PROJECT'`)
+      - `workload_measured_at TIMESTAMP WITH TIME ZONE`
+    - Added index `idx_tasks_project_assignee_status` ON `tasks (project_id, assignee_id, status)` for fast count aggregation.
+  - **Adaptive Enablement Criteria & Blocker Status**:
+    - Adaptive weights dataset usage rule: Candidate workload may be used by Adaptive learning pipelines ONLY when `status = MEASURED`, `unit = ACTIVE_TASK_COUNT`, `scope = PROJECT`, and `workloadMeasuredAt` is present.
+    - **Adaptive Weights remain BLOCKED**: Performance data remains static default `0.50` baseline (`DEFAULT`), so automated weight tuning cannot be enabled until empirical performance cycles exist.
+  - **Accepted Technical Debt**:
+    - `TD-P2C-WORKLOAD-QUERY-PORT-SEPARATION`:
+      - Detail: The measured workload query is temporarily placed on `ProjectMemberPort` to avoid circular module dependencies between `taskpilot-projects` and `taskpilot-ai`.
+      - Exit Condition: In a future module decoupling phase, extract a dedicated `WorkloadQueryPort` in `taskpilot-contracts`.
