@@ -529,3 +529,48 @@ Statuses in this register are unambiguous:
       - Risk: Reopened tasks (`DONE` -> non-`DONE`) retain historical outcome from first completion. If task is re-completed later, the original outcome record for `(decision, task)` is preserved and not overwritten.
       - Mitigation: Truthful and bounded reopen behavior: on reopen, `completedAt` is cleared on `tasks` table, but the original outcome record is kept immutable. First stored outcome for `(decision, task)` pair represents original assignment fulfillment. Re-completion does not overwrite existing outcome record.
       - Exit Condition: A future phase may add multi-cycle lifecycle outcome versioning if iterative rework modeling is required.
+
+---
+
+### Decision H-024: Adaptive MVP Foundation and Offline Shadow Proposals (Phase 2E + 2F)
+- **Status**: `IMPLEMENTED`
+- **Context & Purpose**:
+  - Phase 2E establishes a deterministic, read-only Adaptive dataset builder and machine-readable quality reporter from trusted evidence:
+    `snapshot → USER PM terminal decision → valid final task outcome`.
+  - Phase 2F introduces deterministic offline shadow weight proposals, Admin review lifecycle, and an immutable proposal audit trail.
+  - End state:
+    `snapshot → USER PM decision → valid task outcome → eligible Adaptive dataset → offline shadow proposal → Admin approve or reject → active production weights remain unchanged`.
+  - Phase 2F guarantees zero production weight mutation (H-005). Approval of a shadow proposal does NOT modify active weights or runtime recommendation ranking.
+- **Decision & Invariants**:
+  - **Dataset Eligibility Contract (Phase 2E)**:
+    - Snapshot: `presentationContractVersion = "allowlisted-view-v2"`, `differentiationStatus != "UNOBSERVED"`.
+    - Candidate: `fitStatus = MEASURED`, finite `presentationFitValue` in $[0.0, 1.0]$, `workloadStatus = MEASURED`, `workloadUnit = "ACTIVE_TASK_COUNT"`, `workloadScope = "PROJECT"`, `workloadMeasuredAt != null`, non-negative count. Performance is DEFAULT baseline and excluded as a tunable feature.
+    - Decision: `decisionSource = USER`, `decisionType` in `{ACCEPTED, OVERRIDDEN}`, `selectedCandidateId == task.assigneeId`.
+    - Outcome: `outcomeType` in `{COMPLETED_ON_TIME, COMPLETED_LATE}`, matching project and task, unambiguous linkage, no duplicate.
+    - Exclusions tracked explicitly across 20+ distinct reasons (`AdaptiveExclusionReason`).
+    - Canonical serialization: deterministically sorted samples hashed with SHA-256 for integrity auditing.
+  - **Minimum Evidence Gate & Offline Grid Search (Phase 2F Final Safety)**:
+    - Minimum evidence threshold: `minimumRequiredSamples = 20`.
+    - Samples $< 20$: proposal generated with status `INSUFFICIENT_EVIDENCE`. Truthful nullability: proposed weights (`proposedFitWeight`, `proposedLoadWeight`, `proposedPerformanceWeight`) and metrics (`metricHistoricalAgreement`, `metricOnTimeAssociation`, `currentMetricHistoricalAgreement`, `currentMetricOnTimeAssociation`) are `null`. Review attempts (`approve` or `reject`) on `INSUFFICIENT_EVIDENCE` are rejected with HTTP 400 Bad Request.
+    - Samples $\ge 20$: proposal generated with status `READY_FOR_REVIEW`.
+    - Two-Feature Adaptive Baseline Normalization:
+      - Default performance is excluded as a learning feature.
+      - Production baseline $(w_{fit}, w_{load}, w_{perf})$ is normalized to two-feature space:
+        $$currentAdaptiveFit = \frac{w_{fit}}{w_{fit} + w_{load}}, \quad currentAdaptiveLoad = \frac{w_{load}}{w_{fit} + w_{load}}$$
+      - Baseline denominator must be finite and positive. Sum is exactly 1.0.
+      - Grid search distance comparison (Tie-break Level 3) measures delta against $(currentAdaptiveFit, currentAdaptiveLoad)$.
+    - Search grid: $w_{fit} \in [0.10, 0.90]$ with step $0.05$ (17 candidate pairs); $w_{load} = 1.0 - w_{fit}$; $w_{perf} = 0.0$.
+    - Simulated ranking uses neutral Min-Max normalization and the fixed-point $10^9$ comparator with rawFit tie-break (`InternalCandidateRanking.STEP_A_COMPARATOR`).
+    - Deterministic 5-level tie-break:
+      1. Primary metric: `historicalAgreement` (higher ratio of simulated top candidate matching PM choice).
+      2. Secondary metric: `onTimeAssociation` (higher ratio of simulated top candidate matching PM choice for on-time tasks).
+      3. Weight delta: smaller $|w_{fit} - currentAdaptiveFit| + |w_{load} - currentAdaptiveLoad|$.
+      4. Higher $w_{fit}$.
+      5. Stable numeric order (index).
+    - Database schema migration `V39__correct_adaptive_proposal_safety.sql` relaxes NOT NULL constraints on proposed weights/metrics, and adds normalized baseline columns, baseline metrics, evaluation windows, and dataset/algorithm versions.
+  - **Admin Review, Proposal Integrity & Absolute No-Activation Guarantee (Phase 2F)**:
+    - Review lifecycle: `READY_FOR_REVIEW` $\rightarrow$ `APPROVED` or `REJECTED`.
+    - Access restricted to authenticated global Admin (`ROLE_ADMIN` / `ADMIN`). Non-admin attempts receive HTTP 403 Forbidden; unauthenticated receive HTTP 401 Unauthorized. Actor ID is strictly resolved from security context email via `UserIdentityPort`.
+    - Proposal Integrity Gate: Application-level check enforces `datasetSampleCount >= 20`, safe bounds $[0.10, 0.90]$, weight sum $1.0$, non-blank hash, and present metrics before permitting review.
+    - Immutability: Second review attempts on already terminal proposals (`APPROVED` or `REJECTED`) are rejected as HTTP 400 Bad Request. Review only updates `status`, `reviewedByUserId`, `reviewedAt`, and notes/reason; all dataset and calculation fields are strictly immutable.
+    - Absolute No-Activation Guarantee: Approving a proposal records `status = APPROVED`, `reviewedAt`, `reviewedByUserId`, and `reviewNotes`. It NEVER modifies `system_settings`, `HeuristicConfigProvider`, or runtime recommendation scores. Active production weights remain strictly identical before and after approval.
