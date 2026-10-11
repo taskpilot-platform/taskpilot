@@ -29,7 +29,8 @@ public enum AdaptiveExclusionReason {
     OUTCOME_EXCLUDED("Task outcome was marked EXCLUDED by the outcome evaluator"),
     AMBIGUOUS_LINKAGE("Multiple matching decisions or outcomes exist for the task"),
     DUPLICATE_SAMPLE("Duplicate outcome record encountered for the decision-task pair"),
-    REOPENED_TASK_EXCLUDED("Task was reopened after completion; historical outcome is excluded from adaptive training");
+    REOPENED_TASK_EXCLUDED("Task was reopened after completion; historical outcome is excluded from adaptive training"),
+    UNSUPPORTED_HEURISTIC_MODE("Snapshot heuristic mode is not BALANCED");
 
     private final String description;
 

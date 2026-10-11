@@ -9,6 +9,7 @@ import java.time.Instant;
 public record AdaptiveWeightProposalDto(
         String proposalId,
         WeightProposalStatus status,
+        String targetHeuristicMode,
         String datasetVersion,
         String datasetHash,
         int datasetSampleCount,

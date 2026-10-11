@@ -27,6 +27,9 @@ public class AdaptiveWeightProposalEntity {
     @Column(name = "status", nullable = false, length = 32)
     private WeightProposalStatus status;
 
+    @Column(name = "target_heuristic_mode", length = 32)
+    private String targetHeuristicMode;
+
     @Column(name = "dataset_version", nullable = false, length = 32)
     private String datasetVersion;
 

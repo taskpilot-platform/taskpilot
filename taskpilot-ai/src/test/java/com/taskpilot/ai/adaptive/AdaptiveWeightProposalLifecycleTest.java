@@ -83,6 +83,7 @@ class AdaptiveWeightProposalLifecycleTest {
         return AdaptiveWeightProposalEntity.builder()
                 .proposalId(id)
                 .status(status)
+                .targetHeuristicMode("BALANCED")
                 .datasetHash("sha-abc")
                 .datasetSampleCount(isInsuff ? 15 : 25)
                 .currentFitWeight(0.5)
@@ -318,6 +319,7 @@ class AdaptiveWeightProposalLifecycleTest {
         assertEquals("proposal-v1", reviewed.proposalVersion());
         assertEquals("dataset-v1", reviewed.datasetVersion());
         assertEquals("grid-search-v1", reviewed.algorithmVersion());
+        assertEquals("BALANCED", reviewed.targetHeuristicMode());
     }
 
     @Test
@@ -332,5 +334,89 @@ class AdaptiveWeightProposalLifecycleTest {
                 adminController.generateProposal(unknownAdmin)
         );
         assertEquals(HttpStatus.UNAUTHORIZED.value(), ex.getStatus());
+    }
+
+    @Test
+    @DisplayName("13. Proposal integrity rejects review if targetHeuristicMode is null or not BALANCED")
+    void test13_rejectProposalWithUnsupportedTargetHeuristicMode() {
+        AdaptiveWeightProposalEntity urgentProp = createProposal("prop-urgent", WeightProposalStatus.READY_FOR_REVIEW);
+        urgentProp.setTargetHeuristicMode("URGENT");
+        AdaptiveWeightProposalEntity trainingProp = createProposal("prop-training", WeightProposalStatus.READY_FOR_REVIEW);
+        trainingProp.setTargetHeuristicMode("TRAINING");
+        AdaptiveWeightProposalEntity nullProp = createProposal("prop-null-mode", WeightProposalStatus.READY_FOR_REVIEW);
+        nullProp.setTargetHeuristicMode(null);
+
+        when(proposalRepository.findById("prop-urgent")).thenReturn(Optional.of(urgentProp));
+        when(proposalRepository.findById("prop-training")).thenReturn(Optional.of(trainingProp));
+        when(proposalRepository.findById("prop-null-mode")).thenReturn(Optional.of(nullProp));
+
+        BusinessException ex1 = assertThrows(BusinessException.class, () ->
+                proposalService.approveProposal("prop-urgent", 1L, "Approve urgent")
+        );
+        assertEquals(HttpStatus.BAD_REQUEST.value(), ex1.getStatus());
+        assertTrue(ex1.getMessage().contains("Target heuristic mode must be BALANCED"));
+
+        BusinessException ex2 = assertThrows(BusinessException.class, () ->
+                proposalService.approveProposal("prop-training", 1L, "Approve training")
+        );
+        assertEquals(HttpStatus.BAD_REQUEST.value(), ex2.getStatus());
+        assertTrue(ex2.getMessage().contains("Target heuristic mode must be BALANCED"));
+
+        BusinessException ex3 = assertThrows(BusinessException.class, () ->
+                proposalService.approveProposal("prop-null-mode", 1L, "Approve null mode")
+        );
+        assertEquals(HttpStatus.BAD_REQUEST.value(), ex3.getStatus());
+        assertTrue(ex3.getMessage().contains("Target heuristic mode must be BALANCED"));
+    }
+
+    @Test
+    @DisplayName("14. Legacy proposal safety: null-mode proposal is readable, not converted to BALANCED, and non-reviewable")
+    void test14_legacyNullModeProposalBehaviorAndReadability() {
+        // 1. Create legacy entity with null targetHeuristicMode
+        AdaptiveWeightProposalEntity legacyEntity = createProposal("prop-legacy-null", WeightProposalStatus.READY_FOR_REVIEW);
+        legacyEntity.setTargetHeuristicMode(null);
+
+        when(proposalRepository.findById("prop-legacy-null")).thenReturn(Optional.of(legacyEntity));
+        when(proposalRepository.findTopByOrderByCreatedAtDesc()).thenReturn(Optional.of(legacyEntity));
+
+        // 2 & 3. Legacy row remains readable, and null mode is NOT silently converted to BALANCED in DTO
+        AdaptiveWeightProposalDto readDto = proposalService.getProposalById("prop-legacy-null");
+        assertNull(readDto.targetHeuristicMode(), "Legacy null targetHeuristicMode must remain null in DTO");
+
+        AdaptiveWeightProposalDto latestDto = proposalService.getLatestProposal();
+        assertNull(latestDto.targetHeuristicMode(), "Latest proposal DTO must not convert null to BALANCED");
+
+        // 1 & 5. Non-reviewable (null mode, URGENT, TRAINING cannot be approved or rejected)
+        BusinessException approveEx = assertThrows(BusinessException.class, () ->
+                proposalService.approveProposal("prop-legacy-null", 1L, "Approve legacy")
+        );
+        assertEquals(HttpStatus.BAD_REQUEST.value(), approveEx.getStatus());
+        assertTrue(approveEx.getMessage().contains("Target heuristic mode must be BALANCED"));
+
+        BusinessException rejectEx = assertThrows(BusinessException.class, () ->
+                proposalService.rejectProposal("prop-legacy-null", 1L, "Reject legacy")
+        );
+        assertEquals(HttpStatus.BAD_REQUEST.value(), rejectEx.getStatus());
+        assertTrue(rejectEx.getMessage().contains("Target heuristic mode must be BALANCED"));
+
+        // 4. New proposal explicitly stores BALANCED (not null)
+        AdaptiveWeightProposalEntity newEntity = AdaptiveWeightProposalEntity.builder()
+                .proposalId("prop-new")
+                .targetHeuristicMode("BALANCED")
+                .build();
+        assertEquals("BALANCED", newEntity.getTargetHeuristicMode());
+
+        AdaptiveWeightProposalEntity defaultEntity = new AdaptiveWeightProposalEntity();
+        assertNull(defaultEntity.getTargetHeuristicMode(), "Unset targetHeuristicMode must default to null (no @Builder.Default inference)");
+
+        // 6. Approval of BALANCED proposal remains non-activating
+        AdaptiveWeightProposalEntity validProp = createProposal("prop-valid", WeightProposalStatus.READY_FOR_REVIEW);
+        when(proposalRepository.findById("prop-valid")).thenReturn(Optional.of(validProp));
+        AdaptiveWeightProposalDto approved = proposalService.approveProposal("prop-valid", 1L, "Approval check");
+        assertEquals(WeightProposalStatus.APPROVED, approved.status());
+        assertEquals("BALANCED", approved.targetHeuristicMode());
+        assertEquals(0.5, initialActiveWeights.fitWeight());
+        assertEquals(0.3, initialActiveWeights.loadWeight());
+        assertEquals(0.2, initialActiveWeights.performanceWeight());
     }
 }

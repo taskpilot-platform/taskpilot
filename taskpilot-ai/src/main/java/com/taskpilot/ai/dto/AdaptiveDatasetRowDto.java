@@ -14,6 +14,7 @@ public record AdaptiveDatasetRowDto(
         String decisionId,
         Long taskId,
         Long projectId,
+        String heuristicMode,
         Long selectedCandidateId,
         Long recommendedCandidateId,
         RecommendationDecisionType decisionType,
@@ -39,7 +40,28 @@ public record AdaptiveDatasetRowDto(
             double selectedCandidateLoad,
             List<CandidateFeatureDto> candidates
     ) {
-        this(rowId, snapshotId, decisionId, taskId, projectId, selectedCandidateId,
+        this(rowId, snapshotId, decisionId, taskId, projectId, "BALANCED", selectedCandidateId,
+                recommendedCandidateId, decisionType, outcomeType, completedOnTime,
+                selectedCandidateFit, selectedCandidateLoad, candidates, null);
+    }
+
+    public AdaptiveDatasetRowDto(
+            String rowId,
+            String snapshotId,
+            String decisionId,
+            Long taskId,
+            Long projectId,
+            String heuristicMode,
+            Long selectedCandidateId,
+            Long recommendedCandidateId,
+            RecommendationDecisionType decisionType,
+            TaskOutcomeType outcomeType,
+            boolean completedOnTime,
+            double selectedCandidateFit,
+            double selectedCandidateLoad,
+            List<CandidateFeatureDto> candidates
+    ) {
+        this(rowId, snapshotId, decisionId, taskId, projectId, heuristicMode, selectedCandidateId,
                 recommendedCandidateId, decisionType, outcomeType, completedOnTime,
                 selectedCandidateFit, selectedCandidateLoad, candidates, null);
     }

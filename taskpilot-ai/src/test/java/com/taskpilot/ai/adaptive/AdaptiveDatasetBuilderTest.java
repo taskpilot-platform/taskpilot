@@ -452,8 +452,49 @@ class AdaptiveDatasetBuilderTest {
         // Row contains only IDs and normalized numeric values
         assertEquals("out-1", row.rowId());
         assertEquals(1001L, row.taskId());
+        assertEquals("BALANCED", row.heuristicMode());
         assertEquals(50L, row.selectedCandidateId());
         assertEquals(0.8, row.selectedCandidateFit(), 1e-6);
         assertEquals(2.0, row.selectedCandidateLoad(), 1e-6);
+    }
+
+    @Test
+    @DisplayName("24. Snapshots with non-BALANCED heuristic mode (URGENT, TRAINING, null) are excluded")
+    void test24_unsupportedHeuristicMode_isExcluded() {
+        RecommendationSnapshotEntity snapUrgent = createValidSnapshot("snap-urgent", 10L, 1001L, 50L);
+        snapUrgent.setHeuristicMode("URGENT");
+        RecommendationSnapshotEntity snapTraining = createValidSnapshot("snap-train", 10L, 1002L, 50L);
+        snapTraining.setHeuristicMode("TRAINING");
+        RecommendationSnapshotEntity snapNull = createValidSnapshot("snap-null", 10L, 1003L, 50L);
+        snapNull.setHeuristicMode(null);
+
+        RecommendationDecisionEventEntity decUrgent = createValidDecision("dec-urgent", "snap-urgent", 10L, 1001L, 50L);
+        RecommendationTaskOutcomeEntity outUrgent = createValidOutcome("out-urgent", "snap-urgent", "dec-urgent", 10L, 1001L, 50L);
+
+        RecommendationDecisionEventEntity decTrain = createValidDecision("dec-train", "snap-train", 10L, 1002L, 50L);
+        RecommendationTaskOutcomeEntity outTrain = createValidOutcome("out-train", "snap-train", "dec-train", 10L, 1002L, 50L);
+
+        RecommendationDecisionEventEntity decNull = createValidDecision("dec-null", "snap-null", 10L, 1003L, 50L);
+        RecommendationTaskOutcomeEntity outNull = createValidOutcome("out-null", "snap-null", "dec-null", 10L, 1003L, 50L);
+
+        when(snapshotPort.findById("snap-urgent")).thenReturn(Optional.of(snapUrgent));
+        when(decisionPort.findById("dec-urgent")).thenReturn(Optional.of(decUrgent));
+        when(snapshotPort.findById("snap-train")).thenReturn(Optional.of(snapTraining));
+        when(decisionPort.findById("dec-train")).thenReturn(Optional.of(decTrain));
+        when(snapshotPort.findById("snap-null")).thenReturn(Optional.of(snapNull));
+        when(decisionPort.findById("dec-null")).thenReturn(Optional.of(decNull));
+
+        Optional<AdaptiveExclusionReason> r1 = datasetService.evaluateOutcomeEligibility(outUrgent, new HashSet<>());
+        Optional<AdaptiveExclusionReason> r2 = datasetService.evaluateOutcomeEligibility(outTrain, new HashSet<>());
+        Optional<AdaptiveExclusionReason> r3 = datasetService.evaluateOutcomeEligibility(outNull, new HashSet<>());
+
+        assertEquals(Optional.of(AdaptiveExclusionReason.UNSUPPORTED_HEURISTIC_MODE), r1);
+        assertEquals(Optional.of(AdaptiveExclusionReason.UNSUPPORTED_HEURISTIC_MODE), r2);
+        assertEquals(Optional.of(AdaptiveExclusionReason.UNSUPPORTED_HEURISTIC_MODE), r3);
+
+        AdaptiveDatasetService.DatasetResult result = datasetService.evaluateOutcomes(List.of(outUrgent, outTrain, outNull));
+        assertEquals(0, result.eligibleRows().size());
+        assertEquals(3, result.qualityReport().excludedSamplesCount());
+        assertEquals(3L, result.qualityReport().exclusionBreakdown().get("UNSUPPORTED_HEURISTIC_MODE"));
     }
 }

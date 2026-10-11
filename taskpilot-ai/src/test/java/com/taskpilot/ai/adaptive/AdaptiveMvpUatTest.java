@@ -318,6 +318,7 @@ class AdaptiveMvpUatTest {
 
         AdaptiveWeightProposalDto proposal = proposalService.generateProposal(1L);
         assertEquals(WeightProposalStatus.READY_FOR_REVIEW, proposal.status());
+        assertEquals("BALANCED", proposal.targetHeuristicMode());
         assertEquals(22, proposal.datasetSampleCount());
         assertTrue(proposal.proposedFitWeight() >= 0.10 && proposal.proposedFitWeight() <= 0.90);
         assertTrue(proposal.proposedLoadWeight() >= 0.10 && proposal.proposedLoadWeight() <= 0.90);

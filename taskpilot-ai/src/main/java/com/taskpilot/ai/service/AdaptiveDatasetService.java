@@ -235,7 +235,12 @@ public class AdaptiveDatasetService {
             return Optional.of(AdaptiveExclusionReason.UNSUPPORTED_SNAPSHOT_VERSION);
         }
 
-        // 11. Differentiation status: must not be UNOBSERVED
+        // 11. Heuristic mode: must be BALANCED for Phase 2E/2F Adaptive MVP
+        if (snapshot.getHeuristicMode() == null || !"BALANCED".equalsIgnoreCase(snapshot.getHeuristicMode().trim())) {
+            return Optional.of(AdaptiveExclusionReason.UNSUPPORTED_HEURISTIC_MODE);
+        }
+
+        // 12. Differentiation status: must not be UNOBSERVED
         if ("UNOBSERVED".equalsIgnoreCase(snapshot.getDifferentiationStatus())) {
             return Optional.of(AdaptiveExclusionReason.UNOBSERVED_SNAPSHOT);
         }
@@ -335,6 +340,7 @@ public class AdaptiveDatasetService {
                 decision.getDecisionId(),
                 outcome.getTaskId(),
                 outcome.getProjectId(),
+                snapshot.getHeuristicMode() != null ? snapshot.getHeuristicMode().trim().toUpperCase(Locale.ROOT) : "BALANCED",
                 decision.getSelectedCandidateId(),
                 decision.getRecommendedCandidateId(),
                 decision.getDecisionType(),

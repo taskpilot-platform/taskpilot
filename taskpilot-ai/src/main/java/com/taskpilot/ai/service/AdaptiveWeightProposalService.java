@@ -109,6 +109,7 @@ public class AdaptiveWeightProposalService {
             AdaptiveWeightProposalEntity entity = AdaptiveWeightProposalEntity.builder()
                     .proposalId(proposalId)
                     .status(WeightProposalStatus.INSUFFICIENT_EVIDENCE)
+                    .targetHeuristicMode("BALANCED")
                     .datasetVersion(DATASET_VERSION_V1)
                     .datasetHash(report.canonicalDatasetSha256())
                     .datasetSampleCount(eligibleRows.size())
@@ -164,6 +165,7 @@ public class AdaptiveWeightProposalService {
         AdaptiveWeightProposalEntity entity = AdaptiveWeightProposalEntity.builder()
                 .proposalId(proposalId)
                 .status(WeightProposalStatus.READY_FOR_REVIEW)
+                .targetHeuristicMode("BALANCED")
                 .datasetVersion(DATASET_VERSION_V1)
                 .datasetHash(report.canonicalDatasetSha256())
                 .datasetSampleCount(eligibleRows.size())
@@ -266,6 +268,10 @@ public class AdaptiveWeightProposalService {
     public void validateProposalIntegrityForReview(AdaptiveWeightProposalEntity proposal) {
         if (proposal == null) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Proposal cannot be null");
+        }
+        if (proposal.getTargetHeuristicMode() == null || !"BALANCED".equalsIgnoreCase(proposal.getTargetHeuristicMode().trim())) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                    "Target heuristic mode must be BALANCED for Adaptive MVP proposals, but found: " + proposal.getTargetHeuristicMode());
         }
         if (!PROPOSAL_VERSION_V1.equals(proposal.getProposalVersion())) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
@@ -450,6 +456,7 @@ public class AdaptiveWeightProposalService {
         return new AdaptiveWeightProposalDto(
                 entity.getProposalId(),
                 entity.getStatus(),
+                entity.getTargetHeuristicMode(),
                 entity.getDatasetVersion(),
                 entity.getDatasetHash(),
                 entity.getDatasetSampleCount(),
