@@ -49,4 +49,9 @@ public class RecommendationTaskOutcomeJpaAdapter implements RecommendationTaskOu
     public List<RecommendationTaskOutcomeEntity> findByProjectId(Long projectId) {
         return repository.findByProjectIdOrderByObservedAtDesc(projectId);
     }
+
+    @Override
+    public List<RecommendationTaskOutcomeEntity> findAll() {
+        return repository.findAll();
+    }
 }

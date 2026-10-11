@@ -20,4 +20,6 @@ public interface RecommendationTaskOutcomePort {
     List<RecommendationTaskOutcomeEntity> findByDecisionId(String decisionId);
 
     List<RecommendationTaskOutcomeEntity> findByProjectId(Long projectId);
+
+    List<RecommendationTaskOutcomeEntity> findAll();
 }
