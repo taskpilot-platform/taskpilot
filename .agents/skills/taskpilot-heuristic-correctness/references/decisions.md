@@ -567,10 +567,17 @@ Statuses in this register are unambiguous:
       3. Weight delta: smaller $|w_{fit} - currentAdaptiveFit| + |w_{load} - currentAdaptiveLoad|$.
       4. Higher $w_{fit}$.
       5. Stable numeric order (index).
-    - Database schema migration `V39__correct_adaptive_proposal_safety.sql` relaxes NOT NULL constraints on proposed weights/metrics, and adds normalized baseline columns, baseline metrics, evaluation windows, and dataset/algorithm versions.
+  - **Strategy Pattern & Heuristic-Mode Scope (Phase 2F Bounded Scope)**:
+    - Adaptive MVP proposals are strictly scoped to the `BALANCED` heuristic mode (`targetHeuristicMode = "BALANCED"`).
+    - Mode preservation: each dataset row (`AdaptiveDatasetRowDto`) explicitly preserves the snapshot's `heuristicMode`.
+    - Mode filtering: snapshots with `heuristicMode != "BALANCED"` or `null` are excluded from the Adaptive dataset with `UNSUPPORTED_HEURISTIC_MODE`.
+    - Baseline source: current `BALANCED` baseline weights are loaded dynamically from runtime configuration via `HeuristicStrategyFactory.resolve("BALANCED")` (`HeuristicConfigProvider` / `system_settings["heuristic.weights"]`), not hardcoded numerical constants. Example normalized baseline $0.625 / 0.375$ represents default runtime weights $(0.50, 0.30, 0.20)$ and is not a universal constant.
+    - Proposal auditing & forward migration: forward migration `V40__scope_adaptive_proposals_to_heuristic_mode.sql` adds `target_heuristic_mode VARCHAR(32) NULL` with a legacy-compatible check constraint (`target_heuristic_mode IS NULL OR target_heuristic_mode = 'BALANCED'`) and an index on `(target_heuristic_mode)` to `adaptive_weight_proposals`. No synthetic backfill or `DEFAULT` is applied to legacy rows. Historical null-mode proposals remain readable but non-reviewable. Historical migrations `V34` through `V39` remain strictly immutable.
+    - Proposal Integrity Gate rejects review of proposals whose `targetHeuristicMode` is missing/null, `URGENT`, `TRAINING`, or any value other than `BALANCED`.
+    - Future multi-mode adaptation (`URGENT`, `TRAINING`) remains deferred and out-of-scope for the Adaptive MVP.
   - **Admin Review, Proposal Integrity & Absolute No-Activation Guarantee (Phase 2F)**:
     - Review lifecycle: `READY_FOR_REVIEW` $\rightarrow$ `APPROVED` or `REJECTED`.
     - Access restricted to authenticated global Admin (`ROLE_ADMIN` / `ADMIN`). Non-admin attempts receive HTTP 403 Forbidden; unauthenticated receive HTTP 401 Unauthorized. Actor ID is strictly resolved from security context email via `UserIdentityPort`.
-    - Proposal Integrity Gate: Application-level check enforces `datasetSampleCount >= 20`, safe bounds $[0.10, 0.90]$, weight sum $1.0$, non-blank hash, and present metrics before permitting review.
+    - Proposal Integrity Gate: Application-level check enforces `datasetSampleCount >= 20`, safe bounds $[0.10, 0.90]$, weight sum $1.0$, non-blank hash, present metrics, and `targetHeuristicMode == "BALANCED"` before permitting review.
     - Immutability: Second review attempts on already terminal proposals (`APPROVED` or `REJECTED`) are rejected as HTTP 400 Bad Request. Review only updates `status`, `reviewedByUserId`, `reviewedAt`, and notes/reason; all dataset and calculation fields are strictly immutable.
     - Absolute No-Activation Guarantee: Approving a proposal records `status = APPROVED`, `reviewedAt`, `reviewedByUserId`, and `reviewNotes`. It NEVER modifies `system_settings`, `HeuristicConfigProvider`, or runtime recommendation scores. Active production weights remain strictly identical before and after approval.
