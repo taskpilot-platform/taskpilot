@@ -185,13 +185,21 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     @Transactional
     public TaskSummaryDto updateTaskStatus(Long taskId, String status, Long requesterUserId) {
         TaskEntity task = findTask(taskId);
-        validateProjectMember(task.getProjectId(), requesterUserId);
-        validateProjectNotArchived(task.getProjectId());
-
+        String email = getRequesterEmail(requesterUserId);
         TaskStatus nextStatus = parseStatus(status);
-        task.setStatus(nextStatus);
-        taskRepository.save(task);
-        return toTaskSummary(task);
+        UpdateTaskRequest request = new UpdateTaskRequest(
+                null,
+                null,
+                nextStatus,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null);
+        return toTaskSummary(taskService.updateTask(taskId, request, email), task.getProjectId());
     }
 
     @Override

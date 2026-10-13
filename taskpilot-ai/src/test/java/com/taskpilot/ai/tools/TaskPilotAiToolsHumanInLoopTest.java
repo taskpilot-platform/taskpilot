@@ -2,29 +2,36 @@ package com.taskpilot.ai.tools;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
+import com.taskpilot.infrastructure.exception.BusinessException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
 
-import com.taskpilot.ai.dto.AutoAssignmentResponse;
-import com.taskpilot.ai.dto.CandidateScore;
 import com.taskpilot.ai.dto.ConfirmationRequiredDto;
+import com.taskpilot.ai.dto.RecommendationView;
+import com.taskpilot.ai.dto.RecommendedCandidateView;
 import com.taskpilot.ai.service.AutoAssignmentService;
 import com.taskpilot.ai.service.PendingAiActionService;
 import com.taskpilot.ai.service.SmartQueryService;
@@ -104,6 +111,8 @@ class TaskPilotAiToolsHumanInLoopTest {
 
     @Test
     void assignTaskToMemberWaitsForHumanConfirmationBeforeWriting() {
+        when(taskCommandPort.getTaskDetails(75L, USER_ID))
+                .thenReturn(new TaskDetailDto(75L, 8L, "test task", "", "TODO", "MEDIUM", 1, "Java", null, null, null));
         when(taskCommandPort.assignTaskToMember(75L, 16L, "test", USER_ID, false))
                 .thenReturn(TaskAssignmentResultDto.success(75L, 16L, "test"));
 
@@ -151,14 +160,14 @@ class TaskPilotAiToolsHumanInLoopTest {
         when(taskCommandPort.getTaskDetails(76L, USER_ID))
                 .thenReturn(new TaskDetailDto(76L, 8L, "Test task", "", "TODO", "MEDIUM", 5,
                         "Spring Boot", null, null, null));
-        when(autoAssignmentService.recommendCandidates(8L, List.of("Spring Boot"), 5, USER_ID))
-                .thenReturn(AutoAssignmentResponse.builder()
+        when(autoAssignmentService.recommendCandidatesView(8L, List.of("Spring Boot"), 5, USER_ID, Set.of(), Set.of()))
+                .thenReturn(RecommendationView.builder()
                         .projectId(8L)
                         .requiredSkills(List.of("Spring Boot"))
-                        .candidates(List.of(CandidateScore.builder()
-                                .userId(16L)
-                                .fullName("Admin")
-                                .totalScore(0.9)
+                        .candidates(List.of(RecommendedCandidateView.builder()
+                                .rank(1)
+                                .candidateId(16L)
+                                .displayName("Admin")
                                 .build()))
                         .aiExplanation("Best candidate")
                         .build());
@@ -175,6 +184,239 @@ class TaskPilotAiToolsHumanInLoopTest {
 
         assertTrue(result.toString().contains("selectedMemberName=Admin"));
         verify(taskCommandPort).assignTaskToMember(eq(76L), eq(16L), any(), eq(USER_ID), eq(false));
+    }
+
+    @Test
+    void managerAtPreview_managerAtConfirm_assignmentSucceeds() {
+        when(taskCommandPort.getTaskDetails(76L, USER_ID))
+                .thenReturn(new TaskDetailDto(76L, 8L, "Test task", "", "TODO", "MEDIUM", 5,
+                        "Spring Boot", null, null, null));
+        when(autoAssignmentService.recommendCandidatesView(8L, List.of("Spring Boot"), 5, USER_ID, Set.of(), Set.of()))
+                .thenReturn(RecommendationView.builder()
+                        .projectId(8L)
+                        .requiredSkills(List.of("Spring Boot"))
+                        .candidates(List.of(RecommendedCandidateView.builder()
+                                .rank(1)
+                                .candidateId(16L)
+                                .displayName("Admin")
+                                .build()))
+                        .aiExplanation("Best candidate")
+                        .build());
+        when(taskCommandPort.assignTaskToMember(eq(76L), eq(16L), any(), eq(USER_ID), eq(false)))
+                .thenReturn(TaskAssignmentResultDto.success(76L, 16L, "selected"));
+
+        ConfirmationRequiredDto pending = assertPending(
+                tools.recommendAndAssignTask("76", null, null, null, null),
+                "recommendAndAssignTask");
+
+        verify(taskCommandPort, never()).assignTaskToMember(eq(76L), eq(16L), any(), eq(USER_ID), eq(false));
+
+        Object result = confirm(pending.actionId());
+
+        assertTrue(result.toString().contains("selectedMemberName=Admin"));
+        verify(taskCommandPort).assignTaskToMember(eq(76L), eq(16L), any(), eq(USER_ID), eq(false));
+        verify(autoAssignmentService, atLeast(2)).validateProjectManager(8L, USER_ID);
+    }
+
+    @Test
+    void managerAtPreview_memberAtConfirm_assignmentDenied() {
+        when(taskCommandPort.getTaskDetails(76L, USER_ID))
+                .thenReturn(new TaskDetailDto(76L, 8L, "Test task", "", "TODO", "MEDIUM", 5,
+                        "Spring Boot", null, null, null));
+        when(autoAssignmentService.recommendCandidatesView(8L, List.of("Spring Boot"), 5, USER_ID, Set.of(), Set.of()))
+                .thenReturn(RecommendationView.builder()
+                        .projectId(8L)
+                        .requiredSkills(List.of("Spring Boot"))
+                        .candidates(List.of(RecommendedCandidateView.builder()
+                                .rank(1)
+                                .candidateId(16L)
+                                .displayName("Admin")
+                                .build()))
+                        .build());
+
+        ConfirmationRequiredDto pending = assertPending(
+                tools.recommendAndAssignTask("76", null, null, null, null),
+                "recommendAndAssignTask");
+
+        // User is demoted to MEMBER before confirmation
+        doThrow(new BusinessException(HttpStatus.FORBIDDEN.value(), "Forbidden: User is not a manager of project 8"))
+                .when(autoAssignmentService).validateProjectManager(8L, USER_ID);
+
+        Object result = confirm(pending.actionId());
+
+        assertTrue(result.toString().contains("Forbidden: User is not a manager of project 8"));
+        verify(taskCommandPort, never()).assignTaskToMember(any(), any(), any(), any(), anyBoolean());
+        verify(taskCommandPort, never()).updateTaskRequiredSkills(any(), any(), any());
+    }
+
+    @Test
+    void managerAtPreview_removedAtConfirm_assignmentDenied() {
+        when(taskCommandPort.getTaskDetails(76L, USER_ID))
+                .thenReturn(new TaskDetailDto(76L, 8L, "Test task", "", "TODO", "MEDIUM", 5,
+                        "Spring Boot", null, null, null));
+        when(autoAssignmentService.recommendCandidatesView(8L, List.of("Spring Boot"), 5, USER_ID, Set.of(), Set.of()))
+                .thenReturn(RecommendationView.builder()
+                        .projectId(8L)
+                        .requiredSkills(List.of("Spring Boot"))
+                        .candidates(List.of(RecommendedCandidateView.builder()
+                                .rank(1)
+                                .candidateId(16L)
+                                .displayName("Admin")
+                                .build()))
+                        .build());
+
+        ConfirmationRequiredDto pending = assertPending(
+                tools.recommendAndAssignTask("76", null, null, null, null),
+                "recommendAndAssignTask");
+
+        // User is removed from project before confirmation
+        doThrow(new BusinessException(HttpStatus.FORBIDDEN.value(), "Forbidden: User is not a member of project 8"))
+                .when(autoAssignmentService).validateProjectManager(8L, USER_ID);
+
+        Object result = confirm(pending.actionId());
+
+        assertTrue(result.toString().contains("Forbidden: User is not a member of project 8"));
+        verify(taskCommandPort, never()).assignTaskToMember(any(), any(), any(), any(), anyBoolean());
+        verify(taskCommandPort, never()).updateTaskRequiredSkills(any(), any(), any());
+    }
+
+    @Test
+    void actionOwnerMismatch_denied() {
+        when(taskCommandPort.getTaskDetails(76L, USER_ID))
+                .thenReturn(new TaskDetailDto(76L, 8L, "Test task", "", "TODO", "MEDIUM", 5,
+                        "Spring Boot", null, null, null));
+        when(autoAssignmentService.recommendCandidatesView(8L, List.of("Spring Boot"), 5, USER_ID, Set.of(), Set.of()))
+                .thenReturn(RecommendationView.builder()
+                        .projectId(8L)
+                        .requiredSkills(List.of("Spring Boot"))
+                        .candidates(List.of(RecommendedCandidateView.builder()
+                                 .rank(1)
+                                .candidateId(16L)
+                                .displayName("Admin")
+                                .build()))
+                        .build());
+
+        ConfirmationRequiredDto pending = assertPending(
+                tools.recommendAndAssignTask("76", null, null, null, null),
+                "recommendAndAssignTask");
+
+        // User 999L attempts to confirm action owned by USER_ID (16L)
+        ToolExecutionContext.set(new ToolExecutionContext.Context(999L, SESSION_ID, "confirm by other"));
+        BusinessException ex = assertThrows(BusinessException.class, () ->
+                tools.confirmPendingAction(pending.actionId()));
+
+        assertEquals(HttpStatus.FORBIDDEN.value(), ex.getStatus());
+        assertTrue(ex.getMessage().contains("Pending action does not belong to this session"));
+        verify(taskCommandPort, never()).assignTaskToMember(any(), any(), any(), any(), anyBoolean());
+        verify(taskCommandPort, never()).updateTaskRequiredSkills(any(), any(), any());
+    }
+
+    @Test
+    void assignmentPortNotCalledWhenAuthorizationFails() {
+        when(taskCommandPort.getTaskDetails(76L, USER_ID))
+                .thenReturn(new TaskDetailDto(76L, 8L, "Test task", "", "TODO", "MEDIUM", 5,
+                        "Spring Boot", null, null, null));
+        when(autoAssignmentService.recommendCandidatesView(8L, List.of("Spring Boot"), 5, USER_ID, Set.of(), Set.of()))
+                .thenReturn(RecommendationView.builder()
+                        .projectId(8L)
+                        .requiredSkills(List.of("Spring Boot"))
+                        .candidates(List.of(RecommendedCandidateView.builder()
+                                .rank(1)
+                                .candidateId(16L)
+                                .displayName("Admin")
+                                .build()))
+                        .build());
+
+        ConfirmationRequiredDto pending = assertPending(
+                tools.recommendAndAssignTask("76", null, null, null, null),
+                "recommendAndAssignTask");
+
+        doThrow(new BusinessException(HttpStatus.FORBIDDEN.value(), "Forbidden: User is not a manager"))
+                .when(autoAssignmentService).validateProjectManager(8L, USER_ID);
+
+        confirm(pending.actionId());
+
+        verify(taskCommandPort, never()).assignTaskToMember(any(), any(), any(), any(), anyBoolean());
+        verify(taskCommandPort, never()).updateTaskRequiredSkills(any(), any(), any());
+    }
+
+    @Test
+    void directAssignment_managerAtPreview_managerAtConfirm_succeeds() {
+        when(taskCommandPort.getTaskDetails(75L, USER_ID))
+                .thenReturn(new TaskDetailDto(75L, 8L, "test task", "", "TODO", "MEDIUM", 1, "Java", null, null, null));
+        when(taskCommandPort.assignTaskToMember(75L, 16L, "direct assign", USER_ID, false))
+                .thenReturn(TaskAssignmentResultDto.success(75L, 16L, "direct assign"));
+
+        ConfirmationRequiredDto pending = assertPending(tools.assignTaskToMember("75", "16", "direct assign"),
+                "assignTaskToMember");
+
+        verify(taskCommandPort, never()).assignTaskToMember(any(), any(), any(), any(), eq(false));
+
+        Object result = confirm(pending.actionId());
+
+        TaskAssignmentResultDto assignment = assertInstanceOf(TaskAssignmentResultDto.class, result);
+        assertEquals("SUCCESS", assignment.status());
+        verify(taskCommandPort).assignTaskToMember(75L, 16L, "direct assign", USER_ID, false);
+        verify(autoAssignmentService, atLeast(2)).validateProjectManager(8L, USER_ID);
+    }
+
+    @Test
+    void directAssignment_managerAtPreview_memberAtConfirm_denied() {
+        when(taskCommandPort.getTaskDetails(75L, USER_ID))
+                .thenReturn(new TaskDetailDto(75L, 8L, "test task", "", "TODO", "MEDIUM", 1, "Java", null, null, null));
+
+        ConfirmationRequiredDto pending = assertPending(tools.assignTaskToMember("75", "16", "direct assign"),
+                "assignTaskToMember");
+
+        // User is demoted to MEMBER before confirmation
+        doThrow(new BusinessException(HttpStatus.FORBIDDEN.value(), "Forbidden: User is not a manager of project 8"))
+                .when(autoAssignmentService).validateProjectManager(8L, USER_ID);
+
+        Object result = confirm(pending.actionId());
+
+        assertTrue(result.toString().contains("Forbidden: User is not a manager of project 8"));
+        verify(taskCommandPort, never()).assignTaskToMember(any(), any(), any(), any(), anyBoolean());
+    }
+
+    @Test
+    void directAssignmentByName_managerAtPreview_memberAtConfirm_denied() {
+        when(taskCommandPort.getTaskDetails(68L, USER_ID))
+                .thenReturn(new TaskDetailDto(68L, 1L, "Sub task 3", "", "TODO", "MEDIUM", 1,
+                        "Java", null, null, null));
+        when(projectInsightsPort.getProjectMembers(1L, USER_ID))
+                .thenReturn(List.of(
+                        new ProjectMemberDto(10L, "Julia Design", "MEMBER", 0.85, "Java")));
+
+        ConfirmationRequiredDto pending = assertPending(
+                tools.assignTaskToMemberByName("68", "Julia Design", "User requested Julia"),
+                "assignTaskToMember");
+
+        // User is demoted before confirmation
+        doThrow(new BusinessException(HttpStatus.FORBIDDEN.value(), "Forbidden: User is not a manager of project 1"))
+                .when(autoAssignmentService).validateProjectManager(1L, USER_ID);
+
+        Object result = confirm(pending.actionId());
+
+        assertTrue(result.toString().contains("Forbidden: User is not a manager of project 1"));
+        verify(taskCommandPort, never()).assignTaskToMember(any(), any(), any(), any(), anyBoolean());
+    }
+
+    @Test
+    void directAssignment_removedAtConfirm_denied() {
+        when(taskCommandPort.getTaskDetails(75L, USER_ID))
+                .thenReturn(new TaskDetailDto(75L, 8L, "test task", "", "TODO", "MEDIUM", 1, "Java", null, null, null));
+
+        ConfirmationRequiredDto pending = assertPending(tools.assignTaskToMember("75", "16", "direct assign"),
+                "assignTaskToMember");
+
+        // User is removed from project before confirmation
+        doThrow(new BusinessException(HttpStatus.FORBIDDEN.value(), "Forbidden: User is not a member of project 8"))
+                .when(autoAssignmentService).validateProjectManager(8L, USER_ID);
+
+        Object result = confirm(pending.actionId());
+
+        assertTrue(result.toString().contains("Forbidden: User is not a member of project 8"));
+        verify(taskCommandPort, never()).assignTaskToMember(any(), any(), any(), any(), anyBoolean());
     }
 
     @Test
@@ -210,14 +452,14 @@ class TaskPilotAiToolsHumanInLoopTest {
         when(taskCommandPort.getTaskDetails(76L, USER_ID))
                 .thenReturn(new TaskDetailDto(76L, 8L, "Test task", "", "TODO", "MEDIUM", 5,
                         "", null, null, null));
-        when(autoAssignmentService.recommendCandidates(8L, List.of("Java"), 5, USER_ID))
-                .thenReturn(AutoAssignmentResponse.builder()
+        when(autoAssignmentService.recommendCandidatesView(8L, List.of("Java"), 5, USER_ID, Set.of(), Set.of()))
+                .thenReturn(RecommendationView.builder()
                         .projectId(8L)
                         .requiredSkills(List.of("Java"))
-                        .candidates(List.of(CandidateScore.builder()
-                                .userId(16L)
-                                .fullName("Admin")
-                                .totalScore(0.9)
+                        .candidates(List.of(RecommendedCandidateView.builder()
+                                .rank(1)
+                                .candidateId(16L)
+                                .displayName("Admin")
                                 .build()))
                         .build());
         when(taskCommandPort.assignTaskToMember(eq(76L), eq(16L), any(), eq(USER_ID), eq(false)))

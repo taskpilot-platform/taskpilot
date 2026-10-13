@@ -1,9 +1,8 @@
 package com.taskpilot.ai.tools;
 
-import com.taskpilot.ai.dto.AutoAssignmentResponse;
-import com.taskpilot.ai.dto.CandidateScore;
 import com.taskpilot.ai.dto.ConfirmationRequiredDto;
 import com.taskpilot.ai.dto.RecommendAndAssignResult;
+import com.taskpilot.ai.dto.RecommendationView;
 import com.taskpilot.ai.service.AutoAssignmentService;
 import com.taskpilot.ai.service.PendingAiActionService;
 import com.taskpilot.ai.service.SmartQueryService;
@@ -286,6 +285,23 @@ public class TaskPilotAiTools {
         return ahpAssignmentAiTools.recommendAndAssignTask(taskId, projectId, skills, difficulty, reason);
     }
 
+    @Tool("Assign a task to an alternative candidate from a recommendation snapshot, overriding the recommendation. Requires confirmation.")
+    public Object overrideRecommendationAndAssignTask(
+            @P("The ID of the task to assign") String taskId,
+            @P("The ID of the candidate member to assign from the snapshot") String memberId,
+            @P("The recommendation snapshot ID being overridden") String snapshotId,
+            @P("Reason for choosing this candidate over the recommendation") String reason) {
+        return ahpAssignmentAiTools.overrideRecommendationAndAssignTask(taskId, memberId, snapshotId, reason);
+    }
+
+    @Tool("Record a manager's decision to reject a task assignment recommendation without choosing an alternative.")
+    public Object recordRecommendationRejection(
+            @P("The ID of the recommendation snapshot") String snapshotId,
+            @P("Optional reason code for the rejection (e.g. NO_SUITABLE_CANDIDATE, TASK_POSTPONED)") String reasonCode,
+            @P("Optional note explaining the rejection") String note) {
+        return ahpAssignmentAiTools.recordRecommendationRejection(snapshotId, reasonCode, note);
+    }
+
     @Tool("Update required skills for a task (comma-separated skill names). Requires confirmation.")
     public Object updateTaskRequiredSkills(
             @P("The ID of the task") Long taskId,
@@ -309,7 +325,7 @@ public class TaskPilotAiTools {
     }
 
     @Tool("Recommend ranked candidates for a project based on skills and difficulty (1-10, default is 5). Read-only.")
-    public AutoAssignmentResponse recommendAssignmentCandidates(
+    public RecommendationView recommendAssignmentCandidates(
             @P("The project ID") String projectId,
             @P("Comma-separated list of required skill names") String skills,
             @P("Task difficulty 1-10. Note: send as string like '5'") String difficulty) {
@@ -317,7 +333,7 @@ public class TaskPilotAiTools {
     }
 
     @Tool("Recommend and compare candidates specifically for a task ID, reading its metrics automatically. Supports filters. Read-only.")
-    public AutoAssignmentResponse recommendTaskAssignmentCandidates(
+    public RecommendationView recommendTaskAssignmentCandidates(
             @P("The ID of the task") String taskId,
             @P("Optional comma-separated required skill names or IDs. Use this when the task is missing skills and the user provided them in a form.") String skills,
             @P("Optional task difficulty 1-10. If omitted, task difficulty is used. Note: send as string like '5'") String difficulty,

@@ -82,6 +82,9 @@ public class TaskEntity {
     @Column(name = "due_date")
     private Instant dueDate;
 
+    @Column(name = "completed_at")
+    private Instant completedAt;
+
     @Column(name = "created_at", insertable = false, updatable = false)
     private Instant createdAt;
 

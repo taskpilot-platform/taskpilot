@@ -1,0 +1,583 @@
+# Heuristic Decision Register
+
+This register governs all technical and business decisions regarding TaskPilot's heuristic candidate scoring.
+In FIX MODE, the Agent may only implement changes that strictly conform to approved decisions.
+
+---
+
+## 1. Decision Status Lifecycle Model
+
+Statuses in this register are unambiguous:
+
+| Status | Definition |
+| :--- | :--- |
+| `PROPOSED` | Technical proposal not yet approved. |
+| `PENDING_BUSINESS_CONFIRMATION` | Business-facing behavior awaiting stakeholder confirmation. |
+| `APPROVED_FOR_PHASE_1` | Approved only for the current transitional release scope (Phase 1). Not automatically the long-term model. |
+| `APPROVED_TECHNICAL_INVARIANT` | Correctness, mathematical, or execution safety invariant that must always hold across all phases. |
+| `DEFERRED` | Valid concept explicitly postponed to a future phase. |
+| `REJECTED` | The option must not be implemented under the current contract. |
+| `IMPLEMENTED` | Production code implements the accepted decision. |
+| `VERIFIED` | Implementation passed all defined verification gates. |
+| `SUPERSEDED` | A later accepted decision replaces it. |
+
+*Rule*: Do not use `ACCEPTED` without a qualifier when the scope is transitional.
+*Rule*: Findings of fact are preserved in `references/current-runtime.md` with source-proven labels; they are not decisions and must not use decision approval statuses.
+
+---
+
+## 2. Decision Catalog (H-001 through H-016, H-018, H-019, H-020, H-021)
+
+### Decision H-001: Candidate score model
+- **Status**: `APPROVED_FOR_PHASE_1`
+- **Decision**:
+  - For Phase 1, preserve candidate-set relative ranking as a transitional model to minimize behavioral regression during the correctness fix.
+  - This decision does not prove that relative Min-Max normalization is the optimal long-term model.
+  - Phase 1 must not switch to:
+    - absolute bounded scoring;
+    - all-benefit scoring;
+    - a user-facing Overall Match percentage.
+  - Relative normalized values must not be presented as absolute suitability.
+  - The long-term score model remains subject to a future shadow comparison after reliable Workload and Performance data exist.
+- **Consequences**:
+  - Existing relative-ranking architecture remains intact for Phase 1.
+  - User-facing explanations must be separated from ranking contributions (see H-010).
+  - Future evaluation of absolute and all-benefit models remains required.
+
+---
+
+### Decision H-002: Workload direction invariant
+- **Status**: `APPROVED_TECHNICAL_INVARIANT`
+- **Decision**:
+  - With all other criteria equal, a candidate with lower raw workload must never rank below a candidate with higher raw workload because of the workload criterion.
+- **Raw Workload Contract**:
+  - `0`: The stored workload value is zero.
+  - `100`: The stored workload value is one hundred.
+  - Current workload provenance remains unverified; the system must not interpret zero as proven availability.
+- **Allowed Scope**: Logic and assertions in `ScoreRange`, `ScoreRanges`, and `HeuristicStrategy` enforcing this monotonicity.
+
+---
+
+### Decision H-003: Unsafe double inversion
+- **Status**: `APPROVED_TECHNICAL_INVARIANT`
+- **Decision**:
+  - The combination of inverted workload normalization (`BENCHMARK_COST`) with subtractive workload scoring is invalid.
+  - Invalid future configuration must be rejected at write/validation boundaries.
+  - Invalid existing configuration must fail closed rather than silently invert candidate ranking.
+  - Persisted settings must not be silently rewritten or overridden.
+- **Allowed Scope**: Validation guards in `HeuristicConfigProvider` and `HeuristicStrategy`.
+
+---
+
+### Decision H-004: Equal-range policy
+- **Status**: `APPROVED_FOR_PHASE_1`
+- **Decision**:
+  - When a criterion has no variance across the candidate set ($max \le min$):
+    - it must not create artificial ranking differences;
+    - its ranking contribution is neutral;
+    - its configured weight is not redistributed;
+    - its raw business metric remains available for explanation;
+    - user-facing output must not substitute the neutral ranking contribution for the raw metric.
+  - No automatic effective-weight redistribution is permitted.
+- **Precision Note**:
+  - Changing an equal-range contribution may alter rounded score boundaries under the current implementation because the current comparator sorts rounded two-decimal scores.
+  - Phase 1 must therefore separate internal ranking precision from display rounding (see H-012).
+
+---
+
+### Decision H-005: Automatic weight mutation
+- **Status**: `REJECTED`
+- **Decision**:
+  - TaskPilot must not automatically change effective heuristic weights without:
+    - a separately approved design;
+    - sufficient trustworthy data;
+    - versioned recommendation snapshots;
+    - explicit human approval;
+    - audit history;
+    - bounded change rules;
+    - rollback support.
+
+---
+
+### Decision H-006: Scope separation
+- **Status**: `APPROVED_TECHNICAL_INVARIANT`
+- **Decision**:
+  - Phase 1 must exclude:
+    - dynamic workload computation;
+    - workload freshness timestamps;
+    - `STALE` status;
+    - `completed_at` timestamps;
+    - task outcome calculation;
+    - Delivery Reliability;
+    - performance cycles;
+    - PM member review;
+    - self-review;
+    - structured recommendation persistence;
+    - Adaptive Preference Learning;
+    - automatic weight updates;
+    - overload warning runtime;
+    - sprint heuristic override;
+    - dashboard work;
+    - employee evaluation policy.
+
+---
+
+### Decision H-007: Pure unit test requirement
+- **Status**: `APPROVED_TECHNICAL_INVARIANT`
+- **Decision**:
+  - Algorithmic correctness tests must be pure unit tests without mocks of the class under test and without external database, Docker, or Spring container dependencies.
+
+---
+
+### Decision H-008: Human approval invariant
+- **Status**: `APPROVED_TECHNICAL_INVARIANT`
+- **Decision**:
+  - Any AI-initiated task assignment write operation (`recommendAndAssignTask`, `assignTaskToMember`) must remain pending in `PendingAiActionService` until explicitly confirmed by the Project Manager.
+
+---
+
+### Decision H-009: Non-overwriting of live heuristic data
+- **Status**: `APPROVED_TECHNICAL_INVARIANT`
+- **Decision**:
+  - Do not create database migrations or synthetic writes that overwrite live member performance or workload data during heuristic scoring fixes.
+
+---
+
+### Decision H-010: Ranking metrics versus explanation metrics
+- **Status**: `APPROVED_FOR_PHASE_1`
+- **Decision**:
+  - Internal ranking state and user-facing recommendation data are separate contracts.
+  - Any object containing internal ranking state must not be serialized directly into a user-facing payload.
+  - `CandidateScore` currently mixes internal ranking and presentation concerns.
+  - Phase 1 must establish a separate allowlisted presentation boundary.
+  - **Ranking logic** may use:
+    - normalized criteria;
+    - ranking contributions;
+    - full-precision ranking score;
+    - configured weights;
+    - normalization details;
+    - tie-break inputs.
+  - **UI and LLM explanation** may use only an explicit allowlisted view containing approved business-facing fields.
+  - User-facing output must not expose by default:
+    - full-precision ranking score;
+    - relative `totalScore`;
+    - ranking contributions;
+    - normalization internals;
+    - configured weights;
+    - `confidenceScore`;
+    - internal IDs not required by the action;
+    - email unless explicitly required and approved.
+- **Evidence Summary**:
+  - Current frontend dynamically renders nested tool payload fields using generic JSON formatting (`Object.entries` with `JSON.stringify`).
+  - Therefore adding new internal fields or directly serializing internal ranking models exposes them unintentionally unless an explicit allowlist view is used.
+
+---
+
+### Decision H-011: Metric data-status semantics
+- **Status**: `APPROVED_FOR_PHASE_1`
+- **Approved Statuses**: `MEASURED`, `DEFAULT`, `INSUFFICIENT_DATA`, `UNVERIFIED`.
+- **Deferred Status**: `STALE` is `DEFERRED` because no reliable timestamp or workload update source currently exists.
+- **Metric Policy**:
+  - **Skill Fit**:
+    - `MEASURED`: Task contains at least one required skill, member has a non-empty skill profile, and Fit is calculated from available inputs. A measured zero match remains `MEASURED` with value zero.
+    - `INSUFFICIENT_DATA`: Task required skills are missing or empty, or the member has no recorded skill profile.
+    - Current numeric Fit output may remain backward-compatible for ranking during Phase 1, but explanation status must distinguish these cases.
+  - **Workload**:
+    - `UNVERIFIED`: The workload field is a global Admin-entered number without reliable provenance, project scope, or freshness timestamp.
+    - Zero must not be described as proven availability.
+    - A positive value must not be described as fresh or measured merely because it is non-zero.
+    - Approved wording: `"Chưa có dữ liệu workload đáng tin cậy"`.
+  - **Performance**:
+    - `DEFAULT`: Application source contains no confirmed production writer or genuine performance-cycle source.
+    - Performance DEFAULT is proven from the application source contract.
+    - It does not prove that every deployed database row contains 0.5.
+    - Non-default deployed values remain runtime-unverified until read-only aggregate inspection is performed.
+    - Approved wording: `"Chưa đủ dữ liệu hiệu suất"`.
+  - **Confidence**:
+    - `confidenceScore` is not approved for user-facing Phase 1 output.
+    - Current confidence is based on the number of non-null project-membership performance rows, not genuine evaluation cycles or task outcomes.
+- **Adaptive Eligibility**:
+  - `MEASURED`: Potentially eligible in a future accepted Adaptive design.
+  - `DEFAULT`: Not eligible as learning evidence.
+  - `INSUFFICIENT_DATA`: Not eligible.
+  - `UNVERIFIED`: Not eligible.
+
+---
+
+### Decision H-012: Ranking precision and deterministic ordering
+- **Status**: `APPROVED_FOR_PHASE_1`
+- **Decision**:
+  - Display rounding must never affect candidate ranking.
+  - The ranking engine must preserve an internal full-precision heuristic score.
+  - Candidate ordering must use a deterministic fixed-point ranking key derived from the unrounded heuristic score.
+  - The Phase 1 fixed-point scale is: `1_000_000_000` ($10^9$).
+  - Equivalent internal quantization:
+    $$\text{rankingKey} = \text{Math.round}(\text{fullPrecisionScore} \times 1\,000\,000\,000\text{L})$$
+  - Display values may continue to use two-decimal rounding only after the final ordering is established.
+- **Fail-Closed Validation & Scale Governance**:
+  - Phase 0 must validate the 1e9 fixed-point scale before any production change.
+  - If Phase 0 disproves the scale, execution stops with `BLOCKED_CONTRACT_PENDING`.
+  - FIX MODE must not silently choose another scale.
+  - Numerical oracles must not be edited during FIX MODE to preserve the scale.
+- **Comparator Order**:
+  1. Fixed-point internal ranking key descending;
+  2. Raw Skill Fit descending, using its own deterministic internal comparison;
+  3. `userId` ascending.
+- **Rules**:
+  - Database retrieval order must not determine the final ranking.
+  - Display rounding must not determine the final ranking.
+  - Relative `totalScore` intended only for presentation must not be the comparator input.
+  - Floating-point epsilon comparators are not approved because non-transitive comparison behavior must be avoided.
+- **Compatibility Acceptance**:
+  - Pairs with different current two-decimal rounded scores must retain their relative order after Phase 1.
+  - Pairs currently tied only because of two-decimal rounding may change order according to full-precision ranking and accepted tie-break rules.
+  - Full mathematical ties use raw Skill Fit and then `userId`.
+
+---
+
+### Decision H-013: Full-tie recommendation semantics
+- **Status**: `APPROVED_FOR_PHASE_1`
+- **Amended**: 2026-10-10
+- **Reason**:
+  The original wording conflated internal ranking-key differences with meaningful user-facing differentiation, even when the difference came only from UNVERIFIED workload or DEFAULT performance.
+- **Revised contract**:
+  Use deterministic ranking internally, but derive user-facing differentiation only from MEASURED Skill Fit or another explicitly trusted criterion.
+- **Original Decision**:
+  - Deterministic ordering is required even when available evidence cannot meaningfully distinguish candidates.
+  - `INSUFFICIENT_TO_DIFFERENTIATE` applies only when:
+    - internal ranking keys are equal;
+    - raw Skill Fit values are equal or unavailable;
+    - all other applicable business evidence cannot distinguish candidates;
+    - `userId` ordering is the only remaining distinction.
+  - A ranking-key tie with different raw Skill Fit is not a full business tie.
+  - When all candidates are equal under applicable ranking evidence:
+    - an internal deterministic first candidate may still exist;
+    - the first candidate must not be described as meaningfully superior;
+    - the view or explanation must indicate that available data is insufficient to differentiate candidates;
+    - technical tie-breaking must not be presented as business evidence.
+- **Approved Conceptual State**: `INSUFFICIENT_TO_DIFFERENTIATE`.
+- **Note**: Do not require a database migration. The exact DTO shape may be decided during FIX MODE, but the user-facing semantic invariant is frozen.
+
+---
+
+### Decision H-014: Scoring model and presentation contract versioning
+- **Status**: `APPROVED_FOR_PHASE_1`
+- **In-Place Amendment Note**:
+  - In Phase 1 B1, the user-facing presentation boundary is decoupled from the underlying ranking engine.
+  - User-facing presentation contract version: `presentationContractVersion = "allowlisted-view-v1"`.
+  - Underlying candidate scoring model version:
+    - Phase 1 B1 (unmodified relative rounded scoring): `scoringModelVersion = "relative-rounded-v1"`.
+    - Future Step A (fixed-point neutral tie-breaking): `scoringModelVersion = "relative-neutral-fixed-point-v2"`.
+  - The legacy draft token `relative-explanation-safe-v2` is superseded and purged.
+- **Decision**:
+  - Every new recommendation output produced after Phase 1 B1 must identify its presentation contract version (`presentationContractVersion`) and scoring model version (`scoringModelVersion`).
+  - Mandatory in:
+    - serialized recommendation contract (`RecommendationView`);
+    - persisted tool-output logs where applicable;
+    - future structured snapshots.
+  - Prominent PM-facing display is optional. It may appear only in expandable technical details unless business requirements approve primary display.
+  - Existing historical records without a version remain `legacy-unversioned`. Do not backfill old logs with an assumed version.
+  - In the future, structured snapshots must also include heuristic mode, effective configured weights, normalization contract, and `createdAt`.
+  - No migration is required in Phase 1 solely for model versioning.
+
+---
+
+### Decision H-015: User-facing candidate presentation
+- **Status**: `APPROVED_FOR_PHASE_1`
+- **Decision**:
+  - Phase 1 user-facing candidate output displays:
+    - deterministic rank;
+    - approved identity/display fields;
+    - raw Skill Fit when meaningful;
+    - Workload value with `UNVERIFIED` status;
+    - Performance with `DEFAULT` status;
+    - concise explanation;
+    - heuristic mode only if useful;
+    - `scoringModelVersion` for technical traceability (prominent PM-facing display is optional; it may appear only in expandable technical details unless business requirements approve primary display).
+  - Phase 1 must not present:
+    - relative `totalScore` as Overall Match;
+    - relative `totalScore` as suitability percentage;
+    - normalized Fit as absolute Skill Fit;
+    - normalized Load as actual workload percentage;
+    - normalized Performance as measured historical performance;
+    - `confidenceScore` as statistical confidence;
+    - technical tie-break as evidence of superiority.
+- **Required Wording Corrections**:
+  - Do not claim `"historical performance"` when the source is only the default baseline.
+  - Do not claim `"currently idle"` or `"no tasks"` from `UNVERIFIED` workload.
+  - Do not claim `"best candidate"` when recommendation status is `INSUFFICIENT_TO_DIFFERENTIATE`.
+
+---
+
+### Decision H-016: User-facing payload allowlist
+- **Status**: `APPROVED_TECHNICAL_INVARIANT`
+- **Decision**:
+  - User-facing AI tool payloads must use an explicit allowlist.
+  - A top-level ID denylist is insufficient because nested objects may be JSON-stringified with all internal fields intact.
+  - Objects containing internal ranking state must not be emitted directly to the generic frontend renderer.
+  - Phase 1 must prevent accidental display of:
+    - nested `userId`;
+    - `projectId`;
+    - `taskId` unless required for the confirmed action;
+    - email unless explicitly approved;
+    - full-precision score;
+    - ranking contributions;
+    - normalized internal values;
+    - `confidenceScore`;
+    - configured weights;
+    - normalization details.
+  - Do not rely on `ID_KEY_PATTERN` as the primary security or presentation boundary.
+
+---
+
+### Decision H-018: Skill Fit data-quality boundaries
+- **Status**: `DEFERRED`
+- **Findings**:
+  - Missing member skill profile and measured zero match currently both produce numeric Fit `0.0`.
+  - Missing task-required skills currently produces numeric Fit `1.0`.
+  - Null persisted skill level is mapped to `0`.
+  - Levels outside 1..5 may produce raw Fit outside $[0, 1]$.
+  - Duplicate required skill names may distort scoring.
+  - Duplicate member skill names use first-wins behavior.
+- **Phase 1 Requirement**:
+  - Explanation status must distinguish insufficient data from measured outcomes (see H-011).
+- **Deferred Work**:
+  - Schema/validation hardening, deduplication policy, legacy data cleanup, level-range enforcement.
+  - Do not expand Phase 1 into a full skill-data migration.
+
+---
+
+### Decision H-019: Confidence score semantics
+- **Status**: `APPROVED_FOR_PHASE_1`
+- **Decision**:
+  - Current `confidenceScore` is not an approved user-facing confidence metric.
+  - It is derived from the count of non-null project-membership performance rows, not genuine performance cycles, task outcomes, or statistical evidence.
+  - Default performance rows may increase the current confidence value.
+  - Therefore Phase 1 user-facing output must omit `confidenceScore`.
+  - The internal field may remain temporarily if required for backward compatibility, but it must not appear through the user-facing allowlisted view.
+  - A genuine confidence model is deferred until trustworthy performance-cycle or task-outcome evidence exists.
+
+---
+
+### Decision H-020: Recommendation Snapshot Foundation (Phase 2A)
+- **Status**: `IMPLEMENTED`
+- **Context & Purpose**:
+  - Phase 1 closed with an allowlisted recommendation presentation contract and neutral Step A scoring.
+  - Phase 2A establishes an immutable, append-only persistence foundation capturing recommendation snapshots whenever user-facing candidate recommendations are evaluated.
+  - Enables future Phase 2B+ capabilities (PM decision pairing, alternative weight recalculation, shadow comparisons) without mutating active production weights or leaking internal state.
+- **Decision & Invariants**:
+  - **Append-Only & Immutability**: Recommendation snapshots and candidate rows are immutable once persisted.
+  - **Comprehensive Audit State**:
+    - Snapshot metadata: `snapshotId`, `requestedByUserId`, `projectId`, `taskId` (nullable), `createdAt`, `heuristicMode`, `presentationContractVersion`, `scoringModelVersion`, `differentiationStatus`, `requiredSkills`, `recommendedCandidateId`, `candidateCount`, `requestSource`, `fitWeight`, `loadWeight`, `performanceWeight`, `normalizationContract`.
+    - Candidate evidence rows: `candidateId`, `rank`, `rankingKey`, `fullPrecisionScore`, `rankingRawFit`, `presentationFitValue`, `fitStatus`, `storedWorkloadValue`, `workloadStatus`, `derivedPerformanceInput`, `performanceStatus`, `memberStatus`, `selectedAsRecommendation`.
+  - **Privacy & Security Invariant**: Candidate rows must NEVER persist PII (`email`, `displayName`, `fullName`), uncalibrated `confidenceScore`, normalized scores, or LLM prompt bodies.
+  - **Proposed Candidate Recording**: The snapshot records the candidate the system actually proposed: the rank-1 candidate whenever candidateCount > 0 (setting selectedAsRecommendation = true for that candidate only) independent of differentiationStatus, because Phase 2B needs the proposed candidate for decision-pair learning, while Phase 8 filters on differentiationStatus. differentiationStatus remains stored as is.
+  - **Failure Policies**:
+    - Read-only recommendation paths (`REST`, `AI_TOOL_PROJECT_RECOMMENDATION`, `AI_TOOL_TASK_RECOMMENDATION`) fail open: errors during snapshot capture are caught and logged, returning `RecommendationView` to prevent degrading user read experience.
+    - Write-preview path (`AI_TOOL_RECOMMEND_AND_ASSIGN`) fails closed: snapshot capture must succeed to link `snapshotId` with the pending action preview and arguments. If snapshot persistence fails, exception propagates to abort pending action creation.
+  - **Contract Preservation**: The user-facing `RecommendationView` JSON presentation schema remains strictly unchanged and must never expose `snapshotId` or internal ranking keys.
+
+---
+
+### Decision H-021: PM Decision Events (Phase 2B)
+- **Status**: `IMPLEMENTED`
+- **Context & Purpose**:
+  - Phase 2A established immutable, append-only recommendation snapshots.
+  - Phase 2B establishes structured, append-only PM decision events linked to recommendation snapshots to capture authentic human-in-the-loop decisions (`ACCEPTED`, `OVERRIDDEN`, `REJECTED`, `CANCELED`, `EXPIRED`).
+  - Sets the foundation for decision-pair learning and shadow comparisons without mutating active production weights or leaking internal state.
+- **Decision & Invariants**:
+  - **Supported Decision Semantics**:
+    - `ACCEPTED`: Selected candidate equals the snapshot rank-1 candidate.
+    - `OVERRIDDEN`: Selected candidate differs from the snapshot rank-1 candidate and was present in the snapshot candidate list.
+    - `REJECTED`: No candidate selected (explicit rejection of recommendation).
+    - `CANCELED`: The confirmation flow was canceled.
+    - `EXPIRED`: The pending action expired without a PM decision.
+  - **Decision Source & Authorization**:
+    - `decisionSource`: Enums `USER` or `SYSTEM`.
+      - `ACCEPTED`: `decisionSource = USER`, non-null authenticated PM actor.
+      - `OVERRIDDEN`: `decisionSource = USER`, non-null authenticated PM actor.
+      - `REJECTED`: `decisionSource = USER`, non-null authenticated PM actor.
+      - `CANCELED`: `decisionSource = USER`, non-null authenticated PM actor.
+      - `EXPIRED`: `decisionSource = SYSTEM`, `decidedByUserId = null` (original requester remains available on linked snapshot).
+    - Only a current project `MANAGER` may record USER decisions (`ACCEPTED`, `OVERRIDDEN`, `REJECTED`, `CANCELED`). Authorization must be verified at decision time.
+    - The decision actor must come from authenticated context, never request body or LLM arguments.
+    - `EXPIRED` is recorded exclusively by the system expiration workflow with a null actor.
+  - **State Transition Rules**:
+    - At most one terminal decision per snapshot.
+    - After a snapshot receives a terminal decision, any subsequent decision attempt is rejected (HTTP 409 Conflict).
+    - Database uniqueness constraint on `snapshot_id` enforces this invariant at the database layer.
+  - **Phase 8 Data Semantics & UNOBSERVED Classification**:
+    - In Phase 8 preference learning pipelines, recommendation snapshots that have no terminal decision event are classified as `UNOBSERVED` (neither accepted nor rejected).
+    - In-memory pending actions lost across application restarts or crashes without triggering `EXPIRED` leave orphaned snapshots in the `UNOBSERVED` state without corrupting training data.
+  - **Failure Semantics & Accepted Technical Debt**:
+    - Execution ordering: `validate MANAGER authorization` → `execute task assignment` → `record PM decision event`.
+    - Authorization or assignment failures: if authorization fails or task assignment execution throws an exception, no decision event is recorded.
+    - Post-assignment decision persistence failure: if task assignment succeeds and commits, but subsequent decision persistence fails (e.g., transient DB error, concurrent duplicate), the task assignment remains effective and is NOT rolled back. Rolling back a successful business assignment due to secondary telemetry failure would degrade user workflow reliability.
+    - Diagnostic logging: on post-assignment decision failure, the application logs a structured error with execution context (`snapshotId`, `projectId`, `taskId`, `selectedCandidateId`, `actorId`) without PII.
+    - **Debt 1**: `TD-P2B-POST-ASSIGNMENT-DECISION-PERSISTENCE`.
+      - Risk: Orphaned snapshot without terminal decision when assignment succeeded.
+      - Mitigation & Exit Condition: Structured error logging enables audit detection. Exit condition is introducing a transactional outbox pattern or background reconciliation job in a future hardening phase.
+    - **Debt 2**: `TD-P2B-PENDING-ACTION-DURABILITY`.
+      - Risk: Unobserved / lost decision events during process restarts or crashes before in-memory expiration fires.
+      - Mitigation & Exit Condition: Unobserved snapshots are ignored by Phase 8 learning pipelines. Exit condition is introducing a durable pending-action store or database-backed expiration worker in a future phase.
+  - **Privacy & Audit Invariant**:
+    - Decision events must never persist email, internal ranking scores, or free-text LLM prompt bodies. Note length is bounded (max 1000 characters).
+
+---
+
+### Decision H-022: Measured Workload Active Task Count (Phase 2C)
+- **Status**: `IMPLEMENTED`
+- **Context & Purpose**:
+  - Phase 1 and Phase 2A/2B relied on an unverified stored workload metric (`MetricDataStatus.UNVERIFIED`) originating from administrative user profiles.
+  - Phase 2C replaces the unverified stored workload with a genuine measured workload metric at recommendation time:
+    - Metric: `activeAssignedTaskCount`
+    - Unit: `ACTIVE_TASK_COUNT`
+    - Status: `MEASURED`
+    - Scope: `PROJECT`
+    - Timestamp: `workloadMeasuredAt` (application clock at recommendation time)
+  - Captures actual operational load without requiring background writers or cached counters.
+- **Decision & Invariants**:
+  - **Authoritative Task-Count Definition & Query**:
+    - `activeAssignedTaskCount` = count of active, non-terminal tasks currently assigned to a project member at recommendation time.
+    - Query implementation: Single batch aggregation `TaskRepository.countActiveAssignedTasksByProject(projectId, terminalStatuses)` exposed via `ProjectMemberPort.countActiveAssignedTasksByProject(projectId)`.
+    - Status inclusion/exclusion:
+      - Active statuses: `TaskStatus.TODO`, `TaskStatus.IN_PROGRESS`, `TaskStatus.REVIEW`.
+      - Terminal status strictly excluded: `TaskStatus.DONE`.
+      - Unassigned tasks (`assigneeId IS NULL`) are strictly excluded.
+      - Cross-project tasks (`projectId != :projectId`) are strictly excluded.
+    - **Architectural Rationale**: Avoids `MemberAnalyticsPort` / `AiQueryModuleAdapter` overhead (which loads full entities into memory, queries `userPort` N+1 times, and requires `requesterUserId`). The batch query performs a single `GROUP BY assignee_id` query backed by index `idx_tasks_project_assignee_status`.
+  - **Ranking & Heuristic Formula Integration**:
+    - Raw load score = `(double) activeAssignedTaskCount`.
+    - Evaluated through neutral Min-Max normalization in `ScoreRanges` / `HeuristicStrategy`.
+    - Workload monotonicity preserved: members with fewer active assigned tasks receive lower load penalty (higher net score).
+    - Equal-range handling: if all candidates have identical active task counts (e.g., all 0 or all 2), normalized load contribution is 0.0 (neutral).
+  - **Explicit Allowlisted Presentation Contract (`allowlisted-view-v2`)**:
+    - Presentation contract version bumped to `allowlisted-view-v2`.
+    - `RecommendedCandidateView` explicitly exposes:
+      - `storedWorkloadValue`: Integer (holds measured task count when measured, or stored profile value when unverified).
+      - `workloadStatus`: `MEASURED` | `UNVERIFIED`.
+      - `workloadUnit`: `"ACTIVE_TASK_COUNT"` when measured, null/omitted when unverified.
+      - `workloadScope`: `"PROJECT"`.
+      - `workloadMeasuredAt`: ISO-8601 application timestamp when measured, null/omitted when unverified.
+    - Canonical fixtures (`phase1-recommendation-view.json`) updated in backend and frontend with identical SHA-256 hash.
+  - **Frontend UI Guardrail**:
+    - Frontend (`RecommendationCard.tsx`, `aiChatHelpers.ts`) MUST NOT infer `ACTIVE_TASK_COUNT` from `workloadStatus === "MEASURED"` alone.
+    - Rendering requirement: `candidate.workloadStatus === "MEASURED" && candidate.workloadUnit === "ACTIVE_TASK_COUNT"` is required to render `"Số công việc đang hoạt động: <count>"`.
+    - Any missing or unknown unit falls back to unverified presentation: `"Giá trị workload đã lưu: <val> (Chưa có dữ liệu workload đáng tin cậy)"`.
+    - Strictly forbids appending `%` or capacity language (e.g., `"công suất"`, `"tải %"`) when status is `MEASURED`.
+  - **Database Persistence & Migration V36**:
+    - Added columns to `recommendation_snapshot_candidates`:
+      - `workload_unit VARCHAR(32)` (e.g., `'ACTIVE_TASK_COUNT'`)
+      - `workload_scope VARCHAR(32)` (e.g., `'PROJECT'`)
+      - `workload_measured_at TIMESTAMP WITH TIME ZONE`
+    - Added index `idx_tasks_project_assignee_status` ON `tasks (project_id, assignee_id, status)` for fast count aggregation.
+  - **Adaptive Enablement Criteria & Blocker Status**:
+    - Adaptive weights dataset usage rule: Candidate workload may be used by Adaptive learning pipelines ONLY when `status = MEASURED`, `unit = ACTIVE_TASK_COUNT`, `scope = PROJECT`, and `workloadMeasuredAt` is present.
+    - **Adaptive Weights remain BLOCKED**: Performance data remains static default `0.50` baseline (`DEFAULT`), so automated weight tuning cannot be enabled until empirical performance cycles exist.
+  - **Accepted Technical Debt**:
+    - `TD-P2C-WORKLOAD-QUERY-PORT-SEPARATION`:
+      - Detail: The measured workload query is temporarily placed on `ProjectMemberPort` to avoid circular module dependencies between `taskpilot-projects` and `taskpilot-ai`.
+      - Exit Condition: In a future module decoupling phase, extract a dedicated `WorkloadQueryPort` in `taskpilot-contracts`.
+
+---
+
+### Decision H-023: Minimal Task Outcome Foundation (Phase 2D)
+- **Status**: `IMPLEMENTED`
+- **Context & Purpose**:
+  - Implements a minimal, reproducible task-outcome record linking:
+    `recommendation snapshot → PM terminal decision → assigned task → observed completion outcome`.
+  - Phase 2D answers:
+    - Was the task completed?
+    - Was it completed on time or late?
+    - When was the outcome observed?
+    - Which snapshot and PM decision led to the assignment?
+    - Is the outcome valid enough for a future Adaptive dataset?
+  - Phase 2D does NOT calculate employee performance scores, delivery reliability scores, or Adaptive weights.
+- **Decision & Invariants**:
+  - **Outcome Types & Strict Semantics**:
+    - **Production Deadline Type & Rule**:
+      - Production declaration: `TaskEntity.dueDate` is `Instant` (matches `TaskCompletedLifecycleEvent.dueDate` and `RecommendationTaskOutcomeEntity.dueAt`).
+      - Direct instant timestamp comparison is used without calendar-day conversion:
+        - `completedAt <= dueDate` → `COMPLETED_ON_TIME` (completed before or exactly at deadline).
+        - `completedAt > dueDate` → `COMPLETED_LATE` (completed after deadline).
+    - `INCOMPLETE_OVERDUE`: Task not completed (`status != DONE`) and `observedAt > dueAt` (deadline passed). Evaluated on demand only; no background scheduler.
+    - `NOT_YET_OBSERVABLE`: Task not completed (`status != DONE`) and deadline not passed or not set. Evaluated on demand only; absence of outcome means unknown.
+    - `EXCLUDED`: Excluded from learning outcomes. Specific reasons:
+      - `MISSING_DUE_DATE`: Completed task without `dueDate` (missing due date is not treated as failure or late).
+      - `MISSING_COMPLETION_TIMESTAMP`: Completed task without `completedAt` timestamp.
+      - `ASSIGNEE_MISMATCH`: Final assigned task member does not match the decision's `selectedCandidateId`.
+  - **Linkage Integrity & Non-Assignment Decisions**:
+    - `snapshotId`, `decisionId`, `projectId`, and `taskId` must strictly agree. Mismatches are rejected.
+    - Non-assignment decisions (`REJECTED`, `CANCELED`, `EXPIRED`) produce no assignment outcome.
+    - `UNOBSERVED` snapshots produce no learning outcome.
+    - Minimal task outcome is deadline-based operational evidence about an assignment result, not a direct employee performance score.
+  - **Capture Boundary & Execution Ordering**:
+    - Boundary: Task transitions to `DONE` status in `TaskService` → commits task transaction.
+    - Strict Post-Commit Listener: `TaskOutcomeEventListener` uses `@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)` without fallback execution (`fallbackExecution = false`).
+      - No active transaction → listener creates no outcome.
+      - Rolled-back task transaction → listener creates no outcome.
+      - Committed task transaction → listener invokes outcome persistence.
+    - Isolated Outcome Transaction: Outcome persistence executes in an isolated `@Transactional(propagation = Propagation.REQUIRES_NEW)` across a separate Spring-managed bean boundary without self-invocation.
+    - Deduplication: Unique constraint `uk_task_outcomes_decision_task` on `(decision_id, task_id)` prevents duplicate final outcomes.
+    - Authorization: Project membership required for read access; actor identity comes from authenticated context; zero PII or internal ranking scores stored or returned.
+  - **Accepted Technical Debt**:
+    - `TD-P2D-OUTCOME-PERSISTENCE-AFTER-TASK-COMPLETION`:
+      - Risk: A task may complete successfully while its outcome record is missing if secondary telemetry persistence fails.
+      - Mitigation: Task state update commits first; outcome persistence failure is caught and logged without failing the task update. Future dataset building excludes decisions without valid outcome evidence. Log `taskId`, `snapshotId`, `decisionId`, and outcome type without PII.
+      - Exit Condition: Add an outbox or reconciliation process before production Adaptive dataset collection. Do not implement an outbox in Phase 2D.
+    - `TD-P2D-REOPEN-HISTORY`:
+      - Risk: Reopened tasks (`DONE` -> non-`DONE`) retain historical outcome from first completion. If task is re-completed later, the original outcome record for `(decision, task)` is preserved and not overwritten.
+      - Mitigation: Truthful and bounded reopen behavior: on reopen, `completedAt` is cleared on `tasks` table, but the original outcome record is kept immutable. First stored outcome for `(decision, task)` pair represents original assignment fulfillment. Re-completion does not overwrite existing outcome record.
+      - Exit Condition: A future phase may add multi-cycle lifecycle outcome versioning if iterative rework modeling is required.
+
+---
+
+### Decision H-024: Adaptive MVP Foundation and Offline Shadow Proposals (Phase 2E + 2F)
+- **Status**: `IMPLEMENTED`
+- **Context & Purpose**:
+  - Phase 2E establishes a deterministic, read-only Adaptive dataset builder and machine-readable quality reporter from trusted evidence:
+    `snapshot → USER PM terminal decision → valid final task outcome`.
+  - Phase 2F introduces deterministic offline shadow weight proposals, Admin review lifecycle, and an immutable proposal audit trail.
+  - End state:
+    `snapshot → USER PM decision → valid task outcome → eligible Adaptive dataset → offline shadow proposal → Admin approve or reject → active production weights remain unchanged`.
+  - Phase 2F guarantees zero production weight mutation (H-005). Approval of a shadow proposal does NOT modify active weights or runtime recommendation ranking.
+- **Decision & Invariants**:
+  - **Dataset Eligibility Contract (Phase 2E)**:
+    - Snapshot: `presentationContractVersion = "allowlisted-view-v2"`, `differentiationStatus != "UNOBSERVED"`.
+    - Candidate: `fitStatus = MEASURED`, finite `presentationFitValue` in $[0.0, 1.0]$, `workloadStatus = MEASURED`, `workloadUnit = "ACTIVE_TASK_COUNT"`, `workloadScope = "PROJECT"`, `workloadMeasuredAt != null`, non-negative count. Performance is DEFAULT baseline and excluded as a tunable feature.
+    - Decision: `decisionSource = USER`, `decisionType` in `{ACCEPTED, OVERRIDDEN}`, `selectedCandidateId == task.assigneeId`.
+    - Outcome: `outcomeType` in `{COMPLETED_ON_TIME, COMPLETED_LATE}`, matching project and task, unambiguous linkage, no duplicate.
+    - Exclusions tracked explicitly across 20+ distinct reasons (`AdaptiveExclusionReason`).
+    - Canonical serialization: deterministically sorted samples hashed with SHA-256 for integrity auditing.
+  - **Minimum Evidence Gate & Offline Grid Search (Phase 2F Final Safety)**:
+    - Minimum evidence threshold: `minimumRequiredSamples = 20`.
+    - Samples $< 20$: proposal generated with status `INSUFFICIENT_EVIDENCE`. Truthful nullability: proposed weights (`proposedFitWeight`, `proposedLoadWeight`, `proposedPerformanceWeight`) and metrics (`metricHistoricalAgreement`, `metricOnTimeAssociation`, `currentMetricHistoricalAgreement`, `currentMetricOnTimeAssociation`) are `null`. Review attempts (`approve` or `reject`) on `INSUFFICIENT_EVIDENCE` are rejected with HTTP 400 Bad Request.
+    - Samples $\ge 20$: proposal generated with status `READY_FOR_REVIEW`.
+    - Two-Feature Adaptive Baseline Normalization:
+      - Default performance is excluded as a learning feature.
+      - Production baseline $(w_{fit}, w_{load}, w_{perf})$ is normalized to two-feature space:
+        $$currentAdaptiveFit = \frac{w_{fit}}{w_{fit} + w_{load}}, \quad currentAdaptiveLoad = \frac{w_{load}}{w_{fit} + w_{load}}$$
+      - Baseline denominator must be finite and positive. Sum is exactly 1.0.
+      - Grid search distance comparison (Tie-break Level 3) measures delta against $(currentAdaptiveFit, currentAdaptiveLoad)$.
+    - Search grid: $w_{fit} \in [0.10, 0.90]$ with step $0.05$ (17 candidate pairs); $w_{load} = 1.0 - w_{fit}$; $w_{perf} = 0.0$.
+    - Simulated ranking uses neutral Min-Max normalization and the fixed-point $10^9$ comparator with rawFit tie-break (`InternalCandidateRanking.STEP_A_COMPARATOR`).
+    - Deterministic 5-level tie-break:
+      1. Primary metric: `historicalAgreement` (higher ratio of simulated top candidate matching PM choice).
+      2. Secondary metric: `onTimeAssociation` (higher ratio of simulated top candidate matching PM choice for on-time tasks).
+      3. Weight delta: smaller $|w_{fit} - currentAdaptiveFit| + |w_{load} - currentAdaptiveLoad|$.
+      4. Higher $w_{fit}$.
+      5. Stable numeric order (index).
+  - **Strategy Pattern & Heuristic-Mode Scope (Phase 2F Bounded Scope)**:
+    - Adaptive MVP proposals are strictly scoped to the `BALANCED` heuristic mode (`targetHeuristicMode = "BALANCED"`).
+    - Mode preservation: each dataset row (`AdaptiveDatasetRowDto`) explicitly preserves the snapshot's `heuristicMode`.
+    - Mode filtering: snapshots with `heuristicMode != "BALANCED"` or `null` are excluded from the Adaptive dataset with `UNSUPPORTED_HEURISTIC_MODE`.
+    - Baseline source: current `BALANCED` baseline weights are loaded dynamically from runtime configuration via `HeuristicStrategyFactory.resolve("BALANCED")` (`HeuristicConfigProvider` / `system_settings["heuristic.weights"]`), not hardcoded numerical constants. Example normalized baseline $0.625 / 0.375$ represents default runtime weights $(0.50, 0.30, 0.20)$ and is not a universal constant.
+    - Proposal auditing & forward migration: forward migration `V40__scope_adaptive_proposals_to_heuristic_mode.sql` adds `target_heuristic_mode VARCHAR(32) NULL` with a legacy-compatible check constraint (`target_heuristic_mode IS NULL OR target_heuristic_mode = 'BALANCED'`) and an index on `(target_heuristic_mode)` to `adaptive_weight_proposals`. No synthetic backfill or `DEFAULT` is applied to legacy rows. Historical null-mode proposals remain readable but non-reviewable. Historical migrations `V34` through `V39` remain strictly immutable.
+    - Proposal Integrity Gate rejects review of proposals whose `targetHeuristicMode` is missing/null, `URGENT`, `TRAINING`, or any value other than `BALANCED`.
+    - Future multi-mode adaptation (`URGENT`, `TRAINING`) remains deferred and out-of-scope for the Adaptive MVP.
+  - **Admin Review, Proposal Integrity & Absolute No-Activation Guarantee (Phase 2F)**:
+    - Review lifecycle: `READY_FOR_REVIEW` $\rightarrow$ `APPROVED` or `REJECTED`.
+    - Access restricted to authenticated global Admin (`ROLE_ADMIN` / `ADMIN`). Non-admin attempts receive HTTP 403 Forbidden; unauthenticated receive HTTP 401 Unauthorized. Actor ID is strictly resolved from security context email via `UserIdentityPort`.
+    - Proposal Integrity Gate: Application-level check enforces `datasetSampleCount >= 20`, safe bounds $[0.10, 0.90]$, weight sum $1.0$, non-blank hash, present metrics, and `targetHeuristicMode == "BALANCED"` before permitting review.
+    - Immutability: Second review attempts on already terminal proposals (`APPROVED` or `REJECTED`) are rejected as HTTP 400 Bad Request. Review only updates `status`, `reviewedByUserId`, `reviewedAt`, and notes/reason; all dataset and calculation fields are strictly immutable.
+    - Absolute No-Activation Guarantee: Approving a proposal records `status = APPROVED`, `reviewedAt`, `reviewedByUserId`, and `reviewNotes`. It NEVER modifies `system_settings`, `HeuristicConfigProvider`, or runtime recommendation scores. Active production weights remain strictly identical before and after approval.

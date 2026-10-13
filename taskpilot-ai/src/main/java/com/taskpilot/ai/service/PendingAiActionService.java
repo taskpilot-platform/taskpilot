@@ -71,6 +71,13 @@ public class PendingAiActionService {
                         "Pending action not found or expired"));
     }
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private RecommendationDecisionService recommendationDecisionService;
+
+    public void setRecommendationDecisionService(RecommendationDecisionService service) {
+        this.recommendationDecisionService = service;
+    }
+
     public void cancel(String actionId, Long userId, Long sessionId) {
         PendingAction action = actions.get(actionId);
         if (action == null) {
@@ -81,11 +88,60 @@ public class PendingAiActionService {
         }
         actions.remove(actionId);
         log.info("[HumanInLoop] Cancelled AI action: actionId={} tool={}", actionId, action.toolName());
+
+        if (recommendationDecisionService != null && action.arguments() != null) {
+            Object snapObj = action.arguments().get("snapshotId");
+            if (snapObj instanceof String snapshotId && !snapshotId.isBlank()) {
+                try {
+                    recommendationDecisionService.recordCanceled(
+                            userId,
+                            snapshotId,
+                            "USER_CANCELED_ACTION",
+                            "Pending action " + actionId + " canceled by user"
+                    );
+                } catch (Exception e) {
+                    log.error("[HumanInLoop] Failed to record CANCELED decision for snapshot {}: {}", snapshotId, e.getMessage());
+                }
+            }
+        }
+    }
+
+    public void expireAction(String actionId) {
+        PendingAction action = actions.remove(actionId);
+        if (action != null && recommendationDecisionService != null && action.arguments() != null) {
+            Object snapObj = action.arguments().get("snapshotId");
+            if (snapObj instanceof String snapshotId && !snapshotId.isBlank()) {
+                try {
+                    recommendationDecisionService.recordExpired(
+                            snapshotId,
+                            "Pending action " + actionId + " expired via expiration workflow"
+                    );
+                } catch (Exception e) {
+                    log.error("[HumanInLoop] Failed to record EXPIRED decision for snapshot {}: {}", snapshotId, e.getMessage());
+                }
+            }
+        }
     }
 
     private void cleanupExpired() {
         Instant now = Instant.now();
-        actions.entrySet().removeIf(entry -> entry.getValue().expiresAt().isBefore(now));
+        actions.entrySet().removeIf(entry -> {
+            boolean isExpired = entry.getValue().expiresAt().isBefore(now);
+            if (isExpired && recommendationDecisionService != null && entry.getValue().arguments() != null) {
+                Object snapObj = entry.getValue().arguments().get("snapshotId");
+                if (snapObj instanceof String snapshotId && !snapshotId.isBlank()) {
+                    try {
+                        recommendationDecisionService.recordExpired(
+                                snapshotId,
+                                "Pending action " + entry.getKey() + " expired without decision"
+                        );
+                    } catch (Exception e) {
+                        log.error("[HumanInLoop] Failed to record EXPIRED decision for snapshot {}: {}", snapshotId, e.getMessage());
+                    }
+                }
+            }
+            return isExpired;
+        });
     }
 
     private record PendingAction(
