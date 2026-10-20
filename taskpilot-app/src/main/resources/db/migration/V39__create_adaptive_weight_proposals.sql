@@ -1,4 +1,4 @@
--- V38__create_adaptive_weight_proposals.sql
+-- V39__create_adaptive_weight_proposals.sql
 -- Phase 2F: Adaptive Weight Proposals and Audit Trail
 
 CREATE TABLE IF NOT EXISTS "adaptive_weight_proposals" (

@@ -111,22 +111,22 @@ flowchart TD
 
 ### Phase 2A: Recommendation Snapshot Foundation
 - **Vấn đề**: Không lưu lại trạng thái điểm số và dữ liệu đầu vào tại thời điểm đưa ra gợi ý, khiến việc đối soát sau này là bất khả thi.
-- **Giải pháp**: Flyway `V34__create_recommendation_snapshots_tables.sql`, entity `RecommendationSnapshotEntity` và `RecommendationSnapshotCandidateEntity` lưu giữ toàn bộ dữ liệu ứng viên, trọng số, phiên bản mô hình (`scoringModelVersion = "relative-neutral-fixed-point-v2"`, `presentationContractVersion = "allowlisted-view-v2"`).
+- **Giải pháp**: Flyway `V35__create_recommendation_snapshots_tables.sql`, entity `RecommendationSnapshotEntity` và `RecommendationSnapshotCandidateEntity` lưu giữ toàn bộ dữ liệu ứng viên, trọng số, phiên bản mô hình (`scoringModelVersion = "relative-neutral-fixed-point-v2"`, `presentationContractVersion = "allowlisted-view-v2"`).
 - **Trạng thái**: `IMPLEMENTED_AND_AUTOMATED_VERIFIED`.
 
 ### Phase 2B: PM Decision Events
 - **Vấn đề**: Không biết PM chấp nhận (`ACCEPTED`) hay chọn người khác (`OVERRIDDEN`), hoặc phân công thủ công mà không thông qua gợi ý (`UNOBSERVED`).
-- **Giải pháp**: Flyway `V35__create_recommendation_decision_events_table.sql`, entity `RecommendationDecisionEventEntity`. Ràng buộc duy nhất `UNIQUE (snapshot_id)` đảm bảo mỗi snapshot có tối đa một quyết định gắn liền. Phân công task phải commit thành công trước khi ghi nhận event.
+- **Giải pháp**: Flyway `V36__create_recommendation_decision_events_table.sql`, entity `RecommendationDecisionEventEntity`. Ràng buộc duy nhất `UNIQUE (snapshot_id)` đảm bảo mỗi snapshot có tối đa một quyết định gắn liền. Phân công task phải commit thành công trước khi ghi nhận event.
 - **Trạng thái**: `IMPLEMENTED_AND_AUTOMATED_VERIFIED`.
 
 ### Phase 2C: Measured Active Task Count Workload
 - **Vấn đề**: Workload trước đây là số nhập tay tĩnh, không có dấu thời gian và không gắn với dự án thực tế.
-- **Giải pháp**: Flyway `V36__add_phase_2c_measured_workload_to_snapshots.sql`. Không tạo bảng workload riêng; thay vào đó, hệ thống thực hiện batch aggregation query `TaskRepository.countActiveAssignedTasksByProject(projectId, terminalStatuses)` (loại trừ `TaskStatus.DONE`) thông qua `ProjectMemberPort` / `ProjectModuleAdapter`. DTO hợp đồng `WorkloadMeasurement` chuẩn hóa đơn vị `ACTIVE_TASK_COUNT`, phạm vi `PROJECT`, trạng thái `MEASURED` kèm `workloadMeasuredAt` (hoặc fallback `UNVERIFIED`). Bảng `recommendation_snapshot_candidates` được bổ sung 3 cột (`workload_unit`, `workload_scope`, `workload_measured_at`) và bảng `tasks` được tối ưu với index `idx_tasks_project_assignee_status`.
+- **Giải pháp**: Flyway `V37__add_phase_2c_measured_workload_to_snapshots.sql`. Không tạo bảng workload riêng; thay vào đó, hệ thống thực hiện batch aggregation query `TaskRepository.countActiveAssignedTasksByProject(projectId, terminalStatuses)` (loại trừ `TaskStatus.DONE`) thông qua `ProjectMemberPort` / `ProjectModuleAdapter`. DTO hợp đồng `WorkloadMeasurement` chuẩn hóa đơn vị `ACTIVE_TASK_COUNT`, phạm vi `PROJECT`, trạng thái `MEASURED` kèm `workloadMeasuredAt` (hoặc fallback `UNVERIFIED`). Bảng `recommendation_snapshot_candidates` được bổ sung 3 cột (`workload_unit`, `workload_scope`, `workload_measured_at`) và bảng `tasks` được tối ưu với index `idx_tasks_project_assignee_status`.
 - **Trạng thái**: `IMPLEMENTED_AND_AUTOMATED_VERIFIED`.
 
 ### Phase 2D: Task Completion Outcomes
 - **Vấn đề**: Thiếu bằng chứng thực tế về việc phân công có đem lại kết quả hoàn thành đúng hạn hay không.
-- **Giải pháp**: Flyway `V37__create_recommendation_task_outcomes.sql`. Bổ sung cột `completed_at` vào bảng `tasks` kèm index `idx_tasks_completed_at`. Tạo bảng `recommendation_task_outcomes` với ràng buộc duy nhất `CONSTRAINT uk_task_outcomes_decision_task UNIQUE ("decision_id", "task_id")`. Listener `@TransactionalEventListener(phase = AFTER_COMMIT)` kích hoạt lưu trữ độc lập (`REQUIRES_NEW`) khi task chuyển sang `DONE`. Phân loại `COMPLETED_ON_TIME` ($completedAt \le dueAt$) hoặc `COMPLETED_LATE` ($completedAt > dueAt$).
+- **Giải pháp**: Flyway `V38__create_recommendation_task_outcomes.sql`. Bổ sung cột `completed_at` vào bảng `tasks` kèm index `idx_tasks_completed_at`. Tạo bảng `recommendation_task_outcomes` với ràng buộc duy nhất `CONSTRAINT uk_task_outcomes_decision_task UNIQUE ("decision_id", "task_id")`. Listener `@TransactionalEventListener(phase = AFTER_COMMIT)` kích hoạt lưu trữ độc lập (`REQUIRES_NEW`) khi task chuyển sang `DONE`. Phân loại `COMPLETED_ON_TIME` ($completedAt \le dueAt$) hoặc `COMPLETED_LATE` ($completedAt > dueAt$).
 - **Trạng thái**: `IMPLEMENTED_AND_AUTOMATED_VERIFIED`.
 
 > **Nhóm Telemetry**: Bốn thành phần Phase 2A, 2B, 2C, 2D cấu thành **Phase 2A–2D Evidence Pipeline**, đảm bảo chuỗi dữ liệu đầu vào cho Adaptive hoàn toàn có thể kiểm toán và truy nguyên.
@@ -138,7 +138,7 @@ flowchart TD
 
 ### Phase 2F: Offline Adaptive Weight Proposals & Admin Lifecycle
 - **Vấn đề**: Cần thuật toán tìm kiếm trọng số tối ưu dựa trên dữ liệu mà không làm gián đoạn hệ thống đang chạy.
-- **Giải pháp**: Flyway `V38__create_adaptive_weight_proposals.sql` và `V39__correct_adaptive_proposal_safety.sql`, entity `AdaptiveWeightProposalEntity`, service `AdaptiveWeightProposalService`, controller `AdaptiveAdminController` (`/api/v1/admin/ai/adaptive/**`). Chuẩn hóa baseline 2 chiều (0.625 / 0.375), grid search 17 bước (`algorithm_version = "grid-search-v1"`, `proposal_version = "proposal-v1"`), tie-break tất định 5 cấp độ, cổng kiểm tra tính toàn vẹn, bảo vệ No-Activation Guarantee.
+- **Giải pháp**: Flyway `V39__create_adaptive_weight_proposals.sql`, `V40__correct_adaptive_proposal_safety.sql`, `V41__scope_adaptive_proposals_to_heuristic_mode.sql`, entity `AdaptiveWeightProposalEntity`, service `AdaptiveWeightProposalService`, controller `AdaptiveAdminController` (`/api/v1/admin/ai/adaptive/**`). Chuẩn hóa baseline 2 chiều (0.625 / 0.375), grid search 17 bước (`algorithm_version = "grid-search-v1"`, `proposal_version = "proposal-v1"`), tie-break tất định 5 cấp độ, cổng kiểm tra tính toàn vẹn, bảo vệ No-Activation Guarantee.
 - **Trạng thái**: `IMPLEMENTED_AND_AUTOMATED_VERIFIED` (UAT thực tế và kiểm tra restart persistence trên PostgreSQL local đang chờ môi trường daemon).
 
 ---

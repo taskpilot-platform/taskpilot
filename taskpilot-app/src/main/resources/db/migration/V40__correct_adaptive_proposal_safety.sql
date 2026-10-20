@@ -1,4 +1,4 @@
--- V39__correct_adaptive_proposal_safety.sql
+-- V40__correct_adaptive_proposal_safety.sql
 -- Phase 2F: Correct Adaptive proposal safety, nullability for insufficient evidence, and baseline normalization
 
 -- 1. Relax NOT NULL constraints on proposed weights, grid step, and metrics for INSUFFICIENT_EVIDENCE proposals

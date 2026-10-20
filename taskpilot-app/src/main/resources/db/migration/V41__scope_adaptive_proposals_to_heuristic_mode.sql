@@ -1,4 +1,4 @@
--- V40__scope_adaptive_proposals_to_heuristic_mode.sql
+-- V41__scope_adaptive_proposals_to_heuristic_mode.sql
 -- Phase 2F: Scope Adaptive Weight Proposals to heuristic mode (nullable for legacy compatibility)
 
 ALTER TABLE "adaptive_weight_proposals"

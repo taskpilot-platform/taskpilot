@@ -1,4 +1,4 @@
--- V37__create_recommendation_task_outcomes.sql
+-- V38__create_recommendation_task_outcomes.sql
 -- Phase 2D: Task completion timestamp and minimal task outcome foundation
 
 ALTER TABLE "tasks"

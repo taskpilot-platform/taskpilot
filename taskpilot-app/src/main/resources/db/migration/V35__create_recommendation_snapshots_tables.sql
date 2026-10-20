@@ -1,4 +1,4 @@
--- V34__create_recommendation_snapshots_tables.sql
+-- V35__create_recommendation_snapshots_tables.sql
 -- Append-only recommendation snapshots and candidate evidence for Phase 2A
 
 CREATE TABLE IF NOT EXISTS "recommendation_snapshots" (

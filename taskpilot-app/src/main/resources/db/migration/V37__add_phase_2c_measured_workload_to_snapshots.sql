@@ -1,4 +1,4 @@
--- V36__add_phase_2c_measured_workload_to_snapshots.sql
+-- V37__add_phase_2c_measured_workload_to_snapshots.sql
 -- Phase 2C: Add measured active task count workload columns to recommendation snapshot candidates
 
 ALTER TABLE "recommendation_snapshot_candidates"

@@ -1,4 +1,4 @@
--- V35__create_recommendation_decision_events_table.sql
+-- V36__create_recommendation_decision_events_table.sql
 -- Append-only recommendation decision events for Phase 2B
 
 CREATE TABLE IF NOT EXISTS "recommendation_decision_events" (

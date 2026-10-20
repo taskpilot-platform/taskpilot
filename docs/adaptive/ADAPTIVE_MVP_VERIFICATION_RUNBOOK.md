@@ -142,15 +142,16 @@ git diff --check
 ## 5. Thiết lập và kiểm tra Migration (Migration Setup and Validation)
 
 ### Mục đích
-Xác minh các migration Flyway Phase 2 từ `V34` đến `V39` áp dụng thành công trên PostgreSQL local và bảng `adaptive_weight_proposals` có đầy đủ các cột mới theo `V39`.
+Xác minh các migration Flyway Phase 2 từ `V35` đến `V41` áp dụng thành công trên PostgreSQL local và bảng `adaptive_weight_proposals` có đầy đủ các cột mới theo `V40` và `V41`.
 
 Danh sách migration Phase 2 chính xác trong repository:
-- `V34__create_recommendation_snapshots_tables.sql`
-- `V35__create_recommendation_decision_events_table.sql`
-- `V36__add_phase_2c_measured_workload_to_snapshots.sql`
-- `V37__create_recommendation_task_outcomes.sql`
-- `V38__create_adaptive_weight_proposals.sql`
-- `V39__correct_adaptive_proposal_safety.sql`
+- `V35__create_recommendation_snapshots_tables.sql`
+- `V36__create_recommendation_decision_events_table.sql`
+- `V37__add_phase_2c_measured_workload_to_snapshots.sql`
+- `V38__create_recommendation_task_outcomes.sql`
+- `V39__create_adaptive_weight_proposals.sql`
+- `V40__correct_adaptive_proposal_safety.sql`
+- `V41__scope_adaptive_proposals_to_heuristic_mode.sql`
 
 ### Các bước thực hiện
 1. Tạo database UAT trên PostgreSQL local:
