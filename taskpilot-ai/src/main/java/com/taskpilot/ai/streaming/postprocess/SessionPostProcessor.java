@@ -68,36 +68,74 @@ public class SessionPostProcessor {
                 log.info("[AutoTitle] Calling gemma-4-31b-it asynchronously to generate title for session {}...", session.getId());
                 ChatResponse response = directModelClient.callGemmaDirectly(request, "gemma-4-31b-it", 1, false);
 
-                if (response != null && response.aiMessage() != null && response.aiMessage().text() != null) {
-                    String title = response.aiMessage().text();
-                    if (title != null) {
-                        title = title.replaceAll("(?s)<think>.*?</think>", "");
-                        title = title.replaceAll("(?s)<thought>.*?</thought>", "");
-                        title = title.replace("<think>", "")
-                                .replace("</think>", "")
-                                .replace("<thought>", "")
-                                .replace("</thought>", "")
-                                .replace("\"", "")
-                                .replace("'", "")
-                                .trim();
-                    }
-                    if (title != null && title.contains("\n")) {
-                        title = title.substring(title.lastIndexOf("\n") + 1).trim();
-                    }
-                    if (title.length() > 60) {
-                        title = title.substring(0, 57) + "...";
-                    }
-                    if (!title.isEmpty()) {
-                        currentSession.setTitle(title);
-                        sessionRepository.save(currentSession);
-                        session.setTitle(title);
-                        log.info("[AutoTitle] Successfully set session {} title to: '{}'", session.getId(), title);
-                    }
-                }
+                String rawText = (response != null && response.aiMessage() != null) ? response.aiMessage().text() : null;
+                String sanitizedTitle = sanitizeGeneratedTitle(rawText, userInput);
+
+                currentSession.setTitle(sanitizedTitle);
+                sessionRepository.save(currentSession);
+                session.setTitle(sanitizedTitle);
+                log.info("[AutoTitle] Successfully set session {} title to: '{}'", session.getId(), sanitizedTitle);
             } catch (Exception e) {
                 log.warn("[AutoTitle] Failed to generate session title via Gemma: {}", e.getMessage());
+                try {
+                    ChatSessionEntity currentSession = sessionRepository.findById(session.getId()).orElse(session);
+                    if (currentSession.getTitle() == null || currentSession.getTitle().isBlank()) {
+                        String fallback = generateFallbackTitle(userInput);
+                        currentSession.setTitle(fallback);
+                        sessionRepository.save(currentSession);
+                        session.setTitle(fallback);
+                        log.info("[AutoTitle] Fallback set session {} title to: '{}'", session.getId(), fallback);
+                    }
+                } catch (Exception ignored) {}
             }
         });
+    }
+
+    private String sanitizeGeneratedTitle(String rawTitle, String userInput) {
+        if (rawTitle == null || rawTitle.isBlank()) {
+            return generateFallbackTitle(userInput);
+        }
+        String clean = rawTitle.replaceAll("(?s)<think>.*?</think>", "")
+                .replaceAll("(?s)<thought>.*?</thought>", "")
+                .replaceAll("(?s)```.*?```", "")
+                .replace("<think>", "")
+                .replace("</think>", "")
+                .replace("<thought>", "")
+                .replace("</thought>", "")
+                .replace("\"", "")
+                .replace("'", "")
+                .trim();
+
+        if (clean.contains("\n")) {
+            clean = clean.substring(clean.lastIndexOf("\n") + 1).trim();
+        }
+
+        // Purge leaked system logs, tool calls, or JSON objects
+        if (clean.startsWith("[System:") || clean.startsWith("{") || clean.startsWith("{\"tool\"")
+                || clean.toLowerCase().contains("ai utilized internal")
+                || clean.toLowerCase().contains("thought-process")
+                || clean.toLowerCase().contains("getsysteminfo")) {
+            return generateFallbackTitle(userInput);
+        }
+
+        if (clean.length() > 60) {
+            clean = clean.substring(0, 57) + "...";
+        }
+        return clean.isBlank() ? generateFallbackTitle(userInput) : clean;
+    }
+
+    private String generateFallbackTitle(String userInput) {
+        if (userInput == null || userInput.isBlank()) {
+            return "Cuộc trò chuyện mới";
+        }
+        String cleanInput = userInput.replaceAll("(?s)<think>.*?</think>", "")
+                .replaceAll("(?s)```.*?```", "")
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (cleanInput.length() > 40) {
+            return cleanInput.substring(0, 37) + "...";
+        }
+        return cleanInput.isEmpty() ? "Cuộc trò chuyện mới" : cleanInput;
     }
 
     public void saveSessionMessagesAndLogsAsync(
