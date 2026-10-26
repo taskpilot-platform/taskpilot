@@ -17,9 +17,9 @@ import static org.junit.jupiter.api.Assertions.*;
 class LiveKitTokenServiceTest {
 
     private LiveKitTokenService liveKitTokenService;
-    private final String apiKey = "API2brFXxNZvVJK";
-    private final String apiSecret = "3bI1SnnAf1ye0crWH0e7SftfWuvQgOxgnocsMD0aewnM";
-    private final String livekitUrl = "wss://taskpilot-collab-m3oqfj4g.livekit.cloud";
+    private final String apiKey = "test-livekit-api-key";
+    private final String apiSecret = "test-livekit-api-secret-key-must-be-at-least-32-bytes";
+    private final String livekitUrl = "wss://test.livekit.cloud";
 
     @BeforeEach
     void setUp() {

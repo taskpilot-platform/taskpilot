@@ -92,7 +92,7 @@ public class ProjectDocumentController {
             @PathVariable Long projectId,
             @RequestParam String query,
             @RequestParam(defaultValue = "5") int limit,
-            @RequestParam(defaultValue = "0.4") double minScore,
+            @RequestParam(defaultValue = "0.55") double minScore,
             Authentication authentication) {
         Long userId = resolveUserId(authentication);
         List<ScoredChunk> results = projectDocumentService.searchDocuments(projectId, query, limit, minScore, userId);
