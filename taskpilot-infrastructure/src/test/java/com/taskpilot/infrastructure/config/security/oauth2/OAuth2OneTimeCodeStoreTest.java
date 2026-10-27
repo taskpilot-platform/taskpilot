@@ -3,6 +3,7 @@ package com.taskpilot.infrastructure.config.security.oauth2;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -69,6 +70,19 @@ class OAuth2OneTimeCodeStoreTest {
         assertTrue(retrieved.isEmpty());
     }
 
+    @Test
+    @DisplayName("Should instantiate as a Spring bean via Autowired single-argument constructor")
+    void testSpringBeanInstantiation() {
+        try (var context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(OAuth2Properties.class);
+            context.registerBean(InMemoryOAuth2OneTimeCodeStore.class);
+            context.refresh();
+
+            InMemoryOAuth2OneTimeCodeStore bean = context.getBean(InMemoryOAuth2OneTimeCodeStore.class);
+            assertNotNull(bean);
+        }
+    }
+
     private static class TestClock extends Clock {
         private Instant currentInstant;
 
@@ -96,4 +110,3 @@ class OAuth2OneTimeCodeStoreTest {
         }
     }
 }
-
