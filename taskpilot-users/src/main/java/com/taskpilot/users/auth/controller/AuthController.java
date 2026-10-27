@@ -48,6 +48,20 @@ public class AuthController {
         return ApiResponse.ok("Token refreshed successfully!", authService.refreshToken(request));
     }
 
+    @Operation(summary = "Get enabled OAuth2 providers", description = "Returns the list of enabled OAuth2 social providers (e.g. google, github)")
+    @SecurityRequirements()
+    @GetMapping("/oauth2/providers")
+    public ApiResponse<java.util.List<String>> getOAuth2Providers() {
+        return ApiResponse.ok("Enabled OAuth2 providers retrieved successfully", authService.getEnabledOAuth2Providers());
+    }
+
+    @Operation(summary = "Exchange OAuth2 one-time code", description = "Exchange one-time authorization code for internal TaskPilot JWT tokens")
+    @SecurityRequirements()
+    @PostMapping("/oauth2/exchange")
+    public ApiResponse<AuthResponse> exchangeOAuth2Code(@Valid @RequestBody com.taskpilot.users.auth.dto.OAuth2ExchangeRequest request) {
+        return ApiResponse.ok("OAuth2 login successful", authService.exchangeOAuth2Code(request.code()));
+    }
+
     @Operation(summary = "User Logout", description = "Revoke the user's refresh token and clear the authentication session. Requires Bearer Token.")
     @PostMapping("/logout")
     public ApiResponse<Void> logout(
