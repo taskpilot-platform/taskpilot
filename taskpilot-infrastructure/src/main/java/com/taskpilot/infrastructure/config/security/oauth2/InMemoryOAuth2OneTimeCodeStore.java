@@ -1,7 +1,7 @@
 package com.taskpilot.infrastructure.config.security.oauth2;
 
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.security.SecureRandom;
@@ -14,18 +14,22 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class InMemoryOAuth2OneTimeCodeStore implements OAuth2OneTimeCodeStore {
 
     private final OAuth2Properties oAuth2Properties;
     private final Clock clock;
+    private final SecureRandom secureRandom = new SecureRandom();
+    private final Map<String, CodeEntry> store = new ConcurrentHashMap<>();
 
+    @Autowired
     public InMemoryOAuth2OneTimeCodeStore(OAuth2Properties oAuth2Properties) {
         this(oAuth2Properties, Clock.systemUTC());
     }
 
-    private final SecureRandom secureRandom = new SecureRandom();
-    private final Map<String, CodeEntry> store = new ConcurrentHashMap<>();
+    public InMemoryOAuth2OneTimeCodeStore(OAuth2Properties oAuth2Properties, Clock clock) {
+        this.oAuth2Properties = oAuth2Properties;
+        this.clock = clock != null ? clock : Clock.systemUTC();
+    }
 
     private record CodeEntry(Long userId, Instant expiresAt) {
     }
