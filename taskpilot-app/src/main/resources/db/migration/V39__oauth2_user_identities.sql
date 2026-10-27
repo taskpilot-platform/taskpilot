@@ -1,4 +1,4 @@
--- V35__oauth2_user_identities.sql
+-- V39__oauth2_user_identities.sql
 -- Security: OAuth2 & Social Login (Google & GitHub)
 -- Hỗ trợ tài khoản đăng nhập bên thứ ba và liên kết đa danh tính
 

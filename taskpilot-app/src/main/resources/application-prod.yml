@@ -22,7 +22,7 @@ spring:
   jpa:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
-      ddl-auto: validate
+      ddl-auto: ${HIBERNATE_DDL_AUTO:validate}
     show-sql: false
 
   flyway:
