@@ -1,9 +1,11 @@
 package com.taskpilot.infrastructure.config.security;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.taskpilot.infrastructure.config.security.oauth2.HttpCookieOAuth2AuthorizationRequestRepository;
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
@@ -19,6 +21,8 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.AuthenticationFailureHandler;
+import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
@@ -34,6 +38,16 @@ public class SecurityConfig {
         @Value("${FE_ORIGIN:${app.cors.allowed-origins:http://localhost:5173}}")
         private String feOrigin;
         private final JwtAuthenticationFilter jwtAuthFilter;
+
+        @Autowired(required = false)
+        private HttpCookieOAuth2AuthorizationRequestRepository cookieAuthorizationRequestRepository;
+
+        @Autowired(required = false)
+        private AuthenticationSuccessHandler oAuth2LoginSuccessHandler;
+
+        @Autowired(required = false)
+        private AuthenticationFailureHandler oAuth2LoginFailureHandler;
+
         private static final ObjectMapper objectMapper = new ObjectMapper()
                         .registerModule(new JavaTimeModule())
                         .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -48,6 +62,8 @@ public class SecurityConfig {
                         throws Exception {
                 http.cors(cors -> cors.configurationSource(corsConfigurationSource()))
                                 .csrf(AbstractHttpConfigurer::disable)
+                                .formLogin(AbstractHttpConfigurer::disable)
+                                .httpBasic(AbstractHttpConfigurer::disable)
                                 .authorizeHttpRequests(auth -> auth
                                                 .dispatcherTypeMatchers(DispatcherType.ASYNC)
                                                 .permitAll()
@@ -62,6 +78,9 @@ public class SecurityConfig {
                                                                 "/api/v1/auth/refresh",
                                                                 "/api/v1/auth/forgot-password",
                                                                 "/api/v1/auth/reset-password",
+                                                                "/api/v1/auth/oauth2/**",
+                                                                "/oauth2/**",
+                                                                "/login/oauth2/**",
                                                                 "/api/files/**",
                                                                 "/api/v1/files/google-drive/**")
                                                 .permitAll()
@@ -69,8 +88,17 @@ public class SecurityConfig {
                                                                 "/swagger-ui.html")
                                                 .permitAll()
                                                 .requestMatchers("/api/v1/ai/**").authenticated()
-                                                .anyRequest().authenticated())
-                                .exceptionHandling(ex -> ex
+                                                .anyRequest().authenticated());
+
+                if (cookieAuthorizationRequestRepository != null && oAuth2LoginSuccessHandler != null) {
+                        http.oauth2Login(oauth2 -> oauth2
+                                        .authorizationEndpoint(authEndpoint -> authEndpoint
+                                                        .authorizationRequestRepository(cookieAuthorizationRequestRepository))
+                                        .successHandler(oAuth2LoginSuccessHandler)
+                                        .failureHandler(oAuth2LoginFailureHandler));
+                }
+
+                http.exceptionHandling(ex -> ex
                                                 .authenticationEntryPoint((request, response, authException) -> {
                                                         response.setStatus(HttpStatus.UNAUTHORIZED.value());
                                                         response.setContentType(MediaType.APPLICATION_JSON_VALUE);

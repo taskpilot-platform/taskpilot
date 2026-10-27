@@ -1,6 +1,8 @@
 package com.taskpilot.users.auth.service;
 
 import com.taskpilot.infrastructure.config.security.JwtService;
+import com.taskpilot.infrastructure.config.security.oauth2.OAuth2OneTimeCodeStore;
+import com.taskpilot.infrastructure.config.security.oauth2.OAuth2Properties;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.users.auth.dto.AuthResponse;
 import com.taskpilot.users.auth.dto.ForgotPasswordRequest;
@@ -40,6 +42,8 @@ public class AuthService {
     private final RefreshTokenService refreshTokenService;
     private final EmailService emailService;
     private final PasswordResetThrottleService passwordResetThrottleService;
+    private final OAuth2OneTimeCodeStore oAuth2OneTimeCodeStore;
+    private final OAuth2Properties oAuth2Properties;
 
     public void register(RegisterRequest request) {
         if (userRepository.existsByEmail(request.email())) {
@@ -57,16 +61,41 @@ public class AuthService {
     }
 
     public AuthResponse login(LoginRequest request) {
-        UserEntity user = userRepository.findByEmail(request.email())
+        String email = request.email() != null ? request.email().trim().toLowerCase() : "";
+        UserEntity user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "Invalid email or password"));
 
-        if (!passwordEncoder.matches(request.password(), user.getPassword())) {
+        if (user.getPassword() == null || !passwordEncoder.matches(request.password(), user.getPassword())) {
             throw new BusinessException(HttpStatus.UNAUTHORIZED.value(), "Invalid email or password");
         }
         String token = jwtService.generateToken(user.getEmail(), user.getRole().name());
         RefreshTokenEntity refreshToken = refreshTokenService.createRefreshToken(user);
 
         return new AuthResponse(token, refreshToken.getToken(), "Bearer", jwtService.getJwtExpiration());
+    }
+
+    public AuthResponse exchangeOAuth2Code(String code) {
+        Long userId = oAuth2OneTimeCodeStore.consume(code)
+                .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST.value(), "Invalid or expired exchange code"));
+
+        UserEntity user = userRepository.findById(userId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
+
+        String token = jwtService.generateToken(user.getEmail(), user.getRole().name());
+        RefreshTokenEntity refreshToken = refreshTokenService.createRefreshToken(user);
+
+        return new AuthResponse(token, refreshToken.getToken(), "Bearer", jwtService.getJwtExpiration());
+    }
+
+    public java.util.List<String> getEnabledOAuth2Providers() {
+        java.util.List<String> providers = new java.util.ArrayList<>();
+        if (oAuth2Properties.getGoogle().isConfigured()) {
+            providers.add("google");
+        }
+        if (oAuth2Properties.getGithub().isConfigured()) {
+            providers.add("github");
+        }
+        return providers;
     }
 
     public AuthResponse refreshToken(RefreshTokenRequest request) {

@@ -18,6 +18,9 @@ The `.agents/` directory ensures that all engineering workflows, architecture gu
 ```text
 .agents/
 ├── README.md                                    # Canonical guide and policies (this file)
+├── agents/                                      # Declarative agent personas
+│   ├── oauth2-social-login-engineer.md          # Implements OAuth2 Social Login phase
+│   └── oauth2-security-reviewer.md              # Read-only security gatekeeper for OAuth2
 └── skills/                                      # Reusable specialized skills
     ├── ai-module-refactor/                      # AI module refactoring playbooks
     ├── biweekly-progress-tracker/               # Progress tracking & report templates
@@ -28,6 +31,7 @@ The `.agents/` directory ensures that all engineering workflows, architecture gu
     ├── mobile-responsive-test/                  # Mobile responsive testing scripts & checklists
     ├── spring-data-modernization/               # Spring Data & JPA modernization playbooks
     ├── taskpilot-architecture-maintenance/      # Architecture maintenance, reconciliation & P0 protocol
+    ├── taskpilot-oauth2-social-login/           # Google/GitHub OAuth2 login issuing internal JWT
     ├── taskpilot-rag/                           # RAG ingestion, rate limiting, and pgvector operations
     └── test-ai-prompt/                          # AI prompt testing workflows
 ```

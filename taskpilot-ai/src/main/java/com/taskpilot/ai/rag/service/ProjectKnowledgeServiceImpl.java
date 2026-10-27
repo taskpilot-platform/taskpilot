@@ -15,6 +15,8 @@ import java.util.Map;
 @Service
 public class ProjectKnowledgeServiceImpl implements ProjectKnowledgeService {
 
+    public static final double DEFAULT_CONTEXT_MIN_SCORE = 0.40;
+
     private final ProjectMemberPort projectMemberPort;
     private final DocumentChunkRepository documentChunkRepository;
     private final EmbeddingGateway embeddingGateway;
@@ -123,15 +125,15 @@ public class ProjectKnowledgeServiceImpl implements ProjectKnowledgeService {
             // Document-focused path: top candidates (default 6), NO diversity cap
             log.debug("[RAG Retrieval] Document-focused retrieval: projectId={}, documentId={}, candidateLimit={}",
                     projectId, documentId, finalContextLimit);
-            List<ScoredChunk> docResults = documentChunkRepository.findByDocumentAndNearest(projectId, documentId, queryVector, finalContextLimit, 0.40);
-            logContextRetrievalAndCandidates(query.trim(), finalContextLimit, 0.40, docResults);
+            List<ScoredChunk> docResults = documentChunkRepository.findByDocumentAndNearest(projectId, documentId, queryVector, finalContextLimit, DEFAULT_CONTEXT_MIN_SCORE);
+            logContextRetrievalAndCandidates(query.trim(), finalContextLimit, DEFAULT_CONTEXT_MIN_SCORE, docResults);
             logAfterDiversityAndBudget(docResults, finalContextLimit);
             logFinalResultsAndDtoMapping(docResults);
             return docResults;
         } else {
             // Project-wide path: candidate pool of 20, two-pass diversity soft-cap (max 2 per doc, up to 6 final context)
-            List<ScoredChunk> candidates = documentChunkRepository.findByProjectAndNearest(projectId, queryVector, 20, 0.40);
-            logContextRetrievalAndCandidates(query.trim(), 20, 0.40, candidates);
+            List<ScoredChunk> candidates = documentChunkRepository.findByProjectAndNearest(projectId, queryVector, 20, DEFAULT_CONTEXT_MIN_SCORE);
+            logContextRetrievalAndCandidates(query.trim(), 20, DEFAULT_CONTEXT_MIN_SCORE, candidates);
 
             List<ScoredChunk> selected = diversityContextSelector.selectProjectContext(candidates, finalContextLimit, 2);
             log.debug("[RAG FILTER]\nstage=diversity_selection\nbefore={}\nafter={}\nremoved={}\nreason=maxPerDocument cap (2) / maxContext limit ({})",

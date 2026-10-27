@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 public class ProfileService {
 
     private final UserRepository userRepository;
+    private final com.taskpilot.users.common.repository.UserIdentityRepository userIdentityRepository;
     private final PasswordEncoder passwordEncoder;
     private final RefreshTokenService refreshTokenService;
     private final StorageService storageService;
@@ -33,7 +34,11 @@ public class ProfileService {
 
     public UserProfileResponse getProfile() {
         UserEntity user = getCurrentUser();
-        return UserProfileResponse.fromEntity(user);
+        java.util.List<String> linkedProviders = userIdentityRepository.findByUserId(user.getId())
+                .stream()
+                .map(identity -> identity.getProvider().name().toLowerCase())
+                .toList();
+        return UserProfileResponse.fromEntity(user, linkedProviders);
     }
 
     public UserProfileResponse updateProfile(UpdateProfileRequest request) {
@@ -67,8 +72,11 @@ public class ProfileService {
 
     public void changePassword(ChangePasswordRequest request) {
         UserEntity user = getCurrentUser();
-        if (!passwordEncoder.matches(request.oldPassword(), user.getPassword())) {
-            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Old password does not match");
+        if (user.getPassword() != null && !user.getPassword().isBlank()) {
+            if (request.oldPassword() == null || request.oldPassword().isBlank()
+                    || !passwordEncoder.matches(request.oldPassword(), user.getPassword())) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Old password does not match");
+            }
         }
         user.setPassword(passwordEncoder.encode(request.newPassword()));
         userRepository.save(user);

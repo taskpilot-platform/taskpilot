@@ -79,6 +79,15 @@ application:
         cooldown-seconds: ${PASSWORD_RESET_COOLDOWN_SECONDS:60}
         max-per-email-per-hour: ${PASSWORD_RESET_MAX_PER_EMAIL_PER_HOUR:5}
         max-per-ip-per-hour: ${PASSWORD_RESET_MAX_PER_IP_PER_HOUR:20}
+    oauth2:
+      success-redirect-uri: ${OAUTH2_SUCCESS_REDIRECT_URI:http://localhost:5173/auth/callback}
+      code-ttl-seconds: ${OAUTH2_CODE_TTL_SECONDS:60}
+      google:
+        client-id: ${GOOGLE_OAUTH_CLIENT_ID:}
+        client-secret: ${GOOGLE_OAUTH_CLIENT_SECRET:}
+      github:
+        client-id: ${GITHUB_OAUTH_CLIENT_ID:}
+        client-secret: ${GITHUB_OAUTH_CLIENT_SECRET:}
   mail:
     from: ${MAIL_FROM:no-reply@taskpilot.local}
 

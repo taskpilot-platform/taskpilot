@@ -106,7 +106,7 @@ class ProjectKnowledgeServiceImplTest {
         assertThat(context).contains("Relevant project documentation:");
         assertThat(context).contains("Requirement 1: RAG PGVector");
         assertThat(context).contains("0.91");
-        verify(documentChunkRepository).findByProjectAndNearest(eq(projectId), any(), eq(20), eq(0.40));
+        verify(documentChunkRepository).findByProjectAndNearest(eq(projectId), any(), eq(20), eq(ProjectKnowledgeServiceImpl.DEFAULT_CONTEXT_MIN_SCORE));
     }
 
     @Test
@@ -120,7 +120,7 @@ class ProjectKnowledgeServiceImplTest {
         when(embeddingGateway.embedForSearch("security")).thenReturn(new float[768]);
 
         ScoredChunk chunk = new ScoredChunk(2L, documentId, projectId, 1, "Focused doc chunk", 0.95, "Spec.pdf");
-        when(documentChunkRepository.findByDocumentAndNearest(eq(projectId), eq(documentId), any(), eq(6), eq(0.40)))
+        when(documentChunkRepository.findByDocumentAndNearest(eq(projectId), eq(documentId), any(), eq(6), eq(ProjectKnowledgeServiceImpl.DEFAULT_CONTEXT_MIN_SCORE)))
                 .thenReturn(List.of(chunk));
 
         String context = service.getKnowledgeContext(projectId, documentId, userId, "security", 6);
@@ -128,7 +128,7 @@ class ProjectKnowledgeServiceImplTest {
         assertThat(context).contains("Relevant project documentation:");
         assertThat(context).contains("Focused doc chunk");
         assertThat(context).contains("Spec.pdf");
-        verify(documentChunkRepository).findByDocumentAndNearest(eq(projectId), eq(documentId), any(), eq(6), eq(0.40));
+        verify(documentChunkRepository).findByDocumentAndNearest(eq(projectId), eq(documentId), any(), eq(6), eq(ProjectKnowledgeServiceImpl.DEFAULT_CONTEXT_MIN_SCORE));
         verify(documentChunkRepository, never()).findByProjectAndNearest(any(), any(), anyInt(), anyDouble());
     }
 
@@ -166,13 +166,13 @@ class ProjectKnowledgeServiceImplTest {
         ScoredChunk d3c5 = new ScoredChunk(105L, 3L, projectId, 5, "Doc 3 chunk 5", 0.67);
         ScoredChunk d9c517 = new ScoredChunk(1270L, 9L, projectId, 517, "Doc 9 chunk 517 EMR", 0.66, "OOAD.docx");
 
-        when(documentChunkRepository.findByProjectAndNearest(eq(projectId), any(), eq(20), eq(0.40)))
+        when(documentChunkRepository.findByProjectAndNearest(eq(projectId), any(), eq(20), eq(ProjectKnowledgeServiceImpl.DEFAULT_CONTEXT_MIN_SCORE)))
                 .thenReturn(List.of(d3c1, d3c2, d3c3, d3c4, d3c5, d9c517));
 
         List<ScoredChunk> result = service.getContextChunks(projectId, userId, query, 6);
 
         // Verification of candidate pool and diversity
-        verify(documentChunkRepository).findByProjectAndNearest(eq(projectId), any(), eq(20), eq(0.40));
+        verify(documentChunkRepository).findByProjectAndNearest(eq(projectId), any(), eq(20), eq(ProjectKnowledgeServiceImpl.DEFAULT_CONTEXT_MIN_SCORE));
         assertThat(result).hasSize(6);
 
         // Pass 1: Doc 3 capped at 2 (d3c1, d3c2), Doc 9 chunk 517 selected at slot 3!
@@ -199,14 +199,14 @@ class ProjectKnowledgeServiceImplTest {
         when(embeddingGateway.embedForSearch(query)).thenReturn(new float[768]);
 
         ScoredChunk d9c517 = new ScoredChunk(1270L, documentId, projectId, 517, "Doc 9 chunk 517", 0.85);
-        when(documentChunkRepository.findByDocumentAndNearest(eq(projectId), eq(documentId), any(), eq(6), eq(0.40)))
+        when(documentChunkRepository.findByDocumentAndNearest(eq(projectId), eq(documentId), any(), eq(6), eq(ProjectKnowledgeServiceImpl.DEFAULT_CONTEXT_MIN_SCORE)))
                 .thenReturn(List.of(d9c517));
 
         List<ScoredChunk> result = service.getContextChunks(projectId, documentId, userId, query, 6);
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).chunkIndex()).isEqualTo(517);
-        verify(documentChunkRepository).findByDocumentAndNearest(eq(projectId), eq(documentId), any(), eq(6), eq(0.40));
+        verify(documentChunkRepository).findByDocumentAndNearest(eq(projectId), eq(documentId), any(), eq(6), eq(ProjectKnowledgeServiceImpl.DEFAULT_CONTEXT_MIN_SCORE));
         verify(documentChunkRepository, never()).findByProjectAndNearest(any(), any(), anyInt(), anyDouble());
     }
 }

@@ -4,6 +4,7 @@ import com.taskpilot.users.common.entity.UserEntity;
 import com.taskpilot.users.common.enums.UserRole;
 import com.taskpilot.users.common.enums.UserStatus;
 import java.time.Instant;
+import java.util.List;
 
 public record UserProfileResponse(
         Long id,
@@ -14,9 +15,16 @@ public record UserProfileResponse(
         UserStatus status,
         Integer currentWorkload,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        Boolean hasPassword,
+        List<String> linkedProviders
 ) {
     public static UserProfileResponse fromEntity(UserEntity entity) {
+        return fromEntity(entity, List.of());
+    }
+
+    public static UserProfileResponse fromEntity(UserEntity entity, List<String> linkedProviders) {
+        boolean hasPassword = entity.getPassword() != null && !entity.getPassword().isBlank();
         return new UserProfileResponse(
                 entity.getId(),
                 entity.getEmail(),
@@ -26,7 +34,9 @@ public record UserProfileResponse(
                 entity.getStatus(),
                 entity.getCurrentWorkload(),
                 entity.getCreatedAt(),
-                entity.getUpdatedAt()
+                entity.getUpdatedAt(),
+                hasPassword,
+                linkedProviders != null ? linkedProviders : List.of()
         );
     }
 }
