@@ -11,6 +11,7 @@ import com.taskpilot.projects.common.entity.ProjectMemberEntity;
 import com.taskpilot.projects.common.enums.MemberRole;
 import com.taskpilot.projects.common.enums.ProjectMeetingRole;
 import com.taskpilot.projects.common.enums.ProjectMeetingStatus;
+import com.taskpilot.projects.common.repository.ProjectFileRepository;
 import com.taskpilot.projects.common.repository.ProjectMeetingParticipantRepository;
 import com.taskpilot.projects.common.repository.ProjectMeetingRepository;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
@@ -38,6 +39,7 @@ public class ProjectMeetingService {
     private final ProjectMeetingRepository meetingRepository;
     private final ProjectMeetingParticipantRepository participantRepository;
     private final ProjectMemberRepository projectMemberRepository;
+    private final ProjectFileRepository projectFileRepository;
     private final ProjectSecurityService projectSecurityService;
     private final LiveKitTokenService liveKitTokenService;
     private final UserIdentityPort userIdentityPort;
@@ -239,6 +241,28 @@ public class ProjectMeetingService {
         }
 
         return mapToResponse(meeting, userId);
+    }
+
+    @Transactional
+    public ProjectMeetingResponse updateRecordingFile(Long projectId, Long meetingId, String userEmail, Long recordingFileId) {
+        Long userId = getUserId(userEmail);
+        projectSecurityService.requireActiveProject(projectId);
+        projectSecurityService.validateMember(projectId, userId);
+
+        ProjectMeetingEntity meeting = meetingRepository.findByIdAndProjectId(meetingId, projectId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Meeting not found"));
+        boolean isHost = Objects.equals(meeting.getHostId(), userId) || isProjectManager(projectId, userId);
+        if (meeting.getRecordingFileId() != null && !isHost) {
+            throw new BusinessException(HttpStatus.FORBIDDEN.value(),
+                    "Only the meeting host or project manager can overwrite an existing recording");
+        }
+        projectFileRepository.findByIdAndProjectId(recordingFileId, projectId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Recording file not found in this project"));
+
+        // Recordings are uploaded and linked right as or after the meeting ends.
+        meeting.setRecordingFileId(recordingFileId);
+        meeting.setRecordingEnabled(true);
+        return mapToResponse(meetingRepository.save(meeting), userId);
     }
 
     @Transactional(readOnly = true)

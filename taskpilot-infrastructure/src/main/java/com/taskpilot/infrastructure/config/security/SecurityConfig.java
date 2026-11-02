@@ -81,8 +81,7 @@ public class SecurityConfig {
                                                                 "/api/v1/auth/oauth2/**",
                                                                 "/oauth2/**",
                                                                 "/login/oauth2/**",
-                                                                "/api/files/**",
-                                                                "/api/v1/files/google-drive/**")
+                                                                "/ws/**")
                                                 .permitAll()
                                                 .requestMatchers("/v3/api-docs/**", "/swagger-ui/**",
                                                                 "/swagger-ui.html")
