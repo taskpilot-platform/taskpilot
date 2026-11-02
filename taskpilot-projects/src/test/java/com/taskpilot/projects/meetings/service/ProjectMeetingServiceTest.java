@@ -6,12 +6,14 @@ import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.ProjectEntity;
+import com.taskpilot.projects.common.entity.ProjectFileEntity;
 import com.taskpilot.projects.common.entity.ProjectMeetingEntity;
 import com.taskpilot.projects.common.entity.ProjectMeetingParticipantEntity;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
 import com.taskpilot.projects.common.enums.MemberRole;
 import com.taskpilot.projects.common.enums.ProjectMeetingRole;
 import com.taskpilot.projects.common.enums.ProjectMeetingStatus;
+import com.taskpilot.projects.common.repository.ProjectFileRepository;
 import com.taskpilot.projects.common.repository.ProjectMeetingParticipantRepository;
 import com.taskpilot.projects.common.repository.ProjectMeetingRepository;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
@@ -47,6 +49,9 @@ class ProjectMeetingServiceTest {
 
     @Mock
     private ProjectMemberRepository projectMemberRepository;
+
+    @Mock
+    private ProjectFileRepository projectFileRepository;
 
     @Mock
     private ProjectSecurityService projectSecurityService;
@@ -202,6 +207,80 @@ class ProjectMeetingServiceTest {
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> projectMeetingService.endMeeting(projectId, meetingId, email));
+
+        assertEquals(HttpStatus.FORBIDDEN.value(), ex.getStatus());
+        verify(meetingRepository, never()).save(any());
+    }
+
+    @Test
+    void updateRecordingFile_endedMeeting_linksRecordingSuccessfully() {
+        Long meetingId = 6L;
+        Long recordingFileId = 77L;
+        ProjectMeetingEntity meeting = ProjectMeetingEntity.builder()
+                .id(meetingId)
+                .projectId(projectId)
+                .hostId(userId)
+                .title("Demo Recording")
+                .roomName("room-demo")
+                .status(ProjectMeetingStatus.ENDED)
+                .recordingEnabled(false)
+                .build();
+
+        when(meetingRepository.findByIdAndProjectId(meetingId, projectId)).thenReturn(Optional.of(meeting));
+        when(projectFileRepository.findByIdAndProjectId(recordingFileId, projectId))
+                .thenReturn(Optional.of(ProjectFileEntity.builder().id(recordingFileId).projectId(projectId).build()));
+        when(meetingRepository.save(any(ProjectMeetingEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ProjectMeetingResponse res = projectMeetingService.updateRecordingFile(projectId, meetingId, email, recordingFileId);
+
+        assertNotNull(res);
+        assertEquals(recordingFileId, res.recordingFileId());
+        assertTrue(res.recordingEnabled());
+        verify(meetingRepository).save(meeting);
+    }
+
+    @Test
+    void updateRecordingFile_fileNotInProject_throwsNotFound() {
+        Long meetingId = 7L;
+        Long recordingFileId = 88L;
+        ProjectMeetingEntity meeting = ProjectMeetingEntity.builder()
+                .id(meetingId)
+                .projectId(projectId)
+                .hostId(userId)
+                .title("Demo Recording")
+                .roomName("room-demo-2")
+                .status(ProjectMeetingStatus.ENDED)
+                .build();
+
+        when(meetingRepository.findByIdAndProjectId(meetingId, projectId)).thenReturn(Optional.of(meeting));
+        when(projectFileRepository.findByIdAndProjectId(recordingFileId, projectId)).thenReturn(Optional.empty());
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> projectMeetingService.updateRecordingFile(projectId, meetingId, email, recordingFileId));
+
+        assertEquals(HttpStatus.NOT_FOUND.value(), ex.getStatus());
+        verify(meetingRepository, never()).save(any());
+    }
+
+    @Test
+    void updateRecordingFile_overwriteByNonHostNonManager_throwsForbidden() {
+        Long meetingId = 8L;
+        ProjectMeetingEntity meeting = ProjectMeetingEntity.builder()
+                .id(meetingId)
+                .projectId(projectId)
+                .hostId(999L)
+                .title("Protected Recording")
+                .roomName("room-prot")
+                .status(ProjectMeetingStatus.ENDED)
+                .recordingFileId(100L)
+                .build();
+
+        when(meetingRepository.findByIdAndProjectId(meetingId, projectId)).thenReturn(Optional.of(meeting));
+        when(projectMemberRepository.findByProjectIdAndUserId(projectId, userId))
+                .thenReturn(Optional.of(ProjectMemberEntity.builder().role(MemberRole.MEMBER).build()));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> projectMeetingService.updateRecordingFile(projectId, meetingId, email, 101L));
 
         assertEquals(HttpStatus.FORBIDDEN.value(), ex.getStatus());
         verify(meetingRepository, never()).save(any());

@@ -6,6 +6,7 @@ import com.taskpilot.projects.meetings.dto.CreateMeetingRequest;
 import com.taskpilot.projects.meetings.dto.MeetingParticipantResponse;
 import com.taskpilot.projects.meetings.dto.MeetingTokenResponse;
 import com.taskpilot.projects.meetings.dto.ProjectMeetingResponse;
+import com.taskpilot.projects.meetings.dto.UpdateMeetingRecordingRequest;
 import com.taskpilot.projects.meetings.service.ProjectMeetingService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -91,6 +92,17 @@ public class ProjectMeetingController {
             Authentication authentication) {
         return ApiResponse.ok("Meeting ended successfully",
                 meetingService.endMeeting(projectId, meetingId, authentication.getName()));
+    }
+
+    @Operation(summary = "Link meeting recording", description = "Attach an uploaded project file as the meeting recording")
+    @PatchMapping("/{meetingId}/recording")
+    public ApiResponse<ProjectMeetingResponse> updateRecording(
+            @PathVariable Long projectId,
+            @PathVariable Long meetingId,
+            Authentication authentication,
+            @Valid @RequestBody UpdateMeetingRecordingRequest request) {
+        return ApiResponse.ok("Meeting recording linked successfully",
+                meetingService.updateRecordingFile(projectId, meetingId, authentication.getName(), request.recordingFileId()));
     }
 
     @Operation(summary = "List meeting participants", description = "Get participants who joined the meeting")
