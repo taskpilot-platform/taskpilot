@@ -859,7 +859,7 @@ public class TaskPilotAiTools {
     public Object createTasksFromMeetingActionItems(
             @P("ID dự án") Long projectId,
             @P("ID cuộc họp chứa các action items") Long meetingId,
-            @P("Danh sách tùy biến các action items nếu người dùng muốn chỉnh sửa trước khi tạo (tùy chọn)") List<Map<String, Object>> customActionItems) {
+            @P("Danh sách tùy biến các action items nếu người dùng muốn chỉnh sửa trước khi tạo (tùy chọn)") Object customActionItems) {
         if (meetingAiTools == null) {
             return "Meeting AI tools currently unavailable";
         }

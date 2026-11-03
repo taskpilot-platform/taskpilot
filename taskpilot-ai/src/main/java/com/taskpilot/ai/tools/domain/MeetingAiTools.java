@@ -175,7 +175,7 @@ public class MeetingAiTools {
     public Object createTasksFromMeetingActionItems(
             @P("ID dự án") Long projectId,
             @P("ID cuộc họp chứa các action items") Long meetingId,
-            @P("Danh sách tùy biến các action items nếu người dùng muốn chỉnh sửa trước khi tạo (tùy chọn)") List<Map<String, Object>> customActionItems) {
+            @P("Danh sách tùy biến các action items nếu người dùng muốn chỉnh sửa trước khi tạo (tùy chọn)") Object customActionItems) {
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
         log.info("[AiTool] createTasksFromMeetingActionItems called for user={}, session={}, projectId={}, meetingId={}",
@@ -189,25 +189,27 @@ public class MeetingAiTools {
         }
 
         List<TaskActionItemDto> itemsToCreate = new ArrayList<>();
-        if (customActionItems != null && !customActionItems.isEmpty()) {
+        if (customActionItems instanceof List<?> rawList && !rawList.isEmpty()) {
             int idx = 1;
-            for (Map<String, Object> map : customActionItems) {
-                String title = (String) map.getOrDefault("title", "Task từ cuộc họp #" + meetingId);
-                String desc = (String) map.get("description");
-                String assignee = (String) map.get("assigneeName");
-                Long assigneeId = map.get("assigneeId") != null ? Long.valueOf(map.get("assigneeId").toString()) : null;
-                String dueDate = (String) map.get("dueDate");
-                String priority = (String) map.getOrDefault("priority", "MEDIUM");
-                itemsToCreate.add(new TaskActionItemDto(
-                        idx++,
-                        title,
-                        desc,
-                        assignee,
-                        assigneeId,
-                        assigneeId == null && assignee != null,
-                        dueDate,
-                        priority,
-                        null));
+            for (Object obj : rawList) {
+                if (obj instanceof Map<?, ?> map) {
+                    String title = map.get("title") != null ? map.get("title").toString() : "Task từ cuộc họp #" + meetingId;
+                    String desc = map.get("description") != null ? map.get("description").toString() : null;
+                    String assignee = map.get("assigneeName") != null ? map.get("assigneeName").toString() : null;
+                    Long assigneeId = map.get("assigneeId") != null ? Long.valueOf(map.get("assigneeId").toString()) : null;
+                    String dueDate = map.get("dueDate") != null ? map.get("dueDate").toString() : null;
+                    String priority = map.get("priority") != null ? map.get("priority").toString() : "MEDIUM";
+                    itemsToCreate.add(new TaskActionItemDto(
+                            idx++,
+                            title,
+                            desc,
+                            assignee,
+                            assigneeId,
+                            assigneeId == null && assignee != null,
+                            dueDate,
+                            priority,
+                            null));
+                }
             }
         } else {
             MeetingSummaryDto summary = meetingSummarizationService.summarizeMeeting(
