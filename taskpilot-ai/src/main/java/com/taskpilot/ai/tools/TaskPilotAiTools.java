@@ -48,6 +48,8 @@ public class TaskPilotAiTools {
     private final FileAiTools fileAiTools;
     @Nullable
     private final ChatAiTools chatAiTools;
+    @Nullable
+    private final MeetingAiTools meetingAiTools;
 
     @Autowired
     public TaskPilotAiTools(
@@ -61,7 +63,8 @@ public class TaskPilotAiTools {
             SystemAiTools systemAiTools,
             @Autowired(required = false) @Nullable KnowledgeAiTools knowledgeAiTools,
             @Autowired(required = false) @Nullable FileAiTools fileAiTools,
-            @Autowired(required = false) @Nullable ChatAiTools chatAiTools) {
+            @Autowired(required = false) @Nullable ChatAiTools chatAiTools,
+            @Autowired(required = false) @Nullable MeetingAiTools meetingAiTools) {
         this.projectAiTools = projectAiTools;
         this.taskAiTools = taskAiTools;
         this.sprintAiTools = sprintAiTools;
@@ -73,6 +76,23 @@ public class TaskPilotAiTools {
         this.knowledgeAiTools = knowledgeAiTools;
         this.fileAiTools = fileAiTools;
         this.chatAiTools = chatAiTools;
+        this.meetingAiTools = meetingAiTools;
+    }
+
+    public TaskPilotAiTools(
+            ProjectAiTools projectAiTools,
+            TaskAiTools taskAiTools,
+            SprintAiTools sprintAiTools,
+            CommentAiTools commentAiTools,
+            NotificationAiTools notificationAiTools,
+            SkillAiTools skillAiTools,
+            AhpAssignmentAiTools ahpAssignmentAiTools,
+            SystemAiTools systemAiTools,
+            @Nullable KnowledgeAiTools knowledgeAiTools,
+            @Nullable FileAiTools fileAiTools,
+            @Nullable ChatAiTools chatAiTools) {
+        this(projectAiTools, taskAiTools, sprintAiTools, commentAiTools, notificationAiTools,
+                skillAiTools, ahpAssignmentAiTools, systemAiTools, knowledgeAiTools, fileAiTools, chatAiTools, null);
     }
 
     public TaskPilotAiTools(
@@ -782,5 +802,67 @@ public class TaskPilotAiTools {
             return "Chat AI tools currently unavailable";
         }
         return chatAiTools.sendChannelAnnouncement(projectId, content);
+    }
+
+    // ==========================================
+    // PHASE 4: WORKSPACE VIDEO MEETING AI TOOLS
+    // ==========================================
+
+    @Tool("Liệt kê danh sách các cuộc họp video trong dự án (có thể lọc theo trạng thái ACTIVE, SCHEDULED, ENDED)")
+    public Object listProjectMeetings(
+            @P("ID dự án cần xem cuộc họp") Long projectId,
+            @P("Trạng thái cuộc họp: ACTIVE, SCHEDULED, ENDED (để trống nếu lấy tất cả)") String status,
+            @P("Số lượng kết quả tối đa (mặc định 20)") Integer limit) {
+        if (meetingAiTools == null) {
+            return "Meeting AI tools currently unavailable";
+        }
+        return meetingAiTools.listProjectMeetings(projectId, status, limit);
+    }
+
+    @Tool("Xem thông tin chi tiết cuộc họp (bao gồm danh sách người tham gia, liên kết ghi hình, ghi chú và tóm tắt AI)")
+    public Object getMeetingDetails(
+            @P("ID dự án") Long projectId,
+            @P("ID cuộc họp cần xem") Long meetingId) {
+        if (meetingAiTools == null) {
+            return "Meeting AI tools currently unavailable";
+        }
+        return meetingAiTools.getMeetingDetails(projectId, meetingId);
+    }
+
+    @Tool("Lên lịch một cuộc họp video mới cho dự án (yêu cầu người dùng xác nhận trước khi tạo)")
+    public Object scheduleMeeting(
+            @P("ID dự án cần tạo cuộc họp") Long projectId,
+            @P("Tiêu đề cuộc họp") String title,
+            @P("Mô tả hoặc mục tiêu cuộc họp (tùy chọn)") String description,
+            @P("Thời gian bắt đầu (định dạng ISO-8601 ví dụ 2026-11-04T09:00:00Z hoặc YYYY-MM-DDTHH:mm)") String startTime,
+            @P("Thời gian kết thúc (định dạng ISO-8601 hoặc YYYY-MM-DDTHH:mm, tùy chọn)") String endTime,
+            @P("Bật tự động ghi hình khi phòng mở (mặc định true)") Boolean recordingEnabled) {
+        if (meetingAiTools == null) {
+            return "Meeting AI tools currently unavailable";
+        }
+        return meetingAiTools.scheduleMeeting(projectId, title, description, startTime, endTime, recordingEnabled);
+    }
+
+    @Tool("Tự động tóm tắt nội dung cuộc họp từ bản ghi âm, ghi chú hoặc tin nhắn chat. Trích xuất tổng quan, quyết định then chốt, action items và câu hỏi còn tồn đọng.")
+    public Object summarizeMeeting(
+            @P("ID dự án") Long projectId,
+            @P("ID cuộc họp cần tóm tắt") Long meetingId,
+            @P("Nguồn dữ liệu ưu tiên: TRANSCRIPT, NOTES, CHAT_WINDOW (tùy chọn)") String sourceKind,
+            @P("Bắt buộc tạo mới bỏ qua bản tóm tắt đã lưu trong cache (mặc định false)") Boolean forceRegenerate) {
+        if (meetingAiTools == null) {
+            return "Meeting AI tools currently unavailable";
+        }
+        return meetingAiTools.summarizeMeeting(projectId, meetingId, sourceKind, forceRegenerate);
+    }
+
+    @Tool("Tạo hàng loạt task mới trong dự án dựa trên các action items đã được trích xuất từ cuộc họp (yêu cầu người dùng xác nhận trước khi tạo)")
+    public Object createTasksFromMeetingActionItems(
+            @P("ID dự án") Long projectId,
+            @P("ID cuộc họp chứa các action items") Long meetingId,
+            @P("Danh sách tùy biến các action items nếu người dùng muốn chỉnh sửa trước khi tạo (tùy chọn)") List<Map<String, Object>> customActionItems) {
+        if (meetingAiTools == null) {
+            return "Meeting AI tools currently unavailable";
+        }
+        return meetingAiTools.createTasksFromMeetingActionItems(projectId, meetingId, customActionItems);
     }
 }
