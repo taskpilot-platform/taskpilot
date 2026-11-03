@@ -2,6 +2,7 @@ package com.taskpilot.ai.service;
 
 import com.taskpilot.ai.tools.TaskPilotAiTools;
 import com.taskpilot.ai.tools.ToolExecutionContext;
+import com.taskpilot.ai.tools.selection.ToolSelectionPolicy;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.service.tool.ToolExecutor;
@@ -22,11 +23,27 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ToolCallingRegistryService {
 
     private final TaskPilotAiTools taskPilotAiTools;
     private final SmartRoutingService smartRoutingService;
+    private final ToolSelectionPolicy toolSelectionPolicy;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ToolCallingRegistryService(
+            TaskPilotAiTools taskPilotAiTools,
+            SmartRoutingService smartRoutingService,
+            ToolSelectionPolicy toolSelectionPolicy) {
+        this.taskPilotAiTools = taskPilotAiTools;
+        this.smartRoutingService = smartRoutingService;
+        this.toolSelectionPolicy = toolSelectionPolicy != null ? toolSelectionPolicy : new ToolSelectionPolicy();
+    }
+
+    public ToolCallingRegistryService(
+            TaskPilotAiTools taskPilotAiTools,
+            SmartRoutingService smartRoutingService) {
+        this(taskPilotAiTools, smartRoutingService, new ToolSelectionPolicy());
+    }
 
     private List<ToolSpecification> toolSpecifications;
     private Map<String, ToolExecutor> toolExecutors;
@@ -128,6 +145,24 @@ public class ToolCallingRegistryService {
         register("confirmPendingAction", Set.of(ToolScope.GENERAL), List.of("confirm", "dong y", "xac nhan"), 40, false);
         register("cancelPendingAction", Set.of(ToolScope.GENERAL), List.of("cancel", "huy", "tu choi"), 40, false);
         register("smartQuery", Set.of(ToolScope.GENERAL, ToolScope.PROJECT, ToolScope.TASK, ToolScope.MEMBER, ToolScope.SPRINT, ToolScope.NOTIFICATION), List.of("smart query", "multi query", "truy van nhieu", "lay nhieu du lieu", "du an va thanh vien", "du an va task", "nhieu thong tin", "project and members", "batch query", "parallel"), 95, false);
+
+        // PHASE 3: FILE
+        register("listProjectFiles", Set.of(ToolScope.FILE, ToolScope.PROJECT), List.of("file", "tep", "tai lieu", "danh sach file", "dinh kem", "attachment", "files"), 60, false);
+        register("getProjectFileDetails", Set.of(ToolScope.FILE, ToolScope.PROJECT), List.of("chi tiet file", "thong tin file", "kich thuoc file", "dung luong", "file detail"), 50, false);
+        register("searchProjectFiles", Set.of(ToolScope.FILE, ToolScope.PROJECT), List.of("tim file", "search file", "tim kiem file", "file pdf", "file anh", "file doc"), 55, false);
+        register("getProjectFileLink", Set.of(ToolScope.FILE, ToolScope.PROJECT), List.of("link file", "tai file", "download file", "duong dan file", "lay link"), 55, false);
+
+        // PHASE 3: CHAT
+        register("getChannelMessages", Set.of(ToolScope.CHAT, ToolScope.PROJECT), List.of("chat", "tin nhan", "hoi thoai", "nhom chat", "channel", "message", "trao doi"), 60, false);
+        register("searchChatMessages", Set.of(ToolScope.CHAT, ToolScope.PROJECT), List.of("tim tin nhan", "search chat", "search message", "loc tin nhan", "tim trong chat"), 55, false);
+        register("sendChannelAnnouncement", Set.of(ToolScope.CHAT, ToolScope.PROJECT), List.of("gui thong bao", "thong bao len chat", "announcement", "gui len kenh", "gui vao nhom"), 50, false);
+
+        // PHASE 4: MEETING
+        register("listProjectMeetings", Set.of(ToolScope.MEETING, ToolScope.PROJECT), List.of("cuoc hop", "hop", "lich hop", "meeting", "danh sach hop", "cac cuoc hop"), 60, false);
+        register("getMeetingDetails", Set.of(ToolScope.MEETING, ToolScope.PROJECT), List.of("chi tiet cuoc hop", "noi dung hop", "bien ban", "meeting detail"), 50, false);
+        register("scheduleMeeting", Set.of(ToolScope.MEETING, ToolScope.PROJECT), List.of("dat lich hop", "tao cuoc hop", "schedule meeting", "hen lich", "len lich hop"), 60, false);
+        register("summarizeMeeting", Set.of(ToolScope.MEETING, ToolScope.PROJECT), List.of("tom tat cuoc hop", "summarize meeting", "ket luan hop", "bien ban hop", "noi dung cuoc hop"), 65, false);
+        register("createTasksFromMeetingActionItems", Set.of(ToolScope.MEETING, ToolScope.PROJECT, ToolScope.TASK), List.of("tao task tu cuoc hop", "action item", "bien ban hop", "giao task tu hop", "task tu cuoc hop"), 65, false);
     }
 
     private void register(String name, Set<ToolScope> scopes, List<String> keywords, int priorityScore, boolean essential) {
@@ -139,105 +174,16 @@ public class ToolCallingRegistryService {
     public List<String> selectToolNames(String message, int maxTools, boolean expanded) {
         Set<ToolScope> activeScopes = smartRoutingService.detectScopes(message);
         String normalizedMsg = smartRoutingService.normalize(message);
-        
         boolean isWriteIntent = smartRoutingService.isWriteIntent(normalizedMsg);
-        
-        boolean isHybridPrompt = isWriteIntent && (
-            normalizedMsg.contains("thong bao") || normalizedMsg.contains("tb") || normalizedMsg.contains("notification")
-            || normalizedMsg.contains("chua doc") || normalizedMsg.contains("unread")
-            || normalizedMsg.contains("gan day") || normalizedMsg.contains("gan nhat")
-            || normalizedMsg.contains("gan day nhat") || normalizedMsg.contains("recent") || normalizedMsg.contains("latest")
+
+        return toolSelectionPolicy.selectTools(
+                message,
+                toolMetadataRegistry,
+                activeScopes,
+                isWriteIntent,
+                expanded,
+                null
         );
-        final boolean filterComplexRead = isWriteIntent && !isHybridPrompt;
-        final boolean finalIsWriteIntent = isWriteIntent;
-
-        boolean containsComment = normalizedMsg.contains("comment") || normalizedMsg.contains("binh luan");
-        boolean hasParallelConjunction = normalizedMsg.contains(" va ") || normalizedMsg.contains("dong thoi") 
-                || normalizedMsg.contains(" and ") || normalizedMsg.contains("also") || normalizedMsg.contains("doi chieu")
-                || normalizedMsg.contains(" voi ");
-        final boolean disableSmartQueryForComment = containsComment && !hasParallelConjunction;
-
-        boolean containsNotification = normalizedMsg.contains("thong bao") || normalizedMsg.contains("tb") || normalizedMsg.contains("notification");
-        boolean containsSkill = normalizedMsg.contains("skill") || normalizedMsg.contains("ky nang") || normalizedMsg.contains("profile");
-        boolean containsTaskOrProject = normalizedMsg.contains("task") || normalizedMsg.contains("cong viec") || normalizedMsg.contains("cv")
-                || normalizedMsg.contains("project") || normalizedMsg.contains("du an") || normalizedMsg.contains("da")
-                || normalizedMsg.contains("sprint") || normalizedMsg.contains("chu ky");
-        final boolean disableSmartQueryForNotification = containsNotification && !containsTaskOrProject;
-        final boolean disableSmartQueryForSkill = containsSkill && !containsTaskOrProject;
-
-        // Detect parallel read queries for multiple entities to force smartQuery
-        int entityTypesCount = 0;
-        if (normalizedMsg.contains("task") || normalizedMsg.contains("cong viec") || normalizedMsg.contains("cv")) entityTypesCount++;
-        if (normalizedMsg.contains("thanh vien") || normalizedMsg.contains("member") || normalizedMsg.contains("workload") || normalizedMsg.contains("khoi luong")) entityTypesCount++;
-        if (normalizedMsg.contains("project") || normalizedMsg.contains("du an")) entityTypesCount++;
-        if (normalizedMsg.contains("sprint") || normalizedMsg.contains("chu ky")) entityTypesCount++;
-        if (normalizedMsg.contains("comment") || normalizedMsg.contains("binh luan")) entityTypesCount++;
-        if (normalizedMsg.contains("notification") || normalizedMsg.contains("thong bao")) entityTypesCount++;
-        if (normalizedMsg.contains("system skill") || normalizedMsg.contains("ky nang he thong") || normalizedMsg.contains("kỹ năng hệ thống")) entityTypesCount++;
-        if (normalizedMsg.contains("my skill") || normalizedMsg.contains("ky nang cua toi") || normalizedMsg.contains("kỹ năng của tôi") || normalizedMsg.contains("ky nang hien tai") || normalizedMsg.contains("kỹ năng hiện tại")) entityTypesCount++;
-        if (entityTypesCount == 0 && (normalizedMsg.contains("skill") || normalizedMsg.contains("ky nang") || normalizedMsg.contains("kỹ năng"))) entityTypesCount++;
-        if (normalizedMsg.contains("thong bao") && normalizedMsg.contains("danh sach") && (normalizedMsg.contains("so luong") || normalizedMsg.contains("so luong thong bao"))) {
-            entityTypesCount += 2;
-        }
-        final boolean forceSmartQuery = !isWriteIntent && entityTypesCount >= 2 && hasParallelConjunction;
-
-        // Detect AHP recommend intent to hide generic getTaskDetails/queryTasks
-        boolean isAHPPrompt = (normalizedMsg.contains("goi y") || normalizedMsg.contains("de xuat") || normalizedMsg.contains("recommend"))
-                && (normalizedMsg.contains("nguoi") || normalizedMsg.contains("thanh vien") || normalizedMsg.contains("member") || normalizedMsg.contains("candidate") || normalizedMsg.contains("khac") || normalizedMsg.contains("phu hop"));
-        final boolean limitToAHP = !isWriteIntent && isAHPPrompt;
-
-        // Detect assign task to sprint intent to hide patchTask
-        final boolean isAssignSprintPrompt = normalizedMsg.contains("sprint") && (normalizedMsg.contains("dua") || normalizedMsg.contains("gan") || normalizedMsg.contains("add") || normalizedMsg.contains("put"));
-
-        return toolMetadataRegistry.values().stream()
-            .filter(meta -> {
-                String name = meta.toolName();
-                // Hide full update tools to force AI to select patch tools as expected by the benchmark
-                if ("updateProject".equals(name) || "updateTask".equals(name) 
-                        || "updateSprint".equals(name) || "updateTaskComment".equals(name)) {
-                    return false;
-                }
-                if (!finalIsWriteIntent) {
-                    if ("getTaskDetails".equals(name) || "queryTasks".equals(name) || "queryProjects".equals(name)) {
-                        return false;
-                    }
-                }
-                if (forceSmartQuery) {
-                    if (isReadOnlyTool(name) && !"smartQuery".equals(name)) {
-                        return false;
-                    }
-                }
-                if (limitToAHP) {
-                    if ("smartQuery".equals(name) || "getTaskDetails".equals(name) || "queryTasks".equals(name) || "queryProjects".equals(name) || "queryProjectMembers".equals(name)) {
-                        return false;
-                    }
-                }
-                if (isAssignSprintPrompt) {
-                    if ("patchTask".equals(name)) {
-                        return false;
-                    }
-                }
-
-                if (filterComplexRead) {
-                    return !isReadOnlyTool(name);
-                }
-                if (disableSmartQueryForComment && "smartQuery".equals(name)) {
-                    return false;
-                }
-                if (disableSmartQueryForNotification && "smartQuery".equals(name)) {
-                    return false;
-                }
-                if (disableSmartQueryForSkill && "smartQuery".equals(name)) {
-                    return false;
-                }
-                return true;
-            })
-            .map(meta -> new ScoredTool(meta, calculateScore(meta, activeScopes, normalizedMsg, expanded, finalIsWriteIntent)))
-            .filter(st -> st.score() > 0)
-            .sorted(Comparator.comparingInt(ScoredTool::score).reversed())
-            .limit(maxTools)
-            .map(st -> st.meta().toolName())
-            .toList();
     }
     
     private int calculateScore(ToolMeta meta, Set<ToolScope> activeScopes, String normalizedMsg, boolean expanded, boolean isWriteIntent) {

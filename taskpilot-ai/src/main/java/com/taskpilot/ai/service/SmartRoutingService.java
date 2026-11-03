@@ -132,7 +132,10 @@ public class SmartRoutingService {
     @Value("${ai.routing.token-threshold:8000}")
     private int tokenThreshold;
 
-    @Value("${ai.routing.tool-keywords:project,task,sprint,comment,member,role,status,project status,workload,assign,candidates,task list,project progress,my projects,project list,unassigned,not assigned,notification,unread,confirm,confirm_action,apply,xac nhan,dong y,thuc hien,du an,liet ke project,liet ke du an,chua phan cong,chua duoc phan cong,task chua gan,giao viec,tinh trang,tien do,danh sach task,cong viec,ung vien,giao task,gan task,chia viec,tao task,tao cong viec,bình luận,binh luan,comment cua toi,thong bao,thông báo,chua doc,chưa đọc,skill,ky nang,kỹ năng}")
+    @Value("${ai.routing.gatekeeper-enabled:false}")
+    private boolean gatekeeperEnabled = false;
+
+    @Value("${ai.routing.tool-keywords:project,task,sprint,comment,member,role,status,project status,workload,assign,candidates,task list,project progress,my projects,project list,unassigned,not assigned,notification,unread,confirm,confirm_action,apply,xac nhan,dong y,thuc hien,du an,liet ke project,liet ke du an,chua phan cong,chua duoc phan cong,task chua gan,giao viec,tinh trang,tien do,danh sach task,cong viec,ung vien,giao task,gan task,chia viec,tao task,tao cong viec,bình luận,binh luan,comment cua toi,thong bao,thông báo,chua doc,chưa đọc,skill,ky nang,kỹ năng,tai lieu,tài liệu,document,docs,knowledge,rag,kien thuc,kiến thức,quy dinh,quy định,chinh sach,chính sách,huong dan,hướng dẫn,file,tep,tệp,tai file,tải file,download,link file,dinh kem,đính kèm,chat,tin nhan,tin nhắn,hoi thoai,hội thoại,nhom chat,nhóm chat,channel,kenh,kênh,announcement,hop,họp,cuoc hop,cuộc họp,lich hop,lịch họp,meeting,bien ban,biên bản,action item,tom tat hop,tóm tắt họp}")
     private String toolKeywordsRaw;
 
     @Value("${ai.routing.ahp-fallback-keywords:phan cong,giao viec,chia viec,chon ai,chon nguoi,tim nguoi,ai ranh,ung vien,assign,candidate,workload,chia task}")
@@ -279,6 +282,10 @@ public class SmartRoutingService {
         }
         if (containsAny(normalized, List.of("comment", "binh luan", "binh luận", "comment cua toi", "comment cua minh"))) scopes.add(ToolScope.COMMENT);
         if (containsAny(normalized, List.of("notification", "unread", "thong bao", "thông báo", "chua doc", "chưa đọc"))) scopes.add(ToolScope.NOTIFICATION);
+        if (containsAny(normalized, List.of("tai lieu", "document", "docs", "knowledge", "rag", "kien thuc", "quy dinh", "chinh sach", "huong dan", "huongdan", "quydinh", "tailieu"))) scopes.add(ToolScope.KNOWLEDGE);
+        if (containsAny(normalized, List.of("file", "tep", "tai file", "download", "link file", "dinh kem", "pdf", "docx", "xlsx", "png", "jpg", "anh", "dung luong", "kich thuoc"))) scopes.add(ToolScope.FILE);
+        if (containsAny(normalized, List.of("chat", "tin nhan", "hoi thoai", "nhom chat", "channel", "kenh", "announcement"))) scopes.add(ToolScope.CHAT);
+        if (containsAny(normalized, List.of("hop", "cuoc hop", "lich hop", "meeting", "meet", "hen gio", "bien ban", "action item", "tom tat hop"))) scopes.add(ToolScope.MEETING);
         
         return scopes.isEmpty() ? EnumSet.of(ToolScope.GENERAL) : scopes;
     }
@@ -760,6 +767,12 @@ public class SmartRoutingService {
         if (isListOrStatusQuery) {
             log.info("[SmartRouting] Detected task list or unassigned query -> bypassing AHP");
             return false;
+        }
+
+        if (!gatekeeperEnabled) {
+            boolean requiresAHP = containsAny(normalized, splitKeywords(ahpFallbackKeywordsRaw));
+            log.info("[SmartRouting] Gatekeeper disabled; fast keyword requiresAHP={}", requiresAHP);
+            return requiresAHP;
         }
 
         try {

@@ -15,5 +15,13 @@ public interface ProjectChatMessageRepository extends JpaRepository<ProjectChatM
 
     List<ProjectChatMessageEntity> findTop50ByProjectIdOrderByCreatedAtDesc(Long projectId);
 
+    Page<ProjectChatMessageEntity> findByProjectIdAndContentContainingIgnoreCaseOrderByCreatedAtDesc(Long projectId, String keyword, Pageable pageable);
+
+    Page<ProjectChatMessageEntity> findByProjectIdAndIdLessThanOrderByCreatedAtDesc(Long projectId, Long beforeMessageId, Pageable pageable);
+
+    List<ProjectChatMessageEntity> findByProjectIdAndCreatedAtBetweenOrderByCreatedAtAsc(Long projectId, java.time.Instant from, java.time.Instant to, Pageable pageable);
+
+    Page<ProjectChatMessageEntity> findByProjectIdAndSenderIdOrderByCreatedAtDesc(Long projectId, Long senderId, Pageable pageable);
+
     long countByProjectId(Long projectId);
 }

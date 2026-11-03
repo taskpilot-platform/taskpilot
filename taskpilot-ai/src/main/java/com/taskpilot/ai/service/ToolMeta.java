@@ -8,5 +8,12 @@ public record ToolMeta(
     Set<ToolScope> scopes,
     List<String> keywords,
     int priorityScore,
-    boolean essential
-) {}
+    boolean essential,
+    boolean readOnly,
+    boolean cacheable,
+    boolean requiresProjectId
+) {
+    public ToolMeta(String toolName, Set<ToolScope> scopes, List<String> keywords, int priorityScore, boolean essential) {
+        this(toolName, scopes, keywords, priorityScore, essential, true, true, false);
+    }
+}

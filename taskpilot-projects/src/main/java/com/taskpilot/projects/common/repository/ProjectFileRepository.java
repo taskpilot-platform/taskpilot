@@ -13,7 +13,11 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFileEntity, 
 
     Page<ProjectFileEntity> findByProjectId(Long projectId, Pageable pageable);
 
+    Page<ProjectFileEntity> findByProjectIdOrderByCreatedAtDesc(Long projectId, Pageable pageable);
+
     Page<ProjectFileEntity> findByProjectIdAndOriginalNameContainingIgnoreCase(Long projectId, String keyword, Pageable pageable);
+
+    Page<ProjectFileEntity> findByProjectIdAndOriginalNameContainingIgnoreCaseOrderByCreatedAtDesc(Long projectId, String keyword, Pageable pageable);
 
     Optional<ProjectFileEntity> findByIdAndProjectId(Long id, Long projectId);
 

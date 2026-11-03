@@ -52,6 +52,21 @@ public class ProjectMeetingEntity {
     @Column(name = "scheduled_end_time")
     private Instant scheduledEndTime;
 
+    @Column(name = "notes", columnDefinition = "TEXT")
+    private String notes;
+
+    @Column(name = "transcript", columnDefinition = "TEXT")
+    private String transcript;
+
+    @Column(name = "ai_summary", columnDefinition = "TEXT")
+    private String aiSummary;
+
+    @Column(name = "ai_summary_generated_at")
+    private Instant aiSummaryGeneratedAt;
+
+    @Column(name = "action_items_json", columnDefinition = "TEXT")
+    private String actionItemsJson;
+
     @Column(name = "started_at")
     @Builder.Default
     private Instant startedAt = Instant.now();

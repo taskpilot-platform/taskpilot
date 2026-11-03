@@ -44,6 +44,12 @@ public class TaskPilotAiTools {
     private final SystemAiTools systemAiTools;
     @Nullable
     private final KnowledgeAiTools knowledgeAiTools;
+    @Nullable
+    private final FileAiTools fileAiTools;
+    @Nullable
+    private final ChatAiTools chatAiTools;
+    @Nullable
+    private final MeetingAiTools meetingAiTools;
 
     @Autowired
     public TaskPilotAiTools(
@@ -55,7 +61,10 @@ public class TaskPilotAiTools {
             SkillAiTools skillAiTools,
             AhpAssignmentAiTools ahpAssignmentAiTools,
             SystemAiTools systemAiTools,
-            @Autowired(required = false) @Nullable KnowledgeAiTools knowledgeAiTools) {
+            @Autowired(required = false) @Nullable KnowledgeAiTools knowledgeAiTools,
+            @Autowired(required = false) @Nullable FileAiTools fileAiTools,
+            @Autowired(required = false) @Nullable ChatAiTools chatAiTools,
+            @Autowired(required = false) @Nullable MeetingAiTools meetingAiTools) {
         this.projectAiTools = projectAiTools;
         this.taskAiTools = taskAiTools;
         this.sprintAiTools = sprintAiTools;
@@ -65,6 +74,39 @@ public class TaskPilotAiTools {
         this.ahpAssignmentAiTools = ahpAssignmentAiTools;
         this.systemAiTools = systemAiTools;
         this.knowledgeAiTools = knowledgeAiTools;
+        this.fileAiTools = fileAiTools;
+        this.chatAiTools = chatAiTools;
+        this.meetingAiTools = meetingAiTools;
+    }
+
+    public TaskPilotAiTools(
+            ProjectAiTools projectAiTools,
+            TaskAiTools taskAiTools,
+            SprintAiTools sprintAiTools,
+            CommentAiTools commentAiTools,
+            NotificationAiTools notificationAiTools,
+            SkillAiTools skillAiTools,
+            AhpAssignmentAiTools ahpAssignmentAiTools,
+            SystemAiTools systemAiTools,
+            @Nullable KnowledgeAiTools knowledgeAiTools,
+            @Nullable FileAiTools fileAiTools,
+            @Nullable ChatAiTools chatAiTools) {
+        this(projectAiTools, taskAiTools, sprintAiTools, commentAiTools, notificationAiTools,
+                skillAiTools, ahpAssignmentAiTools, systemAiTools, knowledgeAiTools, fileAiTools, chatAiTools, null);
+    }
+
+    public TaskPilotAiTools(
+            ProjectAiTools projectAiTools,
+            TaskAiTools taskAiTools,
+            SprintAiTools sprintAiTools,
+            CommentAiTools commentAiTools,
+            NotificationAiTools notificationAiTools,
+            SkillAiTools skillAiTools,
+            AhpAssignmentAiTools ahpAssignmentAiTools,
+            SystemAiTools systemAiTools,
+            @Nullable KnowledgeAiTools knowledgeAiTools) {
+        this(projectAiTools, taskAiTools, sprintAiTools, commentAiTools, notificationAiTools,
+                skillAiTools, ahpAssignmentAiTools, systemAiTools, knowledgeAiTools, null, null);
     }
 
     public TaskPilotAiTools(
@@ -77,7 +119,7 @@ public class TaskPilotAiTools {
             AhpAssignmentAiTools ahpAssignmentAiTools,
             SystemAiTools systemAiTools) {
         this(projectAiTools, taskAiTools, sprintAiTools, commentAiTools, notificationAiTools,
-                skillAiTools, ahpAssignmentAiTools, systemAiTools, null);
+                skillAiTools, ahpAssignmentAiTools, systemAiTools, null, null, null);
     }
 
     public TaskPilotAiTools(
@@ -677,5 +719,150 @@ public class TaskPilotAiTools {
             return "Project knowledge search tool is currently unavailable";
         }
         return knowledgeAiTools.searchProjectKnowledge(projectId, documentId, query, limit);
+    }
+
+    // ==========================================
+    // PHASE 3: WORKSPACE FILE AI TOOLS
+    // ==========================================
+
+    @Tool("Liệt kê các tệp/tài liệu trong dự án theo danh mục (DOCUMENT, SPREADSHEET, PRESENTATION, IMAGE, VIDEO, AUDIO, ARCHIVE, CODE, RECORDING, OTHER) hoặc mới nhất")
+    public Object listProjectFiles(
+            @P("ID dự án cần xem danh sách tệp") Long projectId,
+            @P("Optional. Danh mục tệp (ví dụ: DOCUMENT, SPREADSHEET, IMAGE, RECORDING)") String category,
+            @P("Optional. Số lượng tệp tối đa (mặc định 10, tối đa 50)") Integer limit) {
+        if (fileAiTools == null) {
+            return "File AI tools currently unavailable";
+        }
+        return fileAiTools.listProjectFiles(projectId, category, limit);
+    }
+
+    @Tool("Tìm kiếm tệp trong dự án theo từ khóa tên tệp hoặc mô tả")
+    public Object searchProjectFiles(
+            @P("ID dự án cần tìm kiếm tệp") Long projectId,
+            @P("Từ khóa tìm kiếm (tên tệp hoặc định dạng như pdf, docx, png)") String keyword,
+            @P("Optional. Danh mục tệp để lọc kết quả") String category,
+            @P("Optional. Số lượng tệp tối đa (mặc định 10, tối đa 50)") Integer limit) {
+        if (fileAiTools == null) {
+            return "File AI tools currently unavailable";
+        }
+        return fileAiTools.searchProjectFiles(projectId, keyword, category, limit);
+    }
+
+    @Tool("Lấy thông tin chi tiết của một tệp trong dự án bao gồm kích thước, loại tệp, người tải lên và liên kết tải/xem")
+    public Object getProjectFileDetails(
+            @P("ID dự án chứa tệp") Long projectId,
+            @P("ID của tệp cần xem chi tiết") Long fileId) {
+        if (fileAiTools == null) {
+            return "File AI tools currently unavailable";
+        }
+        return fileAiTools.getProjectFileDetails(projectId, fileId);
+    }
+
+    @Tool("Lấy đường dẫn liên kết tải xuống hoặc truy cập tệp trong dự án")
+    public Object getProjectFileLink(
+            @P("ID dự án chứa tệp") Long projectId,
+            @P("ID của tệp cần lấy liên kết") Long fileId) {
+        if (fileAiTools == null) {
+            return "File AI tools currently unavailable";
+        }
+        return fileAiTools.getProjectFileLink(projectId, fileId);
+    }
+
+    // ==========================================
+    // PHASE 3: WORKSPACE CHAT AI TOOLS
+    // ==========================================
+
+    @Tool("Đọc các tin nhắn trao đổi gần đây trong kênh thảo luận nhóm của dự án")
+    public Object getChannelMessages(
+            @P("ID dự án cần đọc tin nhắn") Long projectId,
+            @P("Optional. Số lượng tin nhắn tối đa cần lấy (mặc định 20, tối đa 50)") Integer limit) {
+        if (chatAiTools == null) {
+            return "Chat AI tools currently unavailable";
+        }
+        return chatAiTools.getChannelMessages(projectId, limit);
+    }
+
+    @Tool("Tìm kiếm tin nhắn trong kênh thảo luận nhóm của dự án theo từ khóa nội dung hoặc tên người gửi")
+    public Object searchChatMessages(
+            @P("ID dự án cần tìm kiếm tin nhắn") Long projectId,
+            @P("Optional. Từ khóa nội dung tin nhắn cần tìm") String keyword,
+            @P("Optional. Tên người gửi cần tìm") String senderName,
+            @P("Optional. Số lượng tin nhắn tối đa (mặc định 20, tối đa 50)") Integer limit) {
+        if (chatAiTools == null) {
+            return "Chat AI tools currently unavailable";
+        }
+        return chatAiTools.searchChatMessages(projectId, keyword, senderName, limit);
+    }
+
+    @Tool("Gửi thông báo quan trọng lên kênh thảo luận nhóm dự án (cần người dùng xác nhận trước khi gửi)")
+    public Object sendChannelAnnouncement(
+            @P("ID dự án cần gửi thông báo") Long projectId,
+            @P("Nội dung thông báo cần gửi lên kênh nhóm") String content) {
+        if (chatAiTools == null) {
+            return "Chat AI tools currently unavailable";
+        }
+        return chatAiTools.sendChannelAnnouncement(projectId, content);
+    }
+
+    // ==========================================
+    // PHASE 4: WORKSPACE VIDEO MEETING AI TOOLS
+    // ==========================================
+
+    @Tool("Liệt kê danh sách các cuộc họp video trong dự án (có thể lọc theo trạng thái ACTIVE, SCHEDULED, ENDED)")
+    public Object listProjectMeetings(
+            @P("ID dự án cần xem cuộc họp") Long projectId,
+            @P("Trạng thái cuộc họp: ACTIVE, SCHEDULED, ENDED (để trống nếu lấy tất cả)") String status,
+            @P("Số lượng kết quả tối đa (mặc định 20)") Integer limit) {
+        if (meetingAiTools == null) {
+            return "Meeting AI tools currently unavailable";
+        }
+        return meetingAiTools.listProjectMeetings(projectId, status, limit);
+    }
+
+    @Tool("Xem thông tin chi tiết cuộc họp (bao gồm danh sách người tham gia, liên kết ghi hình, ghi chú và tóm tắt AI)")
+    public Object getMeetingDetails(
+            @P("ID dự án") Long projectId,
+            @P("ID cuộc họp cần xem") Long meetingId) {
+        if (meetingAiTools == null) {
+            return "Meeting AI tools currently unavailable";
+        }
+        return meetingAiTools.getMeetingDetails(projectId, meetingId);
+    }
+
+    @Tool("Lên lịch một cuộc họp video mới cho dự án (yêu cầu người dùng xác nhận trước khi tạo)")
+    public Object scheduleMeeting(
+            @P("ID dự án cần tạo cuộc họp") Long projectId,
+            @P("Tiêu đề cuộc họp") String title,
+            @P("Mô tả hoặc mục tiêu cuộc họp (tùy chọn)") String description,
+            @P("Thời gian bắt đầu (định dạng ISO-8601 ví dụ 2026-11-04T09:00:00Z hoặc YYYY-MM-DDTHH:mm)") String startTime,
+            @P("Thời gian kết thúc (định dạng ISO-8601 hoặc YYYY-MM-DDTHH:mm, tùy chọn)") String endTime,
+            @P("Bật tự động ghi hình khi phòng mở (mặc định true)") Boolean recordingEnabled) {
+        if (meetingAiTools == null) {
+            return "Meeting AI tools currently unavailable";
+        }
+        return meetingAiTools.scheduleMeeting(projectId, title, description, startTime, endTime, recordingEnabled);
+    }
+
+    @Tool("Tự động tóm tắt nội dung cuộc họp từ bản ghi âm, ghi chú hoặc tin nhắn chat. Trích xuất tổng quan, quyết định then chốt, action items và câu hỏi còn tồn đọng.")
+    public Object summarizeMeeting(
+            @P("ID dự án") Long projectId,
+            @P("ID cuộc họp cần tóm tắt") Long meetingId,
+            @P("Nguồn dữ liệu ưu tiên: TRANSCRIPT, NOTES, CHAT_WINDOW (tùy chọn)") String sourceKind,
+            @P("Bắt buộc tạo mới bỏ qua bản tóm tắt đã lưu trong cache (mặc định false)") Boolean forceRegenerate) {
+        if (meetingAiTools == null) {
+            return "Meeting AI tools currently unavailable";
+        }
+        return meetingAiTools.summarizeMeeting(projectId, meetingId, sourceKind, forceRegenerate);
+    }
+
+    @Tool("Tạo hàng loạt task mới trong dự án dựa trên các action items đã được trích xuất từ cuộc họp (yêu cầu người dùng xác nhận trước khi tạo)")
+    public Object createTasksFromMeetingActionItems(
+            @P("ID dự án") Long projectId,
+            @P("ID cuộc họp chứa các action items") Long meetingId,
+            @P("Danh sách tùy biến các action items nếu người dùng muốn chỉnh sửa trước khi tạo (tùy chọn)") Object customActionItems) {
+        if (meetingAiTools == null) {
+            return "Meeting AI tools currently unavailable";
+        }
+        return meetingAiTools.createTasksFromMeetingActionItems(projectId, meetingId, customActionItems);
     }
 }

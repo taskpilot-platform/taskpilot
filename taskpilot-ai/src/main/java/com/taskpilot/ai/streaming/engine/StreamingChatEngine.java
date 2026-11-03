@@ -18,6 +18,7 @@ import com.taskpilot.ai.service.SmartRoutingService;
 import com.taskpilot.ai.service.ThinkingNarratorService;
 import dev.langchain4j.model.TokenCountEstimator;
 import com.taskpilot.ai.service.ToolCallingRegistryService;
+import com.taskpilot.ai.streaming.filter.ThoughtBlockStreamFilter;
 import com.taskpilot.ai.streaming.postprocess.SessionPostProcessor;
 import com.taskpilot.ai.streaming.sse.AiSseTransport;
 import com.taskpilot.ai.streaming.tool.ConfirmationBlockParser;
@@ -102,6 +103,15 @@ public class StreamingChatEngine {
 
     @Value("${ai.chat.max-output-tokens:3500}")
     private int maxOutputTokens = 3500;
+
+    @Value("${ai.chat.intermediate-response-enabled:false}")
+    private boolean intermediateResponseEnabled = false;
+
+    @Value("${ai.chat.communicator-enabled:false}")
+    private boolean communicatorEnabled = false;
+
+    @Value("${ai.chat.benchmark-mock-enabled:false}")
+    private boolean benchmarkMockEnabled = false;
 
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     private final ScheduledExecutorService timeoutScheduler = Executors.newScheduledThreadPool(8);
@@ -378,47 +388,31 @@ public class StreamingChatEngine {
             }
         }, Math.max(1, timeoutDelay), TimeUnit.SECONDS);
 
-        final StringBuilder thinkingBuffer = new StringBuilder();
-        final AtomicBoolean insideThink = new AtomicBoolean(false);
+        final ThoughtBlockStreamFilter streamFilter = new ThoughtBlockStreamFilter();
 
         StreamingChatResponseHandler handler = new StreamingChatResponseHandler() {
             @Override
             public void onPartialResponse(String partialResponse) {
                 if (roundClosed.get()) return;
                 firstModelSignalReceived.set(true);
-                fullResponse.append(partialResponse);
 
-                boolean isExecutor = requiresTools;
-                boolean hasThinkOpen = partialResponse.contains("<think>") || partialResponse.contains("<thought>");
-                boolean hasThinkClose = partialResponse.contains("</think>") || partialResponse.contains("</thought>");
+                boolean isExecutor = requiresTools && communicatorEnabled;
+                String visibleChunk = streamFilter.accept(partialResponse);
 
-                if (hasThinkOpen) insideThink.set(true);
-                if (insideThink.get()) thinkingBuffer.append(partialResponse);
-
-                if (!isExecutor && !generatingMarked.get()) {
-                    if (hasThinkClose) {
-                        insideThink.set(false);
+                if (!isExecutor && visibleChunk != null && !visibleChunk.isEmpty()) {
+                    if (generatingMarked.compareAndSet(false, true)) {
                         sseTransport.safeSend(emitter, "token", Map.of("token", "</think>\n\n"), MediaType.APPLICATION_JSON);
-                        generatingMarked.set(true);
-                        chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.GENERATING, modelName, null, null);
-                        sseTransport.safeSend(emitter, "phase", Phase.GENERATING.name(), null);
-                    } else if (!insideThink.get() && !hasThinkOpen && !partialResponse.trim().isEmpty()) {
-                        sseTransport.safeSend(emitter, "token", Map.of("token", "</think>\n\n"), MediaType.APPLICATION_JSON);
-                        generatingMarked.set(true);
                         chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.GENERATING, modelName, null, null);
                         sseTransport.safeSend(emitter, "phase", Phase.GENERATING.name(), null);
                     }
-                }
-
-                if (hasThinkClose) insideThink.set(false);
-
-                if (!clientDisconnected.get()) {
-                    boolean shouldStream = !isExecutor || insideThink.get() || hasThinkOpen || hasThinkClose;
-                    if (shouldStream && !partialResponse.isEmpty()) {
-                        if (!sseTransport.safeSend(emitter, "token", Map.of("token", partialResponse), MediaType.APPLICATION_JSON)) {
+                    fullResponse.append(visibleChunk);
+                    if (!clientDisconnected.get()) {
+                        if (!sseTransport.safeSend(emitter, "token", Map.of("token", visibleChunk), MediaType.APPLICATION_JSON)) {
                             clientDisconnected.set(true);
                         }
                     }
+                } else if (isExecutor) {
+                    fullResponse.append(partialResponse);
                 }
             }
 
@@ -428,15 +422,26 @@ public class StreamingChatEngine {
                 if (!roundClosed.compareAndSet(false, true)) return;
                 timeoutFuture.cancel(false);
 
-                String rawThinking = thinkingBuffer.toString();
-                if (rawThinking.contains("<think>") || rawThinking.contains("<thought>")) {
-                    String thinkingContent = sanitizer.extractAllThinkBlocks(rawThinking);
-                    if (thinkingContent != null && !thinkingContent.isBlank()) {
-                        thinkingNarratorService.expandAsync(thinkingContent).thenAccept(expanded -> {
-                            log.info("[AiChat] Expanded thinking for session {}", sessionId);
-                            sseTransport.safeSend(emitter, "thought_expanded", Map.of("expanded", expanded), MediaType.APPLICATION_JSON);
-                        });
+                boolean isExecutor = requiresTools && communicatorEnabled;
+                String flushed = streamFilter.flush();
+                if (!isExecutor && flushed != null && !flushed.isEmpty()) {
+                    if (generatingMarked.compareAndSet(false, true)) {
+                        sseTransport.safeSend(emitter, "token", Map.of("token", "</think>\n\n"), MediaType.APPLICATION_JSON);
+                        chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.GENERATING, modelName, null, null);
+                        sseTransport.safeSend(emitter, "phase", Phase.GENERATING.name(), null);
                     }
+                    fullResponse.append(flushed);
+                    if (!clientDisconnected.get()) {
+                        sseTransport.safeSend(emitter, "token", Map.of("token", flushed), MediaType.APPLICATION_JSON);
+                    }
+                }
+
+                String rawThinking = streamFilter.getHiddenReasoning();
+                if (rawThinking != null && !rawThinking.isBlank()) {
+                    thinkingNarratorService.expandAsync(rawThinking).thenAccept(expanded -> {
+                        log.info("[AiChat] Expanded thinking for session {}", sessionId);
+                        sseTransport.safeSend(emitter, "thought_expanded", Map.of("expanded", expanded), MediaType.APPLICATION_JSON);
+                    });
                 }
 
                 AiMessage aiMessage = completeResponse.aiMessage();
@@ -554,7 +559,7 @@ public class StreamingChatEngine {
                     } else {
                         boolean isBenchmarkSession = session != null && session.getTitle() != null && session.getTitle().contains("Benchmark");
                         boolean isBenchmarkMode = isBenchmarkSession && ((userId != null && userId == 18L) || (userInput != null && (userInput.contains("Scenario") || userInput.contains("xác nhận") || userInput.contains("thao tác"))));
-                        if (isBenchmarkMode) {
+                        if (benchmarkMockEnabled && isBenchmarkMode) {
                             log.info("[BenchmarkOptimization] Intercepted tool call, sending mock response to client to save duration");
                             String mockResponse = toolCoordinator.generateMockAssistantResponse(toolResults);
                             sseTransport.safeSend(emitter, "token", Map.of("token", mockResponse), MediaType.APPLICATION_JSON);
@@ -585,7 +590,7 @@ public class StreamingChatEngine {
                                     log.error("[BenchmarkOptimization] Error saving mock response: {}", e.getMessage());
                                 }
                             });
-                        } else if (toolRound == 0 && requiresTools) {
+                        } else if (intermediateResponseEnabled && toolRound == 0 && requiresTools) {
                             String toolResultsText = toolCoordinator.formatToolResultsForLlama(toolResults);
                             intermediateResponseStreamer.streamIntermediateResponseAndContinue(
                                     emitter, sessionId, userInput, history, systemPrompt, modelName,
@@ -613,7 +618,7 @@ public class StreamingChatEngine {
                     rawResponseText = aiMessage.text();
                 }
 
-                if (requiresTools) {
+                if (requiresTools && communicatorEnabled) {
                     log.info("[Multi-Agent] Chặng 3: Executor finished. Forwarding result to Communicator for streaming...");
                     if (session.getTitle() == null || session.getTitle().isBlank()) {
                         postProcessor.generateSessionTitleViaGemmaAsync(session, userInput, rawResponseText);
@@ -639,9 +644,16 @@ public class StreamingChatEngine {
                     return;
                 }
 
+                if (session.getTitle() == null || session.getTitle().isBlank()) {
+                    postProcessor.generateSessionTitleViaGemmaAsync(session, userInput, rawResponseText);
+                }
+
                 String responseText = confirmationParser.appendTaskPilotBlocks(
                         sanitizer.stripToolCallJson(sanitizer.stripThinkBlocks(rawResponseText)), toolCallSummaries);
                 String extractedReasoning = sanitizer.extractAllThinkBlocks(rawResponseText);
+                if (extractedReasoning == null || extractedReasoning.isBlank()) {
+                    extractedReasoning = streamFilter.getHiddenReasoning();
+                }
 
                 int estimatedTokens = completeResponse.tokenUsage() != null
                         ? completeResponse.tokenUsage().totalTokenCount()
