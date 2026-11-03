@@ -1,5 +1,17 @@
 package com.taskpilot.ai.service;
 
 public enum ToolScope {
-    PROJECT, SPRINT, TASK, COMMENT, NOTIFICATION, ASSIGNMENT, AHP, MEMBER, GENERAL
+    PROJECT,
+    SPRINT,
+    TASK,
+    COMMENT,
+    NOTIFICATION,
+    ASSIGNMENT,
+    AHP,
+    MEMBER,
+    KNOWLEDGE,
+    FILE,
+    CHAT,
+    MEETING,
+    GENERAL
 }
