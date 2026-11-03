@@ -87,6 +87,9 @@ public class MeetingAiTools {
         }
     }
 
+    private static final ZoneId VN_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
+    private static final DateTimeFormatter DISPLAY_FORMATTER = DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy").withZone(VN_ZONE);
+
     @Tool("Lên lịch một cuộc họp video mới cho dự án (yêu cầu người dùng xác nhận trước khi tạo)")
     public Object scheduleMeeting(
             @P("ID dự án cần tạo cuộc họp") Long projectId,
@@ -107,16 +110,40 @@ public class MeetingAiTools {
             return "Tiêu đề cuộc họp không được để trống.";
         }
 
-        Instant start = parseInstantOrFallback(startTime, Instant.now().plus(Duration.ofHours(1)));
-        Instant end = parseInstantOrFallback(endTime, start.plus(Duration.ofMinutes(45)));
-        boolean record = recordingEnabled != null ? recordingEnabled : true;
+        Instant start = parseInstant(startTime);
+        if (start == null) {
+            return "Thời gian bắt đầu không hợp lệ. Vui lòng cung cấp thời gian theo định dạng ISO-8601 hoặc YYYY-MM-DDTHH:mm (giờ Việt Nam).";
+        }
+        if (!start.isAfter(Instant.now())) {
+            return "Thời gian bắt đầu cuộc họp phải ở tương lai.";
+        }
 
+        Instant end;
+        if (endTime != null && !endTime.isBlank()) {
+            end = parseInstant(endTime);
+            if (end == null) {
+                return "Thời gian kết thúc không hợp lệ.";
+            }
+            if (!end.isAfter(start)) {
+                return "Thời gian kết thúc phải sau thời gian bắt đầu.";
+            }
+            if (Duration.between(start, end).toHours() > 8) {
+                return "Thời lượng cuộc họp không được vượt quá 8 giờ.";
+            }
+        } else {
+            end = start.plus(Duration.ofMinutes(45));
+        }
+
+        boolean record = recordingEnabled != null ? recordingEnabled : true;
         ScheduleMeetingCommand command = new ScheduleMeetingCommand(
                 title.trim(),
                 description != null ? description.trim() : null,
                 start,
                 end,
                 record);
+
+        String startStr = DISPLAY_FORMATTER.format(start);
+        String endStr = DISPLAY_FORMATTER.format(end);
 
         Map<String, Object> arguments = new HashMap<>();
         arguments.put("projectId", projectId);
@@ -130,15 +157,15 @@ public class MeetingAiTools {
         preview.put("projectId", projectId);
         preview.put("title", title);
         preview.put("description", description);
-        preview.put("startTime", start.toString());
-        preview.put("endTime", end.toString());
+        preview.put("startTime", startStr);
+        preview.put("endTime", endStr);
         preview.put("recordingEnabled", record);
 
         return pendingAiActionService.create(
                 userId,
                 sessionId,
                 "scheduleMeeting",
-                "Lên lịch cuộc họp: \"" + title + "\" vào lúc " + start.toString(),
+                "Lên lịch cuộc họp: \"" + title + "\" lúc " + startStr + " - " + endStr,
                 arguments,
                 preview,
                 () -> projectMeetingPort.scheduleMeeting(projectId, command, userId)
@@ -196,7 +223,12 @@ public class MeetingAiTools {
                     String title = map.get("title") != null ? map.get("title").toString() : "Task từ cuộc họp #" + meetingId;
                     String desc = map.get("description") != null ? map.get("description").toString() : null;
                     String assignee = map.get("assigneeName") != null ? map.get("assigneeName").toString() : null;
-                    Long assigneeId = map.get("assigneeId") != null ? Long.valueOf(map.get("assigneeId").toString()) : null;
+                    Long assigneeId = null;
+                    if (map.get("assigneeId") != null) {
+                        try {
+                            assigneeId = Double.valueOf(map.get("assigneeId").toString()).longValue();
+                        } catch (Exception ignored) {}
+                    }
                     String dueDate = map.get("dueDate") != null ? map.get("dueDate").toString() : null;
                     String priority = map.get("priority") != null ? map.get("priority").toString() : "MEDIUM";
                     itemsToCreate.add(new TaskActionItemDto(
@@ -247,10 +279,26 @@ public class MeetingAiTools {
                     List<Map<String, Object>> skipped = new ArrayList<>();
                     List<Map<String, Object>> failed = new ArrayList<>();
 
+                    List<TaskSummaryDto> existingTasks;
+                    try {
+                        existingTasks = taskCommandPort.getTasksByProject(projectId, userId);
+                    } catch (Exception e) {
+                        existingTasks = Collections.emptyList();
+                    }
+
                     for (TaskActionItemDto item : itemsToCreate) {
+                        String marker = "[meeting:" + meetingId + "#item:" + item.index() + "]";
+                        boolean alreadyCreated = existingTasks != null && existingTasks.stream()
+                                .anyMatch(t -> t.description() != null && t.description().contains(marker));
+
+                        if (alreadyCreated) {
+                            skipped.add(Map.of("index", item.index(), "title", item.title(), "reason", "Task already created from this action item"));
+                            continue;
+                        }
+
                         try {
                             String taskDesc = (item.description() != null ? item.description() : "")
-                                    + "\n\n(Tạo tự động từ cuộc họp #" + meetingId + ")";
+                                    + "\n\n" + marker + " (Tạo tự động từ cuộc họp #" + meetingId + ")";
                             TaskSummaryDto createdTask = taskCommandPort.createTask(
                                     projectId,
                                     item.title(),
@@ -278,9 +326,9 @@ public class MeetingAiTools {
         );
     }
 
-    private Instant parseInstantOrFallback(String str, Instant fallback) {
+    private Instant parseInstant(String str) {
         if (str == null || str.isBlank()) {
-            return fallback;
+            return null;
         }
         try {
             return Instant.parse(str.trim());
@@ -288,14 +336,14 @@ public class MeetingAiTools {
 
         try {
             LocalDateTime ldt = LocalDateTime.parse(str.trim(), DateTimeFormatter.ISO_LOCAL_DATE_TIME);
-            return ldt.atZone(ZoneId.systemDefault()).toInstant();
+            return ldt.atZone(VN_ZONE).toInstant();
         } catch (Exception ignored) {}
 
         try {
             LocalDate ld = LocalDate.parse(str.trim(), DateTimeFormatter.ISO_LOCAL_DATE);
-            return ld.atStartOfDay(ZoneId.systemDefault()).toInstant();
+            return ld.atStartOfDay(VN_ZONE).toInstant();
         } catch (Exception ignored) {}
 
-        return fallback;
+        return null;
     }
 }

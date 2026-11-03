@@ -93,9 +93,16 @@ public class ProjectChatAdapter implements ProjectChatPort {
         }
 
         if (criteria != null && criteria.senderName() != null && !criteria.senderName().isBlank()) {
+            int fetchSize = Math.min(resolvedLimit * 3, 100);
+            Page<ProjectChatMessageEntity> page = (criteria.keyword() != null && !criteria.keyword().isBlank())
+                    ? chatMessageRepository.findByProjectIdAndContentContainingIgnoreCaseOrderByCreatedAtDesc(
+                            projectId, criteria.keyword().trim(), PageRequest.of(0, fetchSize))
+                    : chatMessageRepository.findByProjectIdOrderByCreatedAtDesc(projectId, PageRequest.of(0, fetchSize));
+            list = page.getContent();
             String target = criteria.senderName().toLowerCase();
             return mapToSummaryDtos(projectId, list).stream()
                     .filter(m -> m.senderName() != null && m.senderName().toLowerCase().contains(target))
+                    .limit(resolvedLimit)
                     .toList();
         }
 

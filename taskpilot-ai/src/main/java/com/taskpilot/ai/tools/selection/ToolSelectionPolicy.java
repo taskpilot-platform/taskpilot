@@ -58,10 +58,10 @@ public class ToolSelectionPolicy {
 
         // 2. Knowledge / Document inquiry heuristic
         boolean isKnowledgeInquiry = detectedScopes.contains(ToolScope.KNOWLEDGE)
+            || (message != null && message.contains("?"))
             || KeywordMatcher.matchesAny(normalized, List.of(
                 "tai lieu", "quy dinh", "quy trinh", "dac ta", "chinh sach", "noi quy", "huong dan", "spec", "rag"
             ))
-            || normalized.contains("?")
             || KeywordMatcher.matchesAny(normalized, List.of("la gi", "the nao", "nhu the nao", "o dau", "sao"));
 
         if (isKnowledgeInquiry && allTools.containsKey("searchProjectKnowledge")) {

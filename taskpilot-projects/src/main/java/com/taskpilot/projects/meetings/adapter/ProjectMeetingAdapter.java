@@ -151,9 +151,14 @@ public class ProjectMeetingAdapter implements ProjectMeetingPort, MeetingTranscr
 
         Instant start = command.start();
         Instant end = command.end();
-        boolean isScheduled = start != null && start.isAfter(Instant.now());
-        ProjectMeetingStatus status = isScheduled ? ProjectMeetingStatus.SCHEDULED : ProjectMeetingStatus.ACTIVE;
-        Instant startedAt = isScheduled ? null : Instant.now();
+        if (start == null || !start.isAfter(Instant.now())) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Meeting scheduled start time must be in the future");
+        }
+        if (end != null && (!end.isAfter(start) || java.time.Duration.between(start, end).toHours() > 8)) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Invalid meeting end time or duration exceeds 8 hours");
+        }
+        ProjectMeetingStatus status = ProjectMeetingStatus.SCHEDULED;
+        Instant startedAt = null;
 
         String roomName = "tp-proj-" + projectId + "-m-" + UUID.randomUUID().toString().substring(0, 8);
 
@@ -259,17 +264,10 @@ public class ProjectMeetingAdapter implements ProjectMeetingPort, MeetingTranscr
     @Transactional(readOnly = true)
     public Optional<String> transcribeRecording(Long projectId, Long meetingId) {
         ProjectMeetingEntity meeting = meetingRepository.findByIdAndProjectId(meetingId, projectId).orElse(null);
-        if (meeting == null) {
+        if (meeting == null || meeting.getTranscript() == null || meeting.getTranscript().isBlank()) {
             return Optional.empty();
         }
-        if (meeting.getTranscript() != null && !meeting.getTranscript().isBlank()) {
-            return Optional.of(meeting.getTranscript());
-        }
-        if (meeting.getRecordingFileId() != null) {
-            return Optional.of("Transcript from recording file #" + meeting.getRecordingFileId()
-                    + " for meeting '" + meeting.getTitle() + "'.");
-        }
-        return Optional.empty();
+        return Optional.of(meeting.getTranscript());
     }
 
     private void validateAccess(Long projectId, Long userId) {

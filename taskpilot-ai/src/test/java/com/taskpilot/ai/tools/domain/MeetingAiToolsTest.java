@@ -104,12 +104,14 @@ class MeetingAiToolsTest {
 
     @Test
     void testScheduleMeeting_CreatesConfirmationRequired() {
+        String futureStart = Instant.now().plus(java.time.Duration.ofDays(1)).toString();
+        String futureEnd = Instant.now().plus(java.time.Duration.ofDays(1)).plus(java.time.Duration.ofMinutes(45)).toString();
         Object result = meetingAiTools.scheduleMeeting(
                 10L,
                 "Daily Standup",
                 "Morning sync",
-                "2026-11-04T09:00:00Z",
-                "2026-11-04T09:30:00Z",
+                futureStart,
+                futureEnd,
                 true);
 
         assertThat(result).isInstanceOf(ConfirmationRequiredDto.class);
@@ -132,6 +134,37 @@ class MeetingAiToolsTest {
         Object executed = pendingAiActionService.confirm(conf.actionId(), 100L, 200L);
         assertThat(executed).isEqualTo(created);
         verify(projectMeetingPort).scheduleMeeting(eq(10L), any(ScheduleMeetingCommand.class), eq(100L));
+    }
+
+    @Test
+    void testScheduleMeeting_RejectsPastStartTime() {
+        String pastStart = Instant.now().minus(java.time.Duration.ofDays(1)).toString();
+        Object result = meetingAiTools.scheduleMeeting(
+                10L,
+                "Past Meeting",
+                null,
+                pastStart,
+                null,
+                true);
+
+        assertThat(result).isInstanceOf(String.class);
+        assertThat((String) result).contains("phải ở tương lai");
+    }
+
+    @Test
+    void testScheduleMeeting_RejectsEndTimeBeforeStartTime() {
+        String futureStart = Instant.now().plus(java.time.Duration.ofDays(1)).toString();
+        String earlierEnd = Instant.now().plus(java.time.Duration.ofHours(2)).toString();
+        Object result = meetingAiTools.scheduleMeeting(
+                10L,
+                "Invalid Meeting",
+                null,
+                futureStart,
+                earlierEnd,
+                true);
+
+        assertThat(result).isInstanceOf(String.class);
+        assertThat((String) result).contains("Thời gian kết thúc phải sau thời gian bắt đầu");
     }
 
     @Test
@@ -189,5 +222,30 @@ class MeetingAiToolsTest {
         assertThat(taskResult.created()).hasSize(1);
         assertThat(taskResult.created().get(0)).containsEntry("taskId", 501L);
         assertThat(taskResult.failed()).isEmpty();
+    }
+
+    @Test
+    void testCreateTasksFromMeetingActionItems_SkipsDuplicates() {
+        TaskActionItemDto item1 = new TaskActionItemDto(
+                1, "Existing Task", "Already created", null, null, false, null, "MEDIUM", null);
+        MeetingSummaryDto summary = new MeetingSummaryDto(
+                1L, "Sprint Retro", "Overview", List.of(), List.of(item1), List.of(),
+                MeetingSourceKind.NOTES, Instant.now(), false);
+
+        when(meetingSummarizationService.summarizeMeeting(10L, 1L, null, false, 100L))
+                .thenReturn(summary);
+
+        // Mock existing task in project containing marker
+        TaskSummaryDto existing = new TaskSummaryDto(
+                999L, 10L, null, null, "Existing Task", "Some desc\n\n[meeting:1#item:1] (Tạo tự động)", "TODO", "MEDIUM", 1, null, null, null, null, null);
+        when(taskCommandPort.getTasksByProject(10L, 100L)).thenReturn(List.of(existing));
+
+        Object result = meetingAiTools.createTasksFromMeetingActionItems(10L, 1L, null);
+        ConfirmationRequiredDto conf = (ConfirmationRequiredDto) result;
+
+        Object executionResult = pendingAiActionService.confirm(conf.actionId(), 100L, 200L);
+        MeetingTaskCreationResultDto taskResult = (MeetingTaskCreationResultDto) executionResult;
+        assertThat(taskResult.skipped()).hasSize(1);
+        assertThat(taskResult.created()).isEmpty();
     }
 }

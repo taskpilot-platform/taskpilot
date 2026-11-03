@@ -115,8 +115,8 @@ public class ProjectFileAdapter implements ProjectFilePort {
         ProjectFileEntity file = projectFileRepository.findByIdAndProjectId(fileId, projectId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "File not found: " + fileId));
 
-        String appRoute = "/projects/" + projectId + "/files";
-        String downloadApi = "/api/projects/" + projectId + "/files/" + fileId + "/download";
+        String appRoute = "/projects/" + projectId + "/files/" + fileId;
+        String downloadApi = "/api/v1/projects/" + projectId + "/files/" + fileId + "/download";
 
         return new FileAccessLinkDto(
                 file.getId(),

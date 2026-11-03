@@ -99,7 +99,7 @@ class FileAiToolsTest {
         ProjectFileSummaryDto summary = new ProjectFileSummaryDto(
                 1L, 10L, "spec.pdf", FileCategory.DOCUMENT, "application/pdf", 1024L, "1.0 KB",
                 100L, "Alice", "Spec doc", Instant.now(), StorageTier.SUPABASE);
-        FileAccessLinkDto link = new FileAccessLinkDto(1L, "/projects/10/files", "/api/projects/10/files/1/download", true);
+        FileAccessLinkDto link = new FileAccessLinkDto(1L, "/projects/10/files/1", "/api/v1/projects/10/files/1/download", true);
         ProjectFileDetailDto detail = new ProjectFileDetailDto(summary, null, null, link);
 
         when(projectFilePort.getProjectFileDetails(10L, 1L, 100L)).thenReturn(detail);
@@ -111,11 +111,11 @@ class FileAiToolsTest {
 
     @Test
     void testGetProjectFileLink_Success() {
-        FileAccessLinkDto link = new FileAccessLinkDto(1L, "/projects/10/files", "/api/projects/10/files/1/download", true);
+        FileAccessLinkDto link = new FileAccessLinkDto(1L, "/projects/10/files/1", "/api/v1/projects/10/files/1/download", true);
         when(projectFilePort.getFileAccessLink(10L, 1L, 100L)).thenReturn(link);
 
         Object result = fileAiTools.getProjectFileLink(10L, 1L);
         assertThat(result).isInstanceOf(FileAccessLinkDto.class);
-        assertThat(((FileAccessLinkDto) result).downloadApi()).isEqualTo("/api/projects/10/files/1/download");
+        assertThat(((FileAccessLinkDto) result).downloadApi()).isEqualTo("/api/v1/projects/10/files/1/download");
     }
 }

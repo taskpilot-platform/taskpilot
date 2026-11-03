@@ -29,6 +29,7 @@ public class ToolCallingRegistryService {
     private final SmartRoutingService smartRoutingService;
     private final ToolSelectionPolicy toolSelectionPolicy;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public ToolCallingRegistryService(
             TaskPilotAiTools taskPilotAiTools,
             SmartRoutingService smartRoutingService,

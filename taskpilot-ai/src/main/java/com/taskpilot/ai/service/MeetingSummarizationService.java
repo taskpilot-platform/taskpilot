@@ -304,7 +304,7 @@ public class MeetingSummarizationService {
                         null,
                         null,
                         false,
-                        LocalDate.now().plusDays(7).toString(),
+                        null,
                         "MEDIUM",
                         line));
                 continue;
@@ -328,15 +328,11 @@ public class MeetingSummarizationService {
                             null,
                             null,
                             false,
-                            LocalDate.now().plusDays(7).toString(),
+                            null,
                             "MEDIUM",
                             line));
                 }
             }
-        }
-
-        if (decisions.isEmpty() && !text.isBlank()) {
-            decisions.add("Thống nhất kế hoạch công việc và định hướng triển khai các hạng mục tiếp theo.");
         }
 
         return new MeetingSummaryDto(

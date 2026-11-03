@@ -79,6 +79,7 @@ class ChatAiToolsTest {
 
     @Test
     void testSendChannelAnnouncement_CreatesPendingAction() {
+        when(projectChatPort.canAnnounce(10L, 100L)).thenReturn(true);
         Object result = chatAiTools.sendChannelAnnouncement(10L, "Important: Meeting at 3pm!");
         assertThat(result).isInstanceOf(ConfirmationRequiredDto.class);
         ConfirmationRequiredDto conf = (ConfirmationRequiredDto) result;
@@ -102,5 +103,13 @@ class ChatAiToolsTest {
         Object result = chatAiTools.sendChannelAnnouncement(10L, "");
         assertThat(result).isInstanceOf(String.class);
         assertThat((String) result).contains("Nội dung thông báo không được để trống");
+    }
+
+    @Test
+    void testSendChannelAnnouncement_ForbiddenNonManager() {
+        when(projectChatPort.canAnnounce(10L, 100L)).thenReturn(false);
+        Object result = chatAiTools.sendChannelAnnouncement(10L, "Hello");
+        assertThat(result).isInstanceOf(String.class);
+        assertThat((String) result).contains("Chỉ quản lý dự án");
     }
 }

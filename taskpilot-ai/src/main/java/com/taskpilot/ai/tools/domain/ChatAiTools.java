@@ -41,7 +41,11 @@ public class ChatAiTools {
             return "Kênh thảo luận của dự án #" + projectId + " hiện chưa có tin nhắn nào.";
         }
 
-        return messages;
+        return messages.stream()
+                .map(m -> m.content() != null && m.content().length() > 500
+                        ? new ChatMessageSummaryDto(m.id(), m.senderId(), m.senderName(), m.content().substring(0, 497) + "...", m.messageType(), m.fileId(), m.fileName(), m.createdAt())
+                        : m)
+                .toList();
     }
 
     @Tool("Tìm kiếm tin nhắn trong kênh thảo luận nhóm của dự án theo từ khóa nội dung hoặc tên người gửi")
@@ -66,7 +70,11 @@ public class ChatAiTools {
             return "Không tìm thấy tin nhắn nào khớp với yêu cầu tìm kiếm trong dự án #" + projectId + ".";
         }
 
-        return messages;
+        return messages.stream()
+                .map(m -> m.content() != null && m.content().length() > 500
+                        ? new ChatMessageSummaryDto(m.id(), m.senderId(), m.senderName(), m.content().substring(0, 497) + "...", m.messageType(), m.fileId(), m.fileName(), m.createdAt())
+                        : m)
+                .toList();
     }
 
     @Tool("Gửi thông báo quan trọng lên kênh thảo luận nhóm dự án (cần người dùng xác nhận trước khi gửi)")
@@ -83,6 +91,9 @@ public class ChatAiTools {
         }
         if (content == null || content.isBlank()) {
             return "Nội dung thông báo không được để trống.";
+        }
+        if (!projectChatPort.canAnnounce(projectId, userId)) {
+            return "Chỉ quản lý dự án (Project Manager) mới có quyền đăng thông báo lên kênh chung.";
         }
 
         return pendingAiActionService.create(
