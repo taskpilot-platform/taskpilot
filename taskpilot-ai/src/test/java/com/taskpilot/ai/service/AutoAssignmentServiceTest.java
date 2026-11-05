@@ -78,23 +78,25 @@ class AutoAssignmentServiceTest {
                 100L // 100ms timeout for test determinism
         );
 
-        when(projectPort.findById(PROJECT_ID))
+        lenient().when(projectPort.findById(PROJECT_ID))
                 .thenReturn(Optional.of(new ProjectHeuristicConfigDto(PROJECT_ID, "BALANCED")));
-        when(heuristicStrategyFactory.resolve("BALANCED")).thenReturn(heuristicStrategy);
+        lenient().when(heuristicStrategyFactory.resolve("BALANCED")).thenReturn(heuristicStrategy);
+        lenient().when(projectMemberPort.isProjectMember(PROJECT_ID, REQUESTING_USER_ID)).thenReturn(true);
+        lenient().when(projectMemberPort.isProjectManager(PROJECT_ID, REQUESTING_USER_ID)).thenReturn(true);
 
         ProjectMemberDto member = new ProjectMemberDto(USER_ID, "MEMBER", 0.9);
-        when(projectMemberPort.findProjectMembers(PROJECT_ID)).thenReturn(List.of(member));
+        lenient().when(projectMemberPort.findProjectMembers(PROJECT_ID)).thenReturn(List.of(member));
 
         UserProfileDto userProfile = new UserProfileDto(USER_ID, "Alice Engineer", "alice@example.com", "AVAILABLE", 20);
-        when(userPort.findById(USER_ID)).thenReturn(Optional.of(userProfile));
+        lenient().when(userPort.findById(USER_ID)).thenReturn(Optional.of(userProfile));
 
         UserSkillDto skill = new UserSkillDto("Java", 5);
-        when(userSkillPort.findByUserIdWithSkill(USER_ID)).thenReturn(List.of(skill));
+        lenient().when(userSkillPort.findByUserIdWithSkill(USER_ID)).thenReturn(List.of(skill));
 
-        when(projectMemberPort.findRecentPerformanceScores(eq(USER_ID), anyInt())).thenReturn(List.of(0.9, 0.85));
+        lenient().when(projectMemberPort.findRecentPerformanceScores(eq(USER_ID), anyInt())).thenReturn(List.of(0.9, 0.85));
 
-        when(heuristicStrategy.normalize(any(), any())).thenReturn(new NormalizedScores(0.9, 0.8, 0.88));
-        when(heuristicStrategy.score(any())).thenReturn(0.86);
+        lenient().when(heuristicStrategy.normalize(any(), any())).thenReturn(new NormalizedScores(0.9, 0.8, 0.88));
+        lenient().when(heuristicStrategy.score(any())).thenReturn(0.86);
     }
 
     @Test
@@ -224,5 +226,30 @@ class AutoAssignmentServiceTest {
                 configuredModel.equals(entity.getModelUsed()) &&
                 explanation.equals(entity.getResponse())
         ));
+    }
+
+    @Test
+    @DisplayName("Security: Outsider user requesting auto-assign throws 403 Forbidden")
+    void recommend_WhenUserNotMember_ThrowsForbidden() {
+        Long outsiderId = 999L;
+        when(projectMemberPort.isProjectMember(PROJECT_ID, outsiderId)).thenReturn(false);
+
+        com.taskpilot.infrastructure.exception.BusinessException ex = assertThrows(
+                com.taskpilot.infrastructure.exception.BusinessException.class,
+                () -> autoAssignmentService.recommend(PROJECT_ID, List.of("Java"), 5, outsiderId));
+        assertEquals(403, ex.getStatus());
+    }
+
+    @Test
+    @DisplayName("Security: Regular member requesting auto-assign throws 403 Forbidden")
+    void recommend_WhenUserNotManager_ThrowsForbidden() {
+        Long memberId = 222L;
+        when(projectMemberPort.isProjectMember(PROJECT_ID, memberId)).thenReturn(true);
+        when(projectMemberPort.isProjectManager(PROJECT_ID, memberId)).thenReturn(false);
+
+        com.taskpilot.infrastructure.exception.BusinessException ex = assertThrows(
+                com.taskpilot.infrastructure.exception.BusinessException.class,
+                () -> autoAssignmentService.recommend(PROJECT_ID, List.of("Java"), 5, memberId));
+        assertEquals(403, ex.getStatus());
     }
 }

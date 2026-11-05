@@ -12,6 +12,7 @@ import com.taskpilot.users.common.entity.UserEntity;
 import com.taskpilot.users.common.enums.UserRole;
 import com.taskpilot.users.common.enums.UserStatus;
 import com.taskpilot.users.common.repository.UserRepository;
+import com.taskpilot.users.common.util.EmailNormalizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -64,14 +65,15 @@ public class AdminUserService {
 
     @Transactional
     public AdminUserResponse createUser(AdminCreateUserRequest request) {
-        if (userRepository.existsByEmail(request.email())) {
+        String normalizedEmail = EmailNormalizer.normalize(request.email());
+        if (userRepository.existsByEmailIgnoreCase(normalizedEmail)) {
             throw new BusinessException(HttpStatus.CONFLICT.value(),
-                    "Email '" + request.email() + "' already exists");
+                    "Email '" + normalizedEmail + "' already exists");
         }
 
         String defaultPassword = generateRandomPassword();
 
-        UserEntity user = UserEntity.builder().email(request.email()).fullName(request.fullName())
+        UserEntity user = UserEntity.builder().email(normalizedEmail).fullName(request.fullName())
                 .password(passwordEncoder.encode(defaultPassword)).role(request.role()).build();
 
         userRepository.save(user);
