@@ -9,13 +9,17 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
 import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.servlet.NoHandlerFoundException;
 
 @Slf4j
@@ -120,6 +124,54 @@ public class GlobalExceptionHandler {
                 "File size exceeds the maximum allowed limit (25MB).", locale);
         return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
                 .body(ApiResponse.error(HttpStatus.PAYLOAD_TOO_LARGE.value(), msg));
+    }
+
+    @ExceptionHandler({MissingServletRequestPartException.class, MissingServletRequestParameterException.class})
+    public ResponseEntity<ApiResponse<Void>> handleMissingPartException(Exception ex) {
+        return handleMissingPartException(ex, LocaleContextHolder.getLocale());
+    }
+
+    public ResponseEntity<ApiResponse<Void>> handleMissingPartException(Exception ex, Locale locale) {
+        String partName = (ex instanceof MissingServletRequestPartException partEx) ? partEx.getRequestPartName() : ex.getMessage();
+        log.warn("Required request part or parameter is missing: {}", partName);
+        String msg = resolveMessage("error.missing_part", new Object[]{partName},
+                "Required request part or parameter is missing: " + partName, locale);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.error(HttpStatus.BAD_REQUEST.value(), msg));
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleHttpMessageNotReadableException(HttpMessageNotReadableException ex) {
+        return handleHttpMessageNotReadableException(ex, LocaleContextHolder.getLocale());
+    }
+
+    public ResponseEntity<ApiResponse<Void>> handleHttpMessageNotReadableException(HttpMessageNotReadableException ex, Locale locale) {
+        log.warn("Malformed HTTP request body: {}", ex.getMessage());
+        String detail = "Malformed JSON request body or invalid field value.";
+        Throwable cause = ex.getCause();
+        if (cause != null) {
+            String causeName = cause.getClass().getName();
+            if (causeName.contains("InvalidFormatException") || causeName.contains("MismatchedInputException")) {
+                detail = "Invalid value provided for one or more request fields.";
+            }
+        }
+        String msg = resolveMessage("error.malformed_json", null, detail, locale);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.error(HttpStatus.BAD_REQUEST.value(), msg));
+    }
+
+    @ExceptionHandler(SecurityException.class)
+    public ResponseEntity<ApiResponse<Void>> handleSecurityException(SecurityException ex) {
+        return handleSecurityException(ex, LocaleContextHolder.getLocale());
+    }
+
+    public ResponseEntity<ApiResponse<Void>> handleSecurityException(SecurityException ex, Locale locale) {
+        log.warn("SecurityException caught: {}", ex.getMessage());
+        String msg = resolveMessage("error.access_denied", null,
+                ex.getMessage() != null && !ex.getMessage().isBlank() ? ex.getMessage() : "Access denied", locale);
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(ApiResponse.error(HttpStatus.FORBIDDEN.value(), msg));
     }
 
     @ExceptionHandler(Exception.class)

@@ -72,7 +72,7 @@ public class ProjectFileService {
         boolean isVideoOrRecording = (file.getContentType() != null && file.getContentType().startsWith("video/"))
                 || originalName.endsWith(".webm")
                 || originalName.endsWith(".mp4")
-                || (description != null && description.contains("cuộc họp"));
+                || (description != null && description.contains("cuá»™c há»p"));
 
         if (googleDriveService != null && googleDriveService.isConfigured() && isVideoOrRecording) {
             try {
@@ -89,7 +89,7 @@ public class ProjectFileService {
                 log.warn("Google Drive upload failed, falling back to S3: {}", driveEx.getMessage());
                 try {
                     storageKey = storageService.uploadFile(file, folder, DEFAULT_STORAGE_BUCKET);
-                } catch (IOException e) {
+                } catch (Exception e) {
                     log.error("Failed to upload file to S3: {}", e.getMessage(), e);
                     throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR.value(), "Failed to upload file to storage");
                 }
@@ -97,7 +97,7 @@ public class ProjectFileService {
         } else {
             try {
                 storageKey = storageService.uploadFile(file, folder, DEFAULT_STORAGE_BUCKET);
-            } catch (IOException e) {
+            } catch (Exception e) {
                 if (googleDriveService != null && googleDriveService.isConfigured()) {
                     try {
                         GoogleDriveFileDto driveDto = googleDriveService.uploadFile(file);
