@@ -3,11 +3,14 @@ package com.taskpilot.infrastructure.exception;
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import lombok.extern.slf4j.Slf4j;
 import java.io.IOException;
+import java.sql.SQLException;
 import java.util.Locale;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
 import org.springframework.context.i18n.LocaleContextHolder;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -140,6 +143,15 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error(HttpStatus.INTERNAL_SERVER_ERROR.value(), msg));
     }
 
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleDataIntegrityViolationException(DataIntegrityViolationException ex) {
+        // Do not expose SQL, constraint names or user data from the JDBC message.
+        String msg = resolveMessage("error.data_conflict", null,
+                "Request conflicts with existing data.", LocaleContextHolder.getLocale());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.error(HttpStatus.CONFLICT.value(), msg));
+    }
+
     private String resolveMessage(String code, Object[] args, String defaultMessage, Locale locale) {
         if (messageSource == null || code == null) {
             return defaultMessage;
@@ -153,6 +165,13 @@ public class GlobalExceptionHandler {
     }
 
     private boolean isClientDisconnect(Throwable ex) {
+        // A JDBC batch may say "was aborted", or contain a socket failure. Neither
+        // means the HTTP client disconnected. Never suppress database failures.
+        for (Throwable cause = ex; cause != null; cause = cause.getCause()) {
+            if (cause instanceof DataAccessException || cause instanceof SQLException) {
+                return false;
+            }
+        }
         Throwable current = ex;
         while (current != null) {
             String className = current.getClass().getName();
@@ -162,11 +181,11 @@ public class GlobalExceptionHandler {
             }
 
             String message = current.getMessage();
-            if (message != null) {
+            if (current instanceof IOException && message != null) {
                 String normalized = message.toLowerCase(Locale.ROOT);
-                if (normalized.contains("aborted")
-                        || normalized.contains("broken pipe")
+                if (normalized.contains("broken pipe")
                         || normalized.contains("connection reset")
+                        || normalized.contains("connection aborted")
                         || normalized.contains("client has disconnected")) {
                     return true;
                 }

@@ -27,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
 import java.time.Instant;
+import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 
@@ -64,14 +65,15 @@ public class AdminUserService {
 
     @Transactional
     public AdminUserResponse createUser(AdminCreateUserRequest request) {
-        if (userRepository.existsByEmail(request.email())) {
+        String email = request.email().trim().toLowerCase(Locale.ROOT);
+        if (userRepository.existsByEmailIgnoreCase(email)) {
             throw new BusinessException(HttpStatus.CONFLICT.value(),
-                    "Email '" + request.email() + "' already exists");
+                    "Email is already registered!");
         }
 
         String defaultPassword = generateRandomPassword();
 
-        UserEntity user = UserEntity.builder().email(request.email()).fullName(request.fullName())
+        UserEntity user = UserEntity.builder().email(email).fullName(request.fullName())
                 .password(passwordEncoder.encode(defaultPassword)).role(request.role()).build();
 
         userRepository.save(user);

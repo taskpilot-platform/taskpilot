@@ -17,6 +17,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Optional;
+import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -37,6 +38,29 @@ class OAuth2AccountServiceTest {
     @BeforeEach
     void setUp() {
         service = new OAuth2AccountService(userRepository, userIdentityRepository);
+    }
+
+    @Test
+    void verifiedEmailLinksExistingAccountIndependentlyOfServerLocale() {
+        Locale original = Locale.getDefault();
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+            UserEntity user = new UserEntity();
+            user.setId(123L);
+            user.setEmail("i@example.test");
+            when(userRepository.findByEmail("i@example.test")).thenReturn(Optional.of(user));
+
+            UserEntity resolved = service.resolveUser(new OAuth2UserInfo(
+                    AuthProvider.GOOGLE, "locale-recovery", " I@Example.Test ", true, "Test", null));
+
+            assertSame(user, resolved);
+            verify(userRepository, never()).save(any());
+            var identity = ArgumentCaptor.forClass(UserIdentityEntity.class);
+            verify(userIdentityRepository).save(identity.capture());
+            assertEquals("i@example.test", identity.getValue().getEmail());
+        } finally {
+            Locale.setDefault(original);
+        }
     }
 
     @Test
