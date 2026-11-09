@@ -14,11 +14,7 @@ import java.util.Optional;
 public interface UserRepository extends JpaRepository<UserEntity, Long> {
     Optional<UserEntity> findByEmail(String email);
 
-    Optional<UserEntity> findByEmailIgnoreCase(String email);
-
     boolean existsByEmail(String email);
-
-    boolean existsByEmailIgnoreCase(String email);
 
     @Meta(comment = "UserRepository.findByKeyword")
     @Query("SELECT u FROM UserEntity u WHERE " +
