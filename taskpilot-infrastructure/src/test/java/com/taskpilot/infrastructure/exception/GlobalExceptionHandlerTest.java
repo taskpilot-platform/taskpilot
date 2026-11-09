@@ -4,12 +4,15 @@ import com.taskpilot.infrastructure.config.I18nConfig;
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.MessageSource;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.util.Locale;
+import java.io.IOException;
+import java.sql.BatchUpdateException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -19,6 +22,57 @@ class GlobalExceptionHandlerTest {
 
     private final MessageSource messageSource = new I18nConfig().messageSource();
     private final GlobalExceptionHandler i18nHandler = new GlobalExceptionHandler(messageSource);
+
+    @Test
+    void jdbcBatchAbortedIsNotAnHttpClientDisconnect() {
+        var ex = new RuntimeException("Batch entry 0 was aborted",
+                new BatchUpdateException("duplicate key", "23505", new int[0]));
+        var response = defaultHandler.handleGeneralException(ex);
+        assertThat(response).isNotNull();
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    @Test
+    void databaseIntegrityConflictReturns409WithoutLeakingSql() {
+        var ex = new DataIntegrityViolationException("Batch entry 0 was aborted: secret@example.test",
+                new BatchUpdateException("duplicate key", "23505", new int[0]));
+        var response = defaultHandler.handleDataIntegrityViolationException(ex);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getStatus()).isEqualTo(409);
+        assertThat(response.getBody().getMessage()).doesNotContain("secret@", "Batch", "SQL");
+    }
+
+    @Test
+    void dataConflictIsLocalizedWithoutLeakingDatabaseDetails() {
+        try {
+            org.springframework.context.i18n.LocaleContextHolder.setLocale(Locale.forLanguageTag("vi"));
+            var response = i18nHandler.handleDataIntegrityViolationException(new DataIntegrityViolationException("private SQL"));
+            assertThat(response.getBody()).isNotNull();
+            assertThat(response.getBody().getMessage()).isEqualTo("Yêu cầu xung đột với dữ liệu hiện có.");
+        } finally {
+            org.springframework.context.i18n.LocaleContextHolder.resetLocaleContext();
+        }
+    }
+
+    @Test
+    void runtimeMessageAloneCannotHideAnApplicationError() {
+        assertThat(defaultHandler.handleGeneralException(new RuntimeException("connection reset")))
+                .isNotNull();
+    }
+
+    @Test
+    void realIoClientDisconnectStillIgnored() {
+        assertThat(defaultHandler.handleClientAbortIOException(new IOException("Broken pipe"))).isNull();
+        assertThat(defaultHandler.handleGeneralException(new RuntimeException(new IOException("Connection reset by peer"))))
+                .isNull();
+    }
+
+    @Test
+    void databaseFailureWithSocketCauseIsNotHidden() {
+        var sql = new java.sql.SQLException("database transport failed", new IOException("Connection reset"));
+        assertThat(defaultHandler.handleGeneralException(new RuntimeException(sql))).isNotNull();
+    }
 
     @Test
     void handleMaxUploadSizeExceededException_returnsPayloadTooLarge413() {

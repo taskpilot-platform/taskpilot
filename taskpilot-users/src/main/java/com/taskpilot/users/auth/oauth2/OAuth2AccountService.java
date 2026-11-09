@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.Locale;
 
 @Slf4j
 @Service
@@ -51,7 +52,7 @@ public class OAuth2AccountService {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "email_unverified");
         }
 
-        String normalizedEmail = userInfo.email().trim().toLowerCase();
+        String normalizedEmail = userInfo.email().trim().toLowerCase(Locale.ROOT);
 
         // 3. Tra cứu người dùng sẵn có theo email đã xác minh
         var existingUserOpt = userRepository.findByEmail(normalizedEmail);

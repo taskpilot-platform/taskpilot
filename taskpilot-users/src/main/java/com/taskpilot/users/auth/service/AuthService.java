@@ -26,6 +26,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.Locale;
 import java.util.UUID;
 
 @Service
@@ -46,12 +47,13 @@ public class AuthService {
     private final OAuth2Properties oAuth2Properties;
 
     public void register(RegisterRequest request) {
-        if (userRepository.existsByEmail(request.email())) {
+        String email = normalizeEmail(request.email());
+        if (userRepository.existsByEmailIgnoreCase(email)) {
             throw new BusinessException(HttpStatus.CONFLICT.value(), "Email is already registered!");
         }
 
         UserEntity newUser = UserEntity.builder()
-                .email(request.email())
+                .email(email)
                 .password(passwordEncoder.encode(request.password()))
                 .fullName(request.fullName())
                 .role(UserRole.USER)
@@ -61,7 +63,7 @@ public class AuthService {
     }
 
     public AuthResponse login(LoginRequest request) {
-        String email = request.email() != null ? request.email().trim().toLowerCase() : "";
+        String email = normalizeEmail(request.email());
         UserEntity user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "Invalid email or password"));
 
@@ -137,7 +139,7 @@ public class AuthService {
     @Transactional
     public void forgotPassword(ForgotPasswordRequest request, String clientIp) {
         passwordResetThrottleService.checkAndConsume(request.email(), clientIp);
-        userRepository.findByEmail(request.email().trim())
+        userRepository.findByEmail(normalizeEmail(request.email()))
                 .ifPresent(this::issuePasswordResetTokenAndNotify);
     }
 
@@ -177,5 +179,9 @@ public class AuthService {
         } catch (Exception ex) {
             log.error("Failed to send password reset email to {}", user.getEmail(), ex);
         }
+    }
+
+    private static String normalizeEmail(String email) {
+        return email == null ? "" : email.trim().toLowerCase(Locale.ROOT);
     }
 }
