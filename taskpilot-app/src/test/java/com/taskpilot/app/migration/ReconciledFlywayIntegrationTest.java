@@ -109,4 +109,30 @@ class ReconciledFlywayIntegrationTest {
         var f = flyway(url, "flyway_schema_history_v2"); f.baseline();
         assertThatThrownBy(f::migrate).isInstanceOf(FlywayException.class).hasStackTraceContaining("schedule column type");
     }
+
+    @Test
+    void operatorRejectsWrongTargetAndChangedSchemaBeforeWritingHistory() throws Exception {
+        String url = database("recovery_operator"); legacy(url);
+        var target = new RecoveryAdoption.Target(url, "test", "test");
+        var approved = RecoveryAdoption.inspect(target).approval();
+        var wrong = new RecoveryAdoption.Approval("wrong_database", approved.username(), approved.jdbcUrlSha256(),
+                approved.catalogDigest(), approved.legacyHistoryDigest(), approved.dataDigest(), approved.bundleSha256());
+        assertThatThrownBy(() -> RecoveryAdoption.adopt(target, wrong)).isInstanceOf(SecurityException.class);
+        try (var c = DriverManager.getConnection(url, "test", "test"); var s = c.createStatement()) {
+            assertThat(scalar(c, "SELECT to_regclass('public.flyway_schema_history_v2') IS NULL")).isEqualTo("t");
+            s.execute("ALTER TABLE users ADD COLUMN unreviewed_drift text");
+        }
+        assertThatThrownBy(() -> RecoveryAdoption.adopt(target, approved)).isInstanceOf(SecurityException.class);
+        try (var c = DriverManager.getConnection(url, "test", "test")) {
+            assertThat(scalar(c, "SELECT to_regclass('public.flyway_schema_history_v2') IS NULL")).isEqualTo("t");
+        }
+        String validUrl = database("recovery_operator_valid"); legacy(validUrl);
+        var valid = new RecoveryAdoption.Target(validUrl, "test", "test");
+        var before = RecoveryAdoption.inspect(valid).approval();
+        RecoveryAdoption.adopt(valid, before);
+        var after = RecoveryAdoption.inspect(valid).approval();
+        assertThat(after.legacyHistoryDigest()).isEqualTo(before.legacyHistoryDigest());
+        assertThat(after.dataDigest()).isEqualTo(before.dataDigest());
+        assertThat(flyway(validUrl, "flyway_schema_history_v2").validateWithResult().validationSuccessful).isTrue();
+    }
 }
