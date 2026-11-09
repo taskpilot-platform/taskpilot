@@ -66,8 +66,13 @@ public class S3StorageServiceImpl implements StorageService {
                 .contentType(file.getContentType())
                 .build();
 
-        s3Client.putObject(putObjectRequest, RequestBody.fromInputStream(file.getInputStream(), file.getSize()));
-        log.info("Uploaded file to S3: bucket={}, key={}", targetBucket, key);
+        try {
+            s3Client.putObject(putObjectRequest, RequestBody.fromInputStream(file.getInputStream(), file.getSize()));
+            log.info("Uploaded file to S3: bucket={}, key={}", targetBucket, key);
+        } catch (Exception e) {
+            log.error("Failed to upload file to S3: bucket={}, key={}, error={}", targetBucket, key, e.getMessage());
+            throw new IOException("Failed to upload file to S3: " + e.getMessage(), e);
+        }
 
         if ("avatars".equalsIgnoreCase(targetBucket) && publicUrlPrefix != null && !publicUrlPrefix.isBlank()) {
             String url = publicUrlPrefix.endsWith("/") ? publicUrlPrefix : publicUrlPrefix + "/";

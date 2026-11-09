@@ -92,6 +92,16 @@ public class TaskService {
         }
     }
 
+    private void validateAssignee(Long projectId, Long assigneeId) {
+        if (assigneeId == null) {
+            return;
+        }
+        if (!projectMemberRepository.existsByProjectIdAndUserId(projectId, assigneeId)) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                    "Assignee must be a member of the project");
+        }
+    }
+
     @Transactional(readOnly = true)
     public List<TaskDto> getTasksByProject(Long projectId, String email) {
         Long userId = getCurrentUserIdByEmail(email);
@@ -148,6 +158,7 @@ public class TaskService {
         projectSecurityService.validateMember(request.projectId(), userId);
         projectSecurityService.validateProjectNotArchived(request.projectId());
         validateTaskDateRange(request.startDate(), request.dueDate());
+        validateAssignee(request.projectId(), request.assigneeId());
 
         if (request.parentId() != null) {
             TaskEntity parentTask = taskRepository.findById(request.parentId())
@@ -239,6 +250,7 @@ public class TaskService {
             task.setDifficultyLevel(request.difficultyLevel());
 
         if (request.assigneeId() != null && !request.assigneeId().equals(task.getAssigneeId())) {
+            validateAssignee(task.getProjectId(), request.assigneeId());
             task.setAssigneeId(request.assigneeId());
             eventPublisher.publishEvent(new TaskAssignedEvent(
                     request.assigneeId(),

@@ -48,10 +48,10 @@ public class ProjectChatService {
 
         String attachedFileName = null;
         if (request.fileId() != null) {
-            Optional<ProjectFileEntity> fileOpt = projectFileRepository.findByIdAndProjectId(request.fileId(), projectId);
-            if (fileOpt.isPresent()) {
-                attachedFileName = fileOpt.get().getOriginalName();
-            }
+            ProjectFileEntity file = projectFileRepository.findByIdAndProjectId(request.fileId(), projectId)
+                    .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                            "Attached file not found in this project"));
+            attachedFileName = file.getOriginalName();
         }
 
         ProjectChatMessageEntity entity = ProjectChatMessageEntity.builder()
