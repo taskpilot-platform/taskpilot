@@ -16,9 +16,7 @@ import com.taskpilot.users.common.entity.RefreshTokenEntity;
 import com.taskpilot.users.common.entity.UserEntity;
 import com.taskpilot.users.common.enums.UserRole;
 import com.taskpilot.users.common.repository.PasswordResetTokenRepository;
-import com.taskpilot.users.common.enums.UserStatus;
 import com.taskpilot.users.common.repository.UserRepository;
-import com.taskpilot.users.common.util.EmailNormalizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -48,13 +46,12 @@ public class AuthService {
     private final OAuth2Properties oAuth2Properties;
 
     public void register(RegisterRequest request) {
-        String normalizedEmail = EmailNormalizer.normalize(request.email());
-        if (userRepository.existsByEmailIgnoreCase(normalizedEmail)) {
+        if (userRepository.existsByEmail(request.email())) {
             throw new BusinessException(HttpStatus.CONFLICT.value(), "Email is already registered!");
         }
 
         UserEntity newUser = UserEntity.builder()
-                .email(normalizedEmail)
+                .email(request.email())
                 .password(passwordEncoder.encode(request.password()))
                 .fullName(request.fullName())
                 .role(UserRole.USER)
@@ -64,13 +61,9 @@ public class AuthService {
     }
 
     public AuthResponse login(LoginRequest request) {
-        String email = EmailNormalizer.normalize(request.email());
-        UserEntity user = userRepository.findByEmailIgnoreCase(email)
+        String email = request.email() != null ? request.email().trim().toLowerCase() : "";
+        UserEntity user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "Invalid email or password"));
-
-        if (user.getStatus() == UserStatus.DEACTIVATED) {
-            throw new BusinessException(HttpStatus.FORBIDDEN.value(), "Account is deactivated. Please contact administrator.");
-        }
 
         if (user.getPassword() == null || !passwordEncoder.matches(request.password(), user.getPassword())) {
             throw new BusinessException(HttpStatus.UNAUTHORIZED.value(), "Invalid email or password");
@@ -87,10 +80,6 @@ public class AuthService {
 
         UserEntity user = userRepository.findById(userId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
-
-        if (user.getStatus() == UserStatus.DEACTIVATED) {
-            throw new BusinessException(HttpStatus.FORBIDDEN.value(), "Account is deactivated. Please contact administrator.");
-        }
 
         String token = jwtService.generateToken(user.getEmail(), user.getRole().name());
         RefreshTokenEntity refreshToken = refreshTokenService.createRefreshToken(user);
@@ -109,15 +98,11 @@ public class AuthService {
         return providers;
     }
 
-    @Transactional(noRollbackFor = BusinessException.class)
     public AuthResponse refreshToken(RefreshTokenRequest request) {
         return refreshTokenService.findByToken(request.refreshToken())
                 .map(refreshTokenService::verifyExpiration)
                 .map(RefreshTokenEntity::getUser)
                 .map(user -> {
-                    if (user.getStatus() == UserStatus.DEACTIVATED) {
-                        throw new BusinessException(HttpStatus.FORBIDDEN.value(), "Account is deactivated. Please contact administrator.");
-                    }
                     String token = jwtService.generateToken(user.getEmail(), user.getRole().name());
                     return new AuthResponse(token, request.refreshToken(), "Bearer", jwtService.getJwtExpiration());
                 })
@@ -151,9 +136,8 @@ public class AuthService {
 
     @Transactional
     public void forgotPassword(ForgotPasswordRequest request, String clientIp) {
-        String normalizedEmail = EmailNormalizer.normalize(request.email());
-        passwordResetThrottleService.checkAndConsume(normalizedEmail, clientIp);
-        userRepository.findByEmailIgnoreCase(normalizedEmail)
+        passwordResetThrottleService.checkAndConsume(request.email(), clientIp);
+        userRepository.findByEmail(request.email().trim())
                 .ifPresent(this::issuePasswordResetTokenAndNotify);
     }
 

@@ -44,7 +44,7 @@ import org.springframework.beans.factory.annotation.Value;
 public class AutoAssignmentService {
     public static final long DEFAULT_EXPLANATION_TIMEOUT_MS = 5000L;
     public static final String DEFAULT_FALLBACK_EXPLANATION =
-            "Äá» xuáº¥t tá»± Ä‘á»™ng dá»±a trÃªn phÃ¢n tÃ­ch Ä‘a tiÃªu chÃ­ AHP, bao gá»“m má»©c Ä‘á»™ phÃ¹ há»£p ká»¹ nÄƒng, khá»‘i lÆ°á»£ng cÃ´ng viá»‡c vÃ  hiá»‡u suáº¥t lá»‹ch sá»­. Vui lÃ²ng tham kháº£o Ä‘iá»ƒm sá»‘ chi tiáº¿t cá»§a cÃ¡c á»©ng viÃªn á»Ÿ trÃªn.";
+            "Đề xuất tự động dựa trên phân tích đa tiêu chí AHP, bao gồm mức độ phù hợp kỹ năng, khối lượng công việc và hiệu suất lịch sử. Vui lòng tham khảo điểm số chi tiết của các ứng viên ở trên.";
 
     private final ProjectMemberPort projectMemberPort;
     private final UserSkillPort userSkillPort;
@@ -140,19 +140,6 @@ public class AutoAssignmentService {
 
     public AutoAssignmentResponse recommendCandidates(Long projectId, List<String> requiredSkills,
             int taskDifficulty, Long requestingUserId, Set<Long> includeUserIds, Set<Long> excludeUserIds) {
-        if (projectId == null) {
-            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Project ID is required");
-        }
-        if (requestingUserId != null) {
-            if (!projectMemberPort.isProjectMember(projectId, requestingUserId)) {
-                throw new BusinessException(HttpStatus.FORBIDDEN.value(),
-                        "Access denied. User is not a member of project " + projectId);
-            }
-            if (!projectMemberPort.isProjectManager(projectId, requestingUserId)) {
-                throw new BusinessException(HttpStatus.FORBIDDEN.value(),
-                        "Only Project Manager can request auto-assignment recommendations");
-            }
-        }
         List<String> safeRequiredSkills = requiredSkills == null ? Collections.emptyList() : requiredSkills;
         log.info("[AutoAssign] Starting candidate scoring for project {} with skills: {}", projectId,
                 safeRequiredSkills);
@@ -279,7 +266,7 @@ public class AutoAssignmentService {
             String key = required.toLowerCase();
             if (skillLevelMap.containsKey(key)) {
                 matched++;
-                totalLevel += skillLevelMap.get(key); // level 1â€“5
+                totalLevel += skillLevelMap.get(key); // level 1–5
             }
         }
         if (matched == 0)

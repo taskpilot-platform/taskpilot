@@ -36,7 +36,7 @@ public class RefreshTokenService {
     }
 
     public Optional<RefreshTokenEntity> findByToken(String token) {
-        return refreshTokenRepository.findByTokenWithUser(token);
+        return refreshTokenRepository.findByToken(token);
     }
 
     public RefreshTokenEntity verifyExpiration(RefreshTokenEntity token) {
