@@ -13,6 +13,12 @@ final class ReviewedSchemaContract {
     static final String EXPECTED_V41_SHA256="a74f4cfac91fa1184ac18284fadf558ca6b7bc64e1276c84fdf99c6fa5876da5";
     private static final String SCHEDULE_INDEX_DEFINITION=
             "CREATE INDEX idx_project_meetings_scheduled_start ON public.project_meetings USING btree (scheduled_start_time)";
+    // PostgreSQL 17 patch versions deparse this reviewed array cast differently
+    // before/after pg_dump restore. Accept only these two complete definitions.
+    private static final String SOURCE_QUEUE_INDEX=
+            "CREATE INDEX idx_documents_queue_claim ON public.documents USING btree (status, next_attempt_at, lease_until, created_at) WHERE ((status)::text = ANY ((ARRAY['QUEUED'::character varying, 'RETRY_WAIT'::character varying, 'PROCESSING'::character varying])::text[]))";
+    private static final String RESTORED_QUEUE_INDEX=
+            "CREATE INDEX idx_documents_queue_claim ON public.documents USING btree (status, next_attempt_at, lease_until, created_at) WHERE ((status)::text = ANY (ARRAY[('QUEUED'::character varying)::text, ('RETRY_WAIT'::character varying)::text, ('PROCESSING'::character varying)::text]))";
     private static final String STRUCTURE="""
         SELECT jsonb_build_object(
           'tables',(SELECT jsonb_agg(to_jsonb(x) ORDER BY name) FROM
@@ -61,7 +67,8 @@ final class ReviewedSchemaContract {
             try(var r=s.executeQuery(STRUCTURE)) {
                 if(!r.next()) throw new SecurityException("EMPTY_SCHEMA_CONTRACT");
                 return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                        .digest(r.getString(1).getBytes(StandardCharsets.UTF_8)));
+                        .digest(r.getString(1).replace(SOURCE_QUEUE_INDEX, RESTORED_QUEUE_INDEX)
+                                .getBytes(StandardCharsets.UTF_8)));
             }
         }
     }

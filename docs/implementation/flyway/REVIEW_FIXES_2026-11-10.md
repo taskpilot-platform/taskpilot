@@ -81,3 +81,9 @@ Trên container bản phục dựng sẵn có `taskpilot-recovery-fullcopy-20261
 - `repaired-source/`, `repaired-artifact/`
 
 Không commit log, dump, credential hoặc dữ liệu nguồn vào repository.
+
+## Tương thích deparser PostgreSQL 17 khi chuyển nguồn
+
+Lần adopt nguồn đầu tiên đã dừng ở `REVIEWED_SCHEMA_MISMATCH`, trước khi tạo schema/history v2 hoặc chạy migration. Đối chiếu chỉ đọc toàn bộ catalog cho thấy duy nhất index `idx_documents_queue_claim` khác cách xuất array cast sau pg_dump/restore: một bản cast cả mảng sang `text[]`, bản kia cast từng phần tử sang `text`. Cột, thứ tự, điều kiện và giá trị đều tương đương.
+
+Contract chỉ chuẩn hóa hai **định nghĩa đầy đủ** đã đối chiếu này về cùng dạng; hash reference và mọi kiểm tra cấu trúc còn lại giữ nguyên. Fixture catalog chỉ có cấu trúc (không có dòng dữ liệu/credential) tái hiện lỗi; test tiếp tục từ chối đổi cột hoặc đổi điều kiện index. Schema nguồn đã vượt qua kiểm tra contract chỉ đọc sau sửa, và xác nhận v2 history vẫn chưa tồn tại. Kết quả adopt/deploy thực tế phải xem bằng chứng phát hành, không suy ra từ kiểm tra này.
