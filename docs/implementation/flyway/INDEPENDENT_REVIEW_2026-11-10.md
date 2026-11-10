@@ -1,5 +1,7 @@
 # Independent Flyway verification — 2026-11-10
 
+> **Historical review:** this records findings before the final fixes. Source adoption and deployment subsequently completed; see [the verified release outcome](RECOVERY_RELEASE_2026-11-10.md). The original verdict below is not the current release status.
+
 > **Follow-up:** The three findings below were subsequently addressed in the working tree, with additional negative tests and a new regression run. See [repair implementation and current evidence](REVIEW_FIXES_2026-11-10.md). This original report remains the before-fix record; neither report claims that source cutover has occurred.
 
 ## Verdict
@@ -145,7 +147,7 @@ An incorrect schedule index made adoption fail after the baseline had committed.
 
 ## Evidence location
 
-`C:/Users/homepc/AppData/Local/Temp/opencode/taskpilot-independent-review-20261110/`
+`%TEMP%/opencode/taskpilot-independent-review-20261110/`
 
 - `focused-tests.log`, `regression.log`, `isolated-build.log`
 - `negative-tests.log`, `configuration-policy.log`, `prepare-smoke.log`

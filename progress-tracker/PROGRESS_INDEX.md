@@ -19,6 +19,18 @@
 | **Đợt 07** | 18/11/2026 – 01/12/2026 | **Adaptive Weights & Dashboard phân tích** | - Hiện thực thuật toán học trọng số thích ứng (Online Gradient Descent).<br>- Dashboard phân tích thống kê tiến độ, velocity, workload dự án. | *Dự kiến: Thuật toán tự học cải thiện 25% độ hài lòng PM* | *Chưa bắt đầu* | ⏳ Kế hoạch |
 | **Đợt 08** | 02/12/2026 – 15/12/2026 | **Đánh giá hiệu năng, Viết tài liệu báo cáo & Nghiệm thu** | - Hoàn thiện tài liệu báo cáo Đồ án 2 theo mẫu UIT.<br>- Benchmark hiệu năng hệ thống, kiểm thử tải toàn diện.<br>- Chuẩn bị slide thuyết trình và video demo sản phẩm. | *Dự kiến: Báo cáo hoàn chỉnh > 100 trang, demo 100% kịch bản* | *Chưa bắt đầu* | ⏳ Kế hoạch |
 
+### Báo cáo bổ sung theo 14 ngày gần nhất (không tính là một đợt riêng)
+
+| Khoảng thời gian | Kết quả ghi nhận | Báo cáo chi tiết | Lưu ý |
+|---|---|---|---|
+| 27/10/2026 – 09/11/2026 | OAuth2 Google/GitHub; công cụ AI cho tệp, trò chuyện và cuộc họp; sửa lỗi cộng tác; trên nhánh riêng có bản sửa lỗi sản phẩm và quy trình CI Playwright. | [Xem chi tiết](logs/period-2026-10-27-to-2026-11-09.md) | Trùng một phần đợt 05 và 06; bản sửa lỗi sản phẩm và CI chưa merge `main`; chưa xác minh kết quả chạy CI/UAT. |
+
+### Cập nhật kỹ thuật Flyway — 10/11/2026
+
+Đã merge PR #51/#52 và phát hành bản cứu hộ. CSDL nguồn đã tiếp nhận Flyway V42, validate đạt, không còn migration chờ; giữ nguyên 458 tài khoản, toàn bộ dữ liệu nghiệp vụ và 41 dòng lịch sử cũ. Hồi quy 408 test backend, 89 unit frontend, 149 UI mô phỏng và integration trình duyệt/backend thật đạt; live smoke sau deploy thành công, tài khoản thử đã dọn. [Kết quả phát hành và giới hạn](../docs/implementation/flyway/RECOVERY_RELEASE_2026-11-10.md).
+
+Quy tắc làm việc tiếp theo: [workflow hai người/DB chung](../docs/development/FLYWAY_TEAM_WORKFLOW.md), [SKILL.md độc lập](../.agents/skills/taskpilot-flyway-team/SKILL.md); helper chỉ đọc version/checksum, số đề xuất chưa được giữ chỗ. RLS có sẵn và các provider cloud thật chưa được coi là đã kiểm chứng hoàn tất.
+
 ---
 
 ## 🔗 Liên Kết Kho Mã & Báo Cáo
