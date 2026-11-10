@@ -10,6 +10,7 @@ class RecoveryDefaultConfigurationTest {
     void ordinaryStartupValidatesReconciledHistoryAndCannotAdoptOrClean() throws Exception {
         var config = new YamlPropertySourceLoader().load("default", new ClassPathResource("application.yml")).getFirst();
         assertThat(config.getProperty("spring.flyway.locations")).isEqualTo("classpath:db/reconciled");
+        assertThat(config.getProperty("spring.flyway.default-schema")).isEqualTo("taskpilot_migrations");
         assertThat(config.getProperty("spring.flyway.table")).isEqualTo("flyway_schema_history_v2");
         assertThat(config.getProperty("spring.flyway.validate-on-migrate")).isEqualTo(true);
         assertThat(config.getProperty("spring.flyway.baseline-on-migrate")).isEqualTo(false);

@@ -1,0 +1,21 @@
+# Compatibility alias only: ordinary startup already uses this sealed policy.
+# Existing databases require the guarded adoption CLI before deploying this build.
+# External bundles are not supported by the application; see RECOVERY_RUNBOOK.md.
+spring:
+  config:
+    activate:
+      on-profile: recovery
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    table: flyway_schema_history_v2
+    default-schema: taskpilot_migrations
+    schemas: taskpilot_migrations,public
+    locations: classpath:db/reconciled
+    baseline-on-migrate: false
+    validate-on-migrate: true
+    out-of-order: false
+    clean-disabled: true
+    fail-on-missing-locations: true
