@@ -24,9 +24,15 @@ spring:
 
   flyway:
     enabled: true
-    baseline-on-migrate: true
-    locations: classpath:db/migration
-    validate-on-migrate: false
+    table: flyway_schema_history_v2
+    default-schema: taskpilot_migrations
+    schemas: taskpilot_migrations,public
+    skip-default-callbacks: true
+    baseline-on-migrate: false
+    locations: classpath:db/reconciled
+    validate-on-migrate: true
+    out-of-order: false
+    clean-disabled: true
 
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/taskpilot}
