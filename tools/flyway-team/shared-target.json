@@ -1,0 +1,4 @@
+{
+  "target_sha256": "60b8fc3ea2679e258dff084d83140131659002b8da18fe7d86a0ddd263872bad",
+  "purpose": "TaskPilot shared deployment DB; identity fingerprint only, never credentials."
+}

@@ -1,0 +1,32 @@
+name: Flyway team checks
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'taskpilot-app/src/main/resources/db/**'
+      - 'tools/flyway-team/**'
+      - '.agents/skills/taskpilot-flyway-team/**'
+      - 'AGENTS.md'
+      - 'docs/development/FLYWAY_TEAM_WORKFLOW.md'
+      - '.github/workflows/flyway-team-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  migration-source-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Test the read-only checker
+        run: python -m unittest discover -s tools/flyway-team -p 'test_*.py'
+      - name: Check accepted migrations against the PR base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python tools/flyway-team/check.py --offline --no-fetch --base-ref "$BASE_SHA"
