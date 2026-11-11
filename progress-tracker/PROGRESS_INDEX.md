@@ -1,4 +1,6 @@
 # BẢNG TỔNG QUAN TIẾN ĐỘ THỰC HIỆN ĐỒ ÁN 2 (TASKPILOT)
+
+> **11/11/2026 — PR #53:** bổ sung PostgreSQL AST schema policy, catalog metadata allowlist và integration fresh/upgrade/backend bắt buộc; 414 test backend và 34 test tooling local đạt. Chưa merge/deploy, không sửa V41/V42 hay RLS. [Bằng chứng và tiêu chí gate](../docs/implementation/flyway/PR53_MIGRATION_GUARDS_2026-11-11.md).
 **Học phần**: SE121 - Đồ án 2 | Trường Đại học Công nghệ Thông tin (UIT)  
 **Thời gian thực hiện**: 01/09/2026 – 01/01/2027  
 **Sinh viên**: Phan Lê Minh (23520952), Đặng Phú Thiện (23521476)  

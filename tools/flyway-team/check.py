@@ -11,6 +11,8 @@ import sys
 import zlib
 from urllib.parse import parse_qs, unquote, urlparse
 
+from sql_policy import SqlPolicyError, validate as validate_sql
+
 BUNDLE = "taskpilot-app/src/main/resources/db/reconciled"
 ROOT = Path(__file__).resolve().parents[2]
 NAME = re.compile(r"V([1-9][0-9]*)__[a-z0-9][a-z0-9_]*\.sql\Z")
@@ -65,6 +67,11 @@ def plan(local_files, main_files, history):
         versions = sorted(collection)
         if versions[0] != 41 or any(b != a + 1 for a, b in zip(versions, versions[1:])):
             raise CheckError("NON_SEQUENTIAL_VERSION: update main and coordinate the next number")
+    for version in sorted(set(local) - set(main)):
+        try:
+            validate_sql(local[version][1])
+        except SqlPolicyError as error:
+            raise CheckError(f"MIGRATION_SQL_POLICY: V{version}: {error}") from None
     deployed = None
     if history is not None:
         rows = history.get("rows") or []
@@ -119,16 +126,20 @@ def sources(root, base_ref):
     legacy = "taskpilot-app/src/main/resources/db/migration"
     changed = git(root, "diff", "--name-only", base_ref, "--", legacy).splitlines()
     changed += git(root, "ls-files", "--others", "--exclude-standard", "--", legacy).splitlines()
-    if any(path.endswith(".sql") for path in changed):
+    if changed:
         raise CheckError("LEGACY_MIGRATIONS_CHANGED: add new SQL only in db/reconciled")
     main = {}
     for path in git(root, "ls-tree", "-r", "--name-only", base_ref, "--", BUNDLE).splitlines():
-        if path.endswith(".sql"):
-            main[path.removeprefix(BUNDLE + "/")] = git(root, "show", base_ref + ":" + path)
+        filename=path.removeprefix(BUNDLE + "/")
+        if not NAME.fullmatch(filename):
+            raise CheckError("UNSUPPORTED_MIGRATION_ARTIFACT: accepted bundle must contain flat versioned SQL only")
+        main[filename] = git(root, "show", base_ref + ":" + path)
     local = {}
-    for path in (root / BUNDLE).rglob("*.sql"):
+    for path in (root / BUNDLE).iterdir():
         if path.is_symlink():
             raise CheckError("MIGRATION_SYMLINK_NOT_SUPPORTED")
+        if not path.is_file() or not NAME.fullmatch(path.name):
+            raise CheckError("UNSUPPORTED_MIGRATION_ARTIFACT: only flat V<number>__description.sql files are supported")
         local[path.relative_to(root / BUNDLE).as_posix()] = path.read_text(encoding="utf-8-sig")
     return local, main
 

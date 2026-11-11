@@ -145,6 +145,20 @@ class ReadOnlyTest(unittest.TestCase):
 
 
 class GitIntegrationTest(unittest.TestCase):
+    def test_sidecars_callbacks_and_nested_artifacts_are_rejected(self):
+        for filename in ["V43__new.sql.conf", "afterMigrate.sql.conf", "note.txt", "nested/V43__new.sql"]:
+            with self.subTest(filename=filename), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory)
+                def git(*args):
+                    return subprocess.run(["git",*args],cwd=root,capture_output=True,text=True,check=True).stdout.strip()
+                git("init");git("config","user.email","fixture@example.invalid");git("config","user.name","Fixture")
+                bundle=root/check.BUNDLE;bundle.mkdir(parents=True)
+                for name,sql in BASE.items(): (bundle/name).write_text(sql,encoding="utf-8")
+                git("add",".");git("commit","-m","fixture")
+                extra=bundle/filename;extra.parent.mkdir(parents=True,exist_ok=True);extra.write_text("executeInTransaction=false",encoding="utf-8")
+                with self.assertRaisesRegex(check.CheckError,"UNSUPPORTED_MIGRATION_ARTIFACT"):
+                    check.sources(root,"HEAD")
+
     def test_real_git_base_and_local_files_are_checked_without_database(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -217,6 +217,36 @@ class ReconciledFlywayIntegrationTest {
         RecoveryAdoption.validateComplete(next);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings={
+            "CREATE TABLE metadata_business_probe(id bigint PRIMARY KEY);",
+            "CREATE TYPE metadata_business_state AS ENUM ('NEW');",
+            "CREATE SEQUENCE metadata_business_sequence;"
+    })
+    void unqualifiedForwardObjectsCannotPassCompleteValidation(String sql) throws Exception {
+        String url=database("metadata_guard_"+java.util.UUID.randomUUID().toString().replace("-",""));
+        var initial=flyway(url,"flyway_schema_history_v2");initial.migrate();
+        // Actual Flyway table, primary/success indexes, row and array types are allowed.
+        RecoveryAdoption.validateComplete(initial);
+        var directory=java.nio.file.Files.createTempDirectory("metadata-negative-");
+        java.nio.file.Files.writeString(directory.resolve("V43__metadata_negative_probe.sql"),sql);
+        var next=MigrationDatabaseConfiguration.configure(Flyway.configure().dataSource(url,"test","test"))
+                .locations("classpath:db/reconciled","filesystem:"+directory.toAbsolutePath()).load();
+        assertThat(next.migrate().migrationsExecuted).isEqualTo(1);
+        assertThatThrownBy(() -> RecoveryAdoption.validateComplete(next))
+                .isInstanceOf(SecurityException.class).hasMessageContaining("UNEXPECTED_MIGRATION_METADATA_OBJECT");
+    }
+
+    @Test
+    void metadataObjectsAreRejectedEvenBeforeHistoryExists() throws Exception {
+        String url=database("metadata_before_history");
+        try(var c=DriverManager.getConnection(url,"test","test");var s=c.createStatement()) {
+            s.execute("CREATE SCHEMA taskpilot_migrations; CREATE TABLE taskpilot_migrations.flyway_schema_history_v2_s_idx(id bigint)");
+        }
+        assertThatThrownBy(() -> RecoveryAdoption.verifyBeforeMigrate(flyway(url,"flyway_schema_history_v2")))
+                .isInstanceOf(SecurityException.class).hasMessageContaining("UNEXPECTED_MIGRATION_METADATA_OBJECT");
+    }
+
     @Test
     void approvedBaseline41CanResumeAndUnreviewedCallbacksNeverExecute() throws Exception {
         String url=database("recovery_resume");legacy(url);

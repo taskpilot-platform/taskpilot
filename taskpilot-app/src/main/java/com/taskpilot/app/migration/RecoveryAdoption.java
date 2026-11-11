@@ -196,9 +196,11 @@ public final class RecoveryAdoption {
         }
     }
     public static void verifyBeforeMigrate(Flyway f) throws Exception {
+        MigrationMetadataGuard.verify(f);
         if(verifyRows(f,false) && isRecoveryVersion(f)) verifyApplicationSchema(f,false);
     }
     public static void validateComplete(Flyway f) throws Exception {
+        MigrationMetadataGuard.verify(f);
         verifyRows(f,true); f.validate();
         if(f.info().pending().length!=0) throw new SecurityException("RECOVERY_HAS_PENDING_MIGRATIONS");
         if(isRecoveryVersion(f)) verifyApplicationSchema(f,true);

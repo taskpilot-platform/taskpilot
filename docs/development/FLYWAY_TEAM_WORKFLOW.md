@@ -7,6 +7,7 @@ Quy tắc này dùng chung cho người và agent. [SKILL.md](../../.agents/skil
 Từ thư mục backend, với Python 3.10+, Git và PostgreSQL client (`psql`):
 
 ```sh
+python -m pip install -r tools/flyway-team/requirements.txt
 python tools/flyway-team/check.py
 ```
 
@@ -23,6 +24,26 @@ Ví dụ khi DB/main/local đều V42: `deployed_version: 42`, `next_version: 43
 - `flyway_validate_run: false`: helper đối chiếu history/checksum, nhưng không thay thế validate của Flyway engine và kiểm tra schema/app.
 
 Tool dùng `taskpilot_migrations.flyway_schema_history_v2`. `public.flyway_schema_history` là lịch sử cũ, không dùng để cấp số mới. Nó chặn trùng số, thay đổi/xóa/đổi tên SQL đã có trên main, nhánh thiếu migration main, history lỗi/lệch filename/checksum và dãy số không liên tiếp. Checksum tương thích `ChecksumCalculator` của Flyway 11.3.2; khi nâng thư viện, kiểm tra lại tương thích thay vì bỏ check.
+
+## Schema đích và chính sách SQL mới
+
+- History ở schema riêng **không** có nghĩa SQL không qualify sẽ tự tạo vào `public`. Mọi đối tượng nghiệp vụ phải chỉ rõ schema đích: `CREATE TABLE public.example (...)`, `ALTER TABLE public.example ...`, `CREATE INDEX idx_example ON public.example (...)`. Tên index không cần và không được ép thành `public.idx_example` trong cú pháp CREATE INDEX.
+- Checker dùng **pglast 7.22 / PostgreSQL 17 AST**, không regex tìm chuỗi `public.`. Nó chỉ lint SQL mới so với base main, không sửa/lint ngược V41/V42 hoặc SQL đã được chấp nhận. Comment, string literal và tên quoted chứa dấu chấm không thay thế schema thực.
+- Policy hiện hỗ trợ table/index/enum/sequence/view, ALTER TABLE/SEQUENCE/ENUM, DROP/COMMENT tương ứng, DML/CTE với relation `public`, SELECT và một allowlist builtin. FK target, identity sequence name và sequence owner cũng phải qualify đúng. `SET LOCAL lock_timeout/statement_timeout` được phép.
+- **Fail closed:** DO, routine/CALL, dynamic SQL, đổi search_path/role/schema, COPY/extension và câu lệnh/function chưa được phân tích an toàn bị từ chối. Không thêm bypass/comment để lách; nếu migration thực sự cần chúng, review và mở rộng policy cùng AST test + PostgreSQL regression trước. Checker không phải sandbox thực thi SQL hay chứng nhận đúng nghiệp vụ.
+- Active bundle chỉ chứa file UTF-8 versioned SQL phẳng. `.sql.conf`, callback, file khác, thư mục con và symlink đều bị từ chối. Migration không được đổi execution policy bằng sidecar mà reviewer không thấy.
+
+## Allowlist schema metadata
+
+Runtime kiểm tra catalog trước migrate và khi validate hoàn tất. `taskpilot_migrations` chỉ được chứa các đối tượng Flyway 11/PostgreSQL đã biết:
+
+- bảng `flyway_schema_history_v2`;
+- PK/index `flyway_schema_history_v2_pk` và index `flyway_schema_history_v2_s_idx`, thực sự thuộc bảng history;
+- constraint PK của bảng history, composite row type và array type tự động của chính bảng này.
+
+Không cho phép bảng nghiệp vụ, enum, sequence, view/routine hoặc đối tượng schema khác lọt vào, kể cả đặt tên giống index hợp lệ nhưng sai loại. Không yêu cầu schema trống. Khi nâng Flyway phải review thay đổi catalog/allowlist và test trước khi triển khai.
+
+Guard sau migrate là phòng vệ cuối: SQL có thể đã commit trước khi guard báo lỗi. Do đó không dùng production để thử; chốt AST và CI sandbox phải chặn trước merge/deploy. Không tự xóa đối tượng/history để vượt guard.
 
 ## Cấu hình kết nối
 
@@ -56,6 +77,11 @@ Ví dụ A và B cùng viết V43: nếu chưa ai áp vào DB chung, A merge V43
 ```sh
 python -m unittest discover -s tools/flyway-team -p "test_*.py"
 python tools/flyway-team/check.py --offline --no-fetch --base-ref <PR-base-SHA>
+python tools/flyway-team/verify_integration.py
 ```
 
 Workflow `flyway-team-check.yml` dùng base SHA của PR để kiểm tra source và tính bất biến; nó không được cấp secret DB và không giả vờ đã đọc DB chung. Khi merge một PR migration khác, nhánh còn lại phải cập nhật và kiểm tra lại với main mới. Người review vẫn phải xem live status mới cùng thứ tự các PR; check Git không khóa số hoặc thay thế phối hợp.
+
+Workflow chạy **mọi PR vào main**, không lọc `paths`. Hai check cần được maintainer cấu hình thành required trong ruleset: `migration-source-check` và `migration-integration`, bên cạnh `build-and-test`. Sửa YAML không tự cấu hình ruleset; phải đọc lại API/UI để xác minh trước khi gọi đợt này hoàn tất.
+
+`migration-integration` yêu cầu Docker hoạt động, chạy Maven **clean test** trên PostgreSQL/Testcontainers thật và đối chiếu Surefire XML. Thiếu report, mất ca fresh/upgrade, test rỗng, failures/errors hoặc bất kỳ skip trong hai lớp integration bắt buộc đều làm job thất bại. Lớp `MigrationSchemaIntegrationTest` không dùng `disabledWithoutDocker`: thiếu Docker là lỗi. Backend thật phải khởi động với Hibernate validate, HTTP health UP và đọc/ghi entity ánh xạ bảng mới ở cả fresh và upgrade; fixture nằm trong temp, không thêm migration giả vào active bundle, không đọc `.env` nguồn.

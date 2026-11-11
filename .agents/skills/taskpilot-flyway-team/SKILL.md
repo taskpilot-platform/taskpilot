@@ -10,6 +10,7 @@ This skill is standalone. It requires no Superpowers plugin or other skill. Run 
 ## Check before assigning a version
 
 ```sh
+python -m pip install -r tools/flyway-team/requirements.txt
 python tools/flyway-team/check.py
 ```
 
@@ -29,8 +30,11 @@ If DB access or fresh main is unavailable, report the live version as **unknown*
 ## Write and verify
 
 - Add flat UTF-8 `V<number>__lowercase_description.sql` files only under `taskpilot-app/src/main/resources/db/reconciled`; use consecutive integers. Keep all SQL accepted on main immutable, even if deployment is pending. Preserve legacy `db/migration` for history only.
+- Explicitly qualify business targets as `public`: e.g. `CREATE TABLE public.example`, `CREATE INDEX idx_example ON public.example`. The default Flyway schema is private metadata, not the business schema. The PostgreSQL 17 AST checker rejects unqualified/wrong targets, unsupported procedural/dynamic SQL and `.sql.conf`/non-SQL artifacts. Do not bypass it with comments, search_path changes or renaming files; extend the reviewed policy and real PostgreSQL tests for unsupported needs.
+- The metadata schema has an explicit Flyway-object allowlist (history table, its known indexes/PK, row/array types), not an empty-schema rule. New business tables/types/sequences must never appear there. Catalog validation is mandatory even when Flyway checksums pass.
 - Keep app validate enabled, baseline-on-migrate false, out-of-order false, and clean disabled. A numbering check is never permission to weaken these settings or run the adoption operator on an ordinary migration.
 - Test both a fresh DB and an upgraded DB using the real Flyway engine, then app/integration behavior. For new columns/constraints, consider code still running against the shared schema; prefer compatible additions and backfills before destructive changes.
 - After deployment, check actual runtime health and Flyway validate. Both developers then update their branches before local startup.
+- Before merge require green `migration-source-check` and `migration-integration` on the current head, and verify both are actually required in the GitHub ruleset. Required workflows run for every PR, without path filtering. Docker missing, skipped/missing integration reports or absent fresh/upgrade backend cases are failures, not acceptable skips. RLS hardening remains a separate reviewed migration.
 
 For collision examples, credentials, exact CI commands, and target changes, read [the team guide](../../../docs/development/FLYWAY_TEAM_WORKFLOW.md). The checker itself never writes SQL or deploys anything; creating a migration does not authorize applying it to the shared DB.
