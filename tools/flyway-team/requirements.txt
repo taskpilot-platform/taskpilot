@@ -1,0 +1,2 @@
+# pglast 7 uses the PostgreSQL 17 grammar, matching the deployed database.
+pglast==7.22

@@ -1,5 +1,7 @@
 # Sửa các phát hiện sau verify Flyway — 10/11/2026
 
+> **Trạng thái cuối:** các bước dưới đây là lịch sử trước cutover. Nguồn sau đó đã tiếp nhận V42, validate đạt và app mới đã deploy/live smoke thành công; xem [báo cáo phát hành](RECOVERY_RELEASE_2026-11-10.md). Không dùng các câu “chưa cutover” bên dưới làm trạng thái hiện hành.
+
 > **Cập nhật tiếp nối:** giữ nguyên các sửa lỗi/index/schema đã kiểm chứng trong tài liệu này. Bộ chốt mới nhất có thêm test giữ endpoint app đang chạy và cho phép V43+ theo Flyway thông thường; không còn yêu cầu đổi Java/contract cho mỗi migration tiếp theo. Hồi quy mới nhất: 405 test backend đạt; frontend 89 unit và 149 UI regression đạt. Cutover nguồn được ghi riêng khi thực hiện xong, không suy diễn từ các kết quả local.
 
 ## Kết quả
@@ -73,7 +75,7 @@ Trên container bản phục dựng sẵn có `taskpilot-recovery-fullcopy-20261
 
 ## Bằng chứng local
 
-`C:/Users/homepc/AppData/Local/Temp/opencode/taskpilot-independent-review-20261110/`
+`%TEMP%/opencode/taskpilot-independent-review-20261110/`
 
 - `repair-red.log`, `repair-focused.log`, `repair-regression.log`, `repair-build.log`
 - `contract-reference.log`, `GenerateReviewedContract.java`

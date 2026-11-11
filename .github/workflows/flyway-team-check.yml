@@ -1,0 +1,63 @@
+name: Flyway team checks
+
+on:
+  pull_request:
+    branches: [main]
+
+# Required checks must report for EVERY PR; path-filtered workflows stay Pending.
+concurrency:
+  group: flyway-team-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  migration-source-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install the PostgreSQL 17 SQL parser
+        run: python -m pip install -r tools/flyway-team/requirements.txt
+      - name: Test the read-only checker
+        run: python -m unittest discover -s tools/flyway-team -p 'test_*.py'
+      - name: Check accepted migrations against the PR base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python tools/flyway-team/check.py --offline --no-fetch --base-ref "$BASE_SHA"
+
+  migration-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Docker is mandatory, not an optional integration dependency
+        run: docker info
+      - name: Fresh and upgraded PostgreSQL, metadata guard and real backend
+        run: >-
+          mvn -B -pl taskpilot-app -am clean test
+          -Dtest=MigrationSchemaIntegrationTest,ReconciledFlywayIntegrationTest,MigrationConnectionSafetyTest,RecoveryDefaultConfigurationTest,RecoveryProfileSafetyTest
+          -Dsurefire.failIfNoSpecifiedTests=false
+      - name: Reject missing, skipped or failed mandatory integration cases
+        if: always()
+        run: python tools/flyway-team/verify_integration.py
+      - name: Keep integration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-integration-reports
+          path: taskpilot-app/target/surefire-reports/
+          if-no-files-found: error

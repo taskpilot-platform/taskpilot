@@ -31,6 +31,7 @@ The `.agents/` directory ensures that all engineering workflows, architecture gu
     ├── mobile-responsive-test/                  # Mobile responsive testing scripts & checklists
     ├── spring-data-modernization/               # Spring Data & JPA modernization playbooks
     ├── taskpilot-architecture-maintenance/      # Architecture maintenance, reconciliation & P0 protocol
+    ├── taskpilot-flyway-team/                   # Standalone shared-DB migration rules and live version check
     ├── taskpilot-oauth2-social-login/           # Google/GitHub OAuth2 login issuing internal JWT
     ├── taskpilot-rag/                           # RAG ingestion, rate limiting, and pgvector operations
     └── test-ai-prompt/                          # AI prompt testing workflows

@@ -1,5 +1,7 @@
 # Flyway recovery — quy trình hiện hành sau kiểm tra độc lập 10/11/2026
 
+> **Trạng thái đã phát hành:** nguồn đã được tiếp nhận V42 và bản app mới đã kiểm tra live; xem [kết quả cuối](RECOVERY_RELEASE_2026-11-10.md). Runbook dành cho recovery có chủ đích, không phải cách thêm migration hằng ngày. Việc mới dùng [quy trình nhóm](../../development/FLYWAY_TEAM_WORKFLOW.md); không baseline/adopt lại nguồn đã tiếp nhận.
+
 > **Chốt phạm vi theo ưu tiên vận hành:** một chain đóng gói `db/reconciled`, giữ nguyên history cũ và dữ liệu; xử lý các chốt high/critical trước. App giữ endpoint DB đang hoạt động; operator tiếp nhận dùng session endpoint. Sau V42, migration V43+ đi theo Flyway thông thường, không cần đổi policy Java hoặc hash contract cho từng migration.
 
 ## Chính sách thực tế của bản sửa hiện tại

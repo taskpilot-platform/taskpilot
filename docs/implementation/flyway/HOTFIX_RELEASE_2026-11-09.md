@@ -1,5 +1,7 @@
 # Application recovery hotfix — 09/11/2026
 
+> **Bản ghi lịch sử 09/11:** các kết luận dưới đây mô tả thời điểm điều tra/hotfix ban đầu. Ngày 10/11, nguồn đã tiếp nhận Flyway V42, validate đạt và app mới đã deploy/live smoke thành công; xem [kết quả phát hành cuối](RECOVERY_RELEASE_2026-11-10.md). Dùng [quy trình nhóm](../../development/FLYWAY_TEAM_WORKFLOW.md) cho migration mới, không lặp lại hướng recovery thử nghiệm cũ.
+
 ## Release scope
 
 The application hotfix fixes false HTTP success for JDBC failures, returns safe JSON 409 responses for integrity conflicts, normalizes email consistently across registration/admin/OAuth/password-reset throttling, and fetches the refresh-token user before its persistence context closes.
@@ -27,4 +29,13 @@ This is not a complete Supabase/PITR backup: external schemas, original ownershi
 
 ## Deployment status
 
-Local gates passed. Remote CI, rollout and live checks are pending at this document's initial commit. Keep the migration recovery work separate; do not enable `recovery` to deploy this hotfix.
+Released through [PR #51](https://github.com/taskpilot-platform/taskpilot/pull/51), hotfix commit `f55a7033a222d4ab07756dcc0ff68706ffb7b7a8`, merge commit `d5427747e7b796e1c164505225b73bd393a36ecb`.
+
+- PR CI: 380 tests, zero failures/errors, six live-service tests skipped. Maven and Docker build passed; CodeQL passed.
+- [Main deployment workflow](https://github.com/taskpilot-platform/taskpilot/actions/runs/42650988190): build/test and sync succeeded.
+- Hugging Face revision `7575d76800de460482d777e09a385237efbf5fde` reached `RUNNING`; all ten changed production source files matched the hotfix commit.
+- Live smoke at 23:10 +07:00: register 201; login/profile/refresh 200; duplicate email 409 with JSON; health UP. The generated canonical test account was observed in the configured source, confirming that the live application uses that database.
+- Legacy migration history digest matched the pre-release backup before the smoke and remained unchanged afterwards.
+- Only the synthetic smoke account and its refresh-token rows were deleted during cleanup. User count was 458 before and 458 after the smoke. No existing account email, SQL migration, Flyway history or RLS configuration was modified.
+
+The separate Flyway/RLS/account-reconciliation work remains open. Keep the migration recovery work separate; do not enable `recovery` to deploy this hotfix.
