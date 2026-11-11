@@ -40,14 +40,26 @@ def validate(sql):
     if not statements:
         raise SqlPolicyError("empty migration")
 
-    def walk(value):
+    def walk(value, visible_ctes=frozenset()):
         if isinstance(value, ast.Node):
-            yield value
+            yield value, visible_ctes
+            # WITH bindings belong to their query, not every nested query in
+            # the statement. Non-recursive items see only earlier siblings.
+            clause = getattr(value, "withClause", None)
+            if clause is not None:
+                current = set(visible_ctes)
+                if clause.recursive:
+                    current.update(item.ctename for item in clause.ctes)
+                for item in clause.ctes:
+                    yield from walk(item, frozenset(current))
+                    current.add(item.ctename)
+                visible_ctes = frozenset(current)
             for member in value:
-                yield from walk(getattr(value, member))
+                if member != "withClause":
+                    yield from walk(getattr(value, member), visible_ctes)
         elif isinstance(value, (tuple, list)):
             for child in value:
-                yield from walk(child)
+                yield from walk(child, visible_ctes)
 
     def name(parts, length=2):
         values = tuple(item.sval for item in (parts or ()) if isinstance(item, ast.String))
@@ -89,9 +101,7 @@ def validate(sql):
             if not statement.is_local or statement.name not in {"lock_timeout", "statement_timeout"}:
                 raise SqlPolicyError("only SET LOCAL lock_timeout/statement_timeout is supported")
 
-        nodes = list(walk(statement))
-        ctes = {node.ctename for node in nodes if isinstance(node, ast.CommonTableExpr)}
-        for node in nodes:
+        for node, ctes in walk(statement):
             node_kind = type(node).__name__
             # Nested DML in CTEs must still have an explicit target.
             if node_kind in RELATION_TARGETS:
@@ -110,5 +120,6 @@ def validate(sql):
                 names = tuple(part.sval for part in node.funcname)
                 if names[-1] not in FUNCTIONS or (len(names) > 1 and names[:-1] != ("pg_catalog",)):
                     raise SqlPolicyError("function outside reviewed builtin allowlist")
-            elif node_kind in {"DoStmt", "CallStmt", "CreateFunctionStmt", "AlterObjectSchemaStmt"}:
+            elif node_kind in {"DoStmt", "CallStmt", "CreateFunctionStmt", "AlterObjectSchemaStmt",
+                               "ExecuteStmt", "MergeStmt"}:
                 raise SqlPolicyError("procedural SQL/schema redirection requires explicit policy review")

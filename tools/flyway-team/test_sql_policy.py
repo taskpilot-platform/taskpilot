@@ -73,6 +73,30 @@ class SqlPolicyTest(unittest.TestCase):
     def test_accepted_history_is_not_rewritten_or_retroactively_linted(self):
         self.assertEqual(check.plan(BASE, BASE, history())["local_version"], 42)
 
+    def test_cte_names_do_not_escape_their_query_scope(self):
+        for sql in [
+            "CREATE VIEW public.example_view AS WITH outer_cte AS (WITH example AS (SELECT 1) SELECT 1) SELECT * FROM example;",
+            "WITH outer_cte AS (WITH example AS (SELECT 1) SELECT 1) SELECT * FROM example;",
+            "WITH first_cte AS (SELECT * FROM later_cte), later_cte AS (SELECT 1) SELECT * FROM first_cte;",
+        ]:
+            with self.subTest(sql=sql), self.assertRaisesRegex(check.CheckError, "MIGRATION_SQL_POLICY"):
+                self.plan(sql)
+        for sql in [
+            "WITH first_cte AS (SELECT id FROM public.example), second_cte AS (SELECT * FROM first_cte) SELECT * FROM second_cte;",
+            "WITH RECURSIVE counter(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM counter WHERE n<3) SELECT * FROM counter;",
+            "SELECT * FROM (WITH sample AS (SELECT id FROM public.example) SELECT * FROM sample) nested_query;",
+        ]:
+            with self.subTest(sql=sql):
+                self.assertEqual(self.plan(sql)["new_local_versions"], [43])
+
+    def test_nested_unsupported_statements_are_not_an_execution_bypass(self):
+        for sql in [
+            "CREATE TABLE public.example_copy AS EXECUTE previous_query;",
+            "WITH changed AS (MERGE INTO public.example t USING public.other s ON t.id=s.id WHEN MATCHED THEN DELETE RETURNING t.id) SELECT * FROM changed;",
+        ]:
+            with self.subTest(sql=sql), self.assertRaisesRegex(check.CheckError, "MIGRATION_SQL_POLICY"):
+                self.plan(sql)
+
 
 if __name__ == "__main__":
     unittest.main()

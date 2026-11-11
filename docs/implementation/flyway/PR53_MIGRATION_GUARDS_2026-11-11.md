@@ -36,3 +36,7 @@ Log local nằm ngoài Git dưới `%LOCALAPPDATA%/Temp/opencode/`: `pr53-metada
 - Mandatory integration không được thiếu hoặc skip; CI trên head mới phải xanh.
 - Effective ruleset của main phải yêu cầu cả hai check mới trước merge. Repo admin cần kiểm chứng riêng, không chỉ thêm file workflow.
 - Không thay V41/V42 hoặc ghi nguồn. RLS/permissions và tác động email V41 cũ giữ thành công việc riêng.
+
+## Rà soát cuối trước merge
+
+Review tiếp phát hiện phép thu thập tên CTE toàn statement cho phép tên trong truy vấn con bị coi là hợp lệ ở scope ngoài; đồng thời CTAS EXECUTE và MERGE trong CTE chưa bị chặn như các dạng unsupported ở cấp ngoài. Đã tái hiện năm subcase RED, sửa walker theo scope PostgreSQL (CTE thường thấy các sibling trước đó; CTE recursive thấy các binding của WITH RECURSIVE), và chặn cả các statement unsupported lồng nhau. CTE đúng vẫn được chấp nhận. **29 test checker/policy/report-gate đạt** sau sửa; review độc lập của delta không thấy blocker. Required checks trên head mới phải được xác minh lại trước merge, không tái sử dụng CI của head cũ.
