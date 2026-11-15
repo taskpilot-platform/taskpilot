@@ -1,37 +1,47 @@
 package com.taskpilot.users.profile.service;
 
+import com.taskpilot.contracts.user.dto.SecurityChangeReason;
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.infrastructure.exception.BusinessException;
+import com.taskpilot.infrastructure.storage.StorageService;
+import com.taskpilot.users.auth.service.UserSessionService;
 import com.taskpilot.users.common.entity.UserEntity;
+import com.taskpilot.users.common.enums.AccountLifecycle;
 import com.taskpilot.users.common.enums.UserStatus;
+import com.taskpilot.users.common.repository.UserIdentityRepository;
+import com.taskpilot.users.common.repository.UserRepository;
 import com.taskpilot.users.profile.dto.ChangePasswordRequest;
 import com.taskpilot.users.profile.dto.UpdateProfileRequest;
 import com.taskpilot.users.profile.dto.UserProfileResponse;
-import com.taskpilot.users.common.repository.UserRepository;
-import com.taskpilot.users.auth.service.RefreshTokenService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.web.multipart.MultipartFile;
-import com.taskpilot.infrastructure.storage.StorageService;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 @Service
 @RequiredArgsConstructor
 public class ProfileService {
 
     private final UserRepository userRepository;
-    private final com.taskpilot.users.common.repository.UserIdentityRepository userIdentityRepository;
+    private final UserIdentityRepository userIdentityRepository;
     private final PasswordEncoder passwordEncoder;
-    private final RefreshTokenService refreshTokenService;
+    private final UserSessionService userSessionService;
     private final StorageService storageService;
 
+    private long getCurrentUserId() {
+        return CurrentActorResolver.userId(SecurityContextHolder.getContext().getAuthentication());
+    }
+
     private UserEntity getCurrentUser() {
-        String email = SecurityContextHolder.getContext().getAuthentication().getName();
-        return userRepository.findByEmail(email)
+        long userId = getCurrentUserId();
+        return userRepository.findById(userId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
     }
 
+    @Transactional(readOnly = true)
     public UserProfileResponse getProfile() {
         UserEntity user = getCurrentUser();
         java.util.List<String> linkedProviders = userIdentityRepository.findByUserId(user.getId())
@@ -41,6 +51,7 @@ public class ProfileService {
         return UserProfileResponse.fromEntity(user, linkedProviders);
     }
 
+    @Transactional
     public UserProfileResponse updateProfile(UpdateProfileRequest request) {
         UserEntity user = getCurrentUser();
         user.setFullName(request.fullName());
@@ -51,6 +62,7 @@ public class ProfileService {
         return getProfile();
     }
 
+    @Transactional
     public UserProfileResponse uploadAvatar(MultipartFile file) {
         if (file.isEmpty() || file.getSize() > 1_000_000) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "File must be non-empty and max 1MB");
@@ -70,8 +82,11 @@ public class ProfileService {
         }
     }
 
+    @Transactional
     public void changePassword(ChangePasswordRequest request) {
-        UserEntity user = getCurrentUser();
+        long userId = getCurrentUserId();
+        UserEntity user = userRepository.findByIdForUpdate(userId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
         if (user.getPassword() != null && !user.getPassword().isBlank()) {
             if (request.oldPassword() == null || request.oldPassword().isBlank()
                     || !passwordEncoder.matches(request.oldPassword(), user.getPassword())) {
@@ -80,15 +95,19 @@ public class ProfileService {
         }
         user.setPassword(passwordEncoder.encode(request.newPassword()));
         userRepository.save(user);
+        userSessionService.invalidateAll(user.getId(), SecurityChangeReason.PASSWORD_CHANGED);
     }
 
+    @Transactional
     public void deleteAccount() {
-        UserEntity user = getCurrentUser();
+        long userId = getCurrentUserId();
+        UserEntity user = userRepository.findByIdForUpdate(userId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
         user.setStatus(UserStatus.DEACTIVATED);
+        user.setAccountState(AccountLifecycle.SELF_DEACTIVATED);
         user.setEmail(user.getEmail() + "_deleted_" + System.currentTimeMillis());
         userRepository.save(user);
 
-        // Revoke refresh token to force logout
-        refreshTokenService.deleteByUser(user);
+        userSessionService.invalidateAll(user.getId(), SecurityChangeReason.USER_DELETED);
     }
 }

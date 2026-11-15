@@ -19,6 +19,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
 import com.taskpilot.infrastructure.dto.ApiResponse;
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.projects.tasks.dto.CreateTaskCommentRequest;
 import com.taskpilot.projects.tasks.dto.TaskCommentDto;
 import com.taskpilot.projects.tasks.dto.UpdateTaskCommentRequest;
@@ -39,7 +40,7 @@ public class TaskCommentController {
             @PathVariable Long taskId,
             Authentication authentication) {
         return ApiResponse.ok("Task comments retrieved successfully",
-                taskCommentService.getComments(taskId, authentication.getName()));
+                taskCommentService.getComments(taskId, CurrentActorResolver.userId(authentication)));
     }
 
     @PostMapping
@@ -49,7 +50,7 @@ public class TaskCommentController {
             @Valid @RequestBody CreateTaskCommentRequest request,
             Authentication authentication) {
         return ApiResponse.created("Task comment created successfully",
-                taskCommentService.createComment(taskId, request, authentication.getName()));
+                taskCommentService.createComment(taskId, request, CurrentActorResolver.userId(authentication)));
     }
 
     @PutMapping("/{commentId}")
@@ -59,7 +60,7 @@ public class TaskCommentController {
             @Valid @RequestBody UpdateTaskCommentRequest request,
             Authentication authentication) {
         return ApiResponse.ok("Task comment updated successfully",
-                taskCommentService.updateComment(taskId, commentId, request, authentication.getName()));
+                taskCommentService.updateComment(taskId, commentId, request, CurrentActorResolver.userId(authentication)));
     }
 
     @DeleteMapping("/{commentId}")
@@ -68,14 +69,14 @@ public class TaskCommentController {
             @PathVariable Long commentId,
             Authentication authentication) {
         return ApiResponse.ok("Task comment deleted successfully",
-                taskCommentService.deleteComment(taskId, commentId, authentication.getName()));
+                taskCommentService.deleteComment(taskId, commentId, CurrentActorResolver.userId(authentication)));
     }
 
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamComments(
             @PathVariable Long taskId,
             Authentication authentication) {
-        return taskCommentService.streamComments(taskId, authentication.getName());
+        return taskCommentService.streamComments(taskId, CurrentActorResolver.userId(authentication));
     }
 
     @GetMapping("/mention-candidates")
@@ -84,6 +85,6 @@ public class TaskCommentController {
             @RequestParam(required = false) String keyword,
             Authentication authentication) {
         return ApiResponse.ok("Mention candidates retrieved successfully",
-                taskCommentService.getMentionCandidates(taskId, keyword, authentication.getName()));
+                taskCommentService.getMentionCandidates(taskId, keyword, CurrentActorResolver.userId(authentication)));
     }
 }

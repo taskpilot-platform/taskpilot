@@ -86,6 +86,61 @@
         ],
         "com.taskpilot.app.security.OAuth2CallbackAndStartupIntegrationTest": [
           "realSpringSecurityOAuth2LifecycleSupportsTwoTabsCrossInstanceAndCorsEnforcement"
+        ],
+        "com.taskpilot.infrastructure.config.security.JwtServiceBaselineRedTest": [
+          "generatedAccessToken_mustCarryNumericSubjectAndJwtV2AuthorityClaims",
+          "isTokenValid_mustRejectLegacyEmailSubjectTokenWithoutV2ClaimsAndIssuerAudience"
+        ],
+        "com.taskpilot.infrastructure.config.security.JwtAndActorResolverTest": [
+          "parseAndValidate_rejectsWrongIssuerAudienceSchemaAndRevokedJti",
+          "currentActorResolver_rejectsNullAnonymousAndRawStringPrincipals"
+        ],
+        "com.taskpilot.infrastructure.config.security.JwtAuthenticationFilterBaselineRedTest": [
+          "doFilter_withValidBearerToken_mustAuthenticateTypedUidPrincipalAndUseAuthoritativeDbRole",
+          "doFilter_mustFailClosedWhenAccountInactiveOrVersionMismatchOrSessionRevoked"
+        ],
+        "com.taskpilot.users.auth.service.AuthSessionBaselineRedTest": [
+          "login_whenUserIsDeactivated_mustRejectAndNeverIssueJwtOrRefreshToken",
+          "exchangeOAuth2Code_whenUserIsDeactivated_mustRejectAndNeverIssueJwt",
+          "refreshToken_whenUserIsDeactivated_mustRejectAndNeverIssueJwt",
+          "refreshToken_whenTokenMissing_mustReturn401UnauthorizedInsteadOf404",
+          "refreshToken_mustRotateRefreshTokenRatherThanReturningConsumedToken"
+        ],
+        "com.taskpilot.users.auth.service.UserSessionServiceTest": [
+          "issueSession_storesSha256HashNotRawTokenAndRevokesPriorActiveSession",
+          "replayOfConsumedToken_revokesOnlyAffectedSessionWithoutGlobalTokenVersionBump",
+          "invalidateAll_incrementsEpochRevokesSessionsAndPublishesSecurityEvent",
+          "accountAuthStateAdapter_mapsLegacyDeactivatedSafelyAndSessionAuthority"
+        ],
+        "com.taskpilot.projects.chat.config.StompPrincipalBaselineRedTest": [
+          "connect_mustBindImmutableUidPrincipalNameInsteadOfMutableEmail",
+          "subscribe_withNumericUidPrincipal_mustAuthorizeMembershipWithoutEmailLookup"
+        ],
+        "com.taskpilot.projects.chat.config.StompAuthChannelInterceptorTest": [
+          "connect_missingToken_throwsAccessDenied",
+          "connect_validToken_setsUidPrincipal",
+          "subscribe_validProjectChat_validatesMember",
+          "subscribe_wildcardTopic_throwsAccessDenied",
+          "send_directToTopic_throwsAccessDenied"
+        ],
+        "com.taskpilot.app.security.JwtDefaultsConfigBaselineRedTest": [
+          "applicationYml_mustDefaultJwtAccessTtlTo15MinutesAndSetIssuerAudienceDefaults"
+        ],
+        "com.taskpilot.app.migration.RefreshTokenPersistenceRecoveryTest": [
+          "tokenLookupLoadsUserBeforePersistenceContextClosesOnReconciledSchema"
+        ],
+        "com.taskpilot.app.security.RefreshTokenRotationIntegrationTest": [
+          "loginStoresHashOnlyRefreshTokenAndIssuesJwtV2",
+          "concurrentDoubleRefreshPreservesOneSuccessTriggersTargetedReplayAndSparesOtherSessions",
+          "logoutRevokesSessionAndRejectsSubsequentJwtAndRefresh",
+          "passwordChangeIncrementsTokenVersionAndInvalidatesExistingSessions",
+          "nonPrivilegedDbRolesCannotAccessRefreshTokenHistory"
+        ],
+        "com.taskpilot.app.security.AuthenticatedActorRegressionTest": [
+          "adminDemotionInvalidatesExistingAdminJwtAndEnforcesUpdatedUserRole",
+          "suspensionSelfDeactivationAndAdminResetInvalidateHttpAndStompImmediately",
+          "emailChangeAndReusePreserveUidIsolationAcrossProjectsNotificationsAndProfile",
+          "forgedLegacyEmailSubjectJwtRejectedOnHttpAndStomp"
         ]
       }
     }

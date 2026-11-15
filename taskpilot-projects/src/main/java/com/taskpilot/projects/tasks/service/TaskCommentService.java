@@ -25,12 +25,10 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import com.taskpilot.contracts.aiquery.dto.TaskCommentSummaryDto;
 import com.taskpilot.contracts.aiquery.dto.TaskCommentSearchSummaryDto;
 import com.taskpilot.contracts.aiquery.port.out.TaskCommentQueryPort;
-import com.taskpilot.contracts.assignment.dto.UserProfileDto;
 import com.taskpilot.contracts.assignment.port.out.UserPort;
 import com.taskpilot.contracts.user.dto.NotificationTypeDto;
 import com.taskpilot.contracts.user.dto.SystemNotificationCommandDto;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserNotificationPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
@@ -65,25 +63,22 @@ public class TaskCommentService implements TaskCommentQueryPort {
     private final TaskRepository taskRepository;
     private final ProjectRepository projectRepository;
     private final ProjectMemberRepository projectMemberRepository;
-    private final UserIdentityPort userIdentityPort;
     private final UserPort userPort;
     private final UserProfilePort userProfilePort;
     private final ApplicationEventPublisher eventPublisher;
     private final TaskCommentRealtimeService realtimeService;
 
     @Transactional(readOnly = true)
-    public List<TaskCommentDto> getComments(Long taskId, String email) {
+    public List<TaskCommentDto> getComments(Long taskId, Long currentUserId) {
         TaskEntity task = findTask(taskId);
-        Long currentUserId = getCurrentUserIdByEmail(email);
         validateUserIsMember(task.getProjectId(), currentUserId);
 
         return mapToDtos(commentRepository.findByTaskIdOrderByCreatedAtAsc(taskId));
     }
 
     @Transactional
-    public TaskCommentDto createComment(Long taskId, CreateTaskCommentRequest request, String email) {
+    public TaskCommentDto createComment(Long taskId, CreateTaskCommentRequest request, Long currentUserId) {
         TaskEntity task = findTask(taskId);
-        Long currentUserId = getCurrentUserIdByEmail(email);
         validateUserIsMember(task.getProjectId(), currentUserId);
         validateProjectNotArchived(task.getProjectId());
 
@@ -107,10 +102,9 @@ public class TaskCommentService implements TaskCommentQueryPort {
     }
 
     @Transactional
-    public TaskCommentDto updateComment(Long taskId, Long commentId, UpdateTaskCommentRequest request, String email) {
+    public TaskCommentDto updateComment(Long taskId, Long commentId, UpdateTaskCommentRequest request, Long currentUserId) {
         TaskEntity task = findTask(taskId);
         CommentEntity comment = findComment(taskId, commentId);
-        Long currentUserId = getCurrentUserIdByEmail(email);
         validateUserIsMember(task.getProjectId(), currentUserId);
         validateProjectNotArchived(task.getProjectId());
 
@@ -135,10 +129,9 @@ public class TaskCommentService implements TaskCommentQueryPort {
     }
 
     @Transactional
-    public TaskCommentDto deleteComment(Long taskId, Long commentId, String email) {
+    public TaskCommentDto deleteComment(Long taskId, Long commentId, Long currentUserId) {
         TaskEntity task = findTask(taskId);
         CommentEntity comment = findComment(taskId, commentId);
-        Long currentUserId = getCurrentUserIdByEmail(email);
         validateUserIsMember(task.getProjectId(), currentUserId);
         validateProjectNotArchived(task.getProjectId());
 
@@ -164,17 +157,15 @@ public class TaskCommentService implements TaskCommentQueryPort {
         return dto;
     }
 
-    public SseEmitter streamComments(Long taskId, String email) {
+    public SseEmitter streamComments(Long taskId, Long currentUserId) {
         TaskEntity task = findTask(taskId);
-        Long currentUserId = getCurrentUserIdByEmail(email);
         validateUserIsMember(task.getProjectId(), currentUserId);
         return realtimeService.subscribe(taskId);
     }
 
     @Transactional(readOnly = true)
-    public List<UserProfileLiteDto> getMentionCandidates(Long taskId, String keyword, String email) {
+    public List<UserProfileLiteDto> getMentionCandidates(Long taskId, String keyword, Long currentUserId) {
         TaskEntity task = findTask(taskId);
-        Long currentUserId = getCurrentUserIdByEmail(email);
         validateUserIsMember(task.getProjectId(), currentUserId);
 
         Set<Long> memberIds = projectMemberRepository.findMembers(task.getProjectId()).stream()
@@ -196,9 +187,8 @@ public class TaskCommentService implements TaskCommentQueryPort {
             Long taskId,
             Long authorId,
             boolean mentionedMe,
-            String email,
+            Long currentUserId,
             Pageable pageable) {
-        Long currentUserId = getCurrentUserIdByEmail(email);
         String normalizedKeyword = normalizeOptionalKeyword(keyword);
         boolean hasKeyword = normalizedKeyword != null;
         String keywordPattern = hasKeyword
@@ -280,7 +270,7 @@ public class TaskCommentService implements TaskCommentQueryPort {
             List<Long> mentionedUserIds, Long requesterUserId) {
         return toSummaryDto(createComment(taskId,
                 new CreateTaskCommentRequest(content, parentCommentId, toMentionSet(mentionedUserIds)),
-                getRequesterEmail(requesterUserId)));
+                requesterUserId));
     }
 
     @Override
@@ -289,19 +279,13 @@ public class TaskCommentService implements TaskCommentQueryPort {
             List<Long> mentionedUserIds, Long requesterUserId) {
         return toSummaryDto(updateComment(taskId, commentId,
                 new UpdateTaskCommentRequest(content, toMentionSet(mentionedUserIds)),
-                getRequesterEmail(requesterUserId)));
+                requesterUserId));
     }
 
     @Override
     @Transactional
     public TaskCommentSummaryDto deleteTaskComment(Long taskId, Long commentId, Long requesterUserId) {
-        return toSummaryDto(deleteComment(taskId, commentId, getRequesterEmail(requesterUserId)));
-    }
-
-    private String getRequesterEmail(Long requesterUserId) {
-        return userPort.findById(requesterUserId)
-                .map(UserProfileDto::email)
-                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
+        return toSummaryDto(deleteComment(taskId, commentId, requesterUserId));
     }
 
     private Set<Long> toMentionSet(List<Long> mentionedUserIds) {
@@ -342,12 +326,6 @@ public class TaskCommentService implements TaskCommentQueryPort {
             throw new BusinessException(HttpStatus.CONFLICT.value(), "Cannot reply to a deleted comment");
         }
         return parentComment;
-    }
-
-    private Long getCurrentUserIdByEmail(String email) {
-        return userIdentityPort.findByEmail(email)
-                .map(identity -> identity.id())
-                .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"));
     }
 
     private void validateUserIsMember(Long projectId, Long userId) {

@@ -2,6 +2,7 @@ package com.taskpilot.app.migration;
 
 import com.taskpilot.ai.entity.*;
 import com.taskpilot.ai.rag.entity.DocumentEntity;
+import com.taskpilot.infrastructure.config.security.oauth2.OAuth2AuthorizationRequestEntity;
 import com.taskpilot.projects.common.entity.*;
 import com.taskpilot.users.common.entity.*;
 import jakarta.persistence.Column;
@@ -59,8 +60,10 @@ class EntityFlywaySchemaParityAuditTest {
             TaskLabelEntity.class,
             TaskRequiredSkillEntity.class,
             NotificationEntity.class,
+            OAuth2AuthorizationRequestEntity.class,
             PasswordResetTokenEntity.class,
             RefreshTokenEntity.class,
+            RefreshTokenHistoryEntity.class,
             SkillEntity.class,
             SystemSettingEntity.class,
             UserEntity.class,
@@ -81,13 +84,13 @@ class EntityFlywaySchemaParityAuditTest {
     }
 
     @Test
-    @DisplayName("Verify all Flyway SQL migration scripts exist, are ordered, and V40 is present")
+    @DisplayName("Verify active reconciled Flyway SQL migration scripts exist, are ordered, and include V44")
     void testFlywayMigrationsExistAndOrdered() throws Exception {
-        Path migrationDir = Paths.get("src/main/resources/db/migration");
+        Path migrationDir = Paths.get("src/main/resources/db/reconciled");
         if (!Files.exists(migrationDir)) {
-            migrationDir = Paths.get("taskpilot-app/src/main/resources/db/migration");
+            migrationDir = Paths.get("taskpilot-app/src/main/resources/db/reconciled");
         }
-        assertTrue(Files.exists(migrationDir), "Flyway migration directory db/migration must exist");
+        assertTrue(Files.exists(migrationDir), "Active Flyway migration directory db/reconciled must exist");
 
         List<Path> sqlFiles;
         try (Stream<Path> stream = Files.list(migrationDir)) {
@@ -98,16 +101,18 @@ class EntityFlywaySchemaParityAuditTest {
         }
 
         assertThat(sqlFiles).isNotEmpty();
-        boolean hasV40 = sqlFiles.stream().anyMatch(p -> p.getFileName().toString().startsWith("V40__"));
-        assertTrue(hasV40, "Migration V40__add_meeting_notes_transcript_ai_summary.sql must exist");
+        assertTrue(sqlFiles.stream().anyMatch(p -> p.getFileName().toString().startsWith("V41__")),
+                "Reconciled baseline V41 must exist");
+        assertTrue(sqlFiles.stream().anyMatch(p -> p.getFileName().toString().startsWith("V44__")),
+                "Migration V44__stable_principal_session_authority.sql must exist in db/reconciled");
     }
 
     @Test
-    @DisplayName("Verify every JPA Entity column has a corresponding definition in Flyway migrations")
+    @DisplayName("Verify every JPA Entity column has a corresponding definition in active reconciled Flyway migrations")
     void testAllEntityColumnsExistInFlywayMigrations() throws Exception {
-        Path migrationDir = Paths.get("src/main/resources/db/migration");
+        Path migrationDir = Paths.get("src/main/resources/db/reconciled");
         if (!Files.exists(migrationDir)) {
-            migrationDir = Paths.get("taskpilot-app/src/main/resources/db/migration");
+            migrationDir = Paths.get("taskpilot-app/src/main/resources/db/reconciled");
         }
         Path reconciledDir = Paths.get("src/main/resources/db/reconciled");
         if (!Files.exists(reconciledDir)) {
@@ -141,12 +146,17 @@ class EntityFlywaySchemaParityAuditTest {
             assertNotNull(tableAnn, "Entity " + entityClass.getSimpleName() + " must have @Table annotation");
             String tableName = tableAnn.name().toLowerCase().replace("\"", "");
 
-            // Verify table exists in migrations
+            // Verify table exists in migrations (supporting public.-qualified or unqualified identifiers)
             boolean tableFound = fullSql.contains("create table \"" + tableName + "\"")
                     || fullSql.contains("create table " + tableName + " ")
                     || fullSql.contains("create table " + tableName + "(")
+                    || fullSql.contains("create table public." + tableName + " ")
+                    || fullSql.contains("create table public." + tableName + "(")
+                    || fullSql.contains("create table public.\"" + tableName + "\"")
                     || fullSql.contains("create table if not exists \"" + tableName + "\"")
-                    || fullSql.contains("create table if not exists " + tableName + " ");
+                    || fullSql.contains("create table if not exists " + tableName + " ")
+                    || fullSql.contains("create table if not exists public." + tableName + " ")
+                    || fullSql.contains("create table if not exists public." + tableName + "(");
 
             if (!tableFound) {
                 missingColumnsReport.add("Table '" + tableName + "' for entity " + entityClass.getSimpleName() + " not found in any Flyway migration!");

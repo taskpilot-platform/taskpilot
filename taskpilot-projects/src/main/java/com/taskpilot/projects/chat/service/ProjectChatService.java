@@ -1,7 +1,7 @@
 package com.taskpilot.projects.chat.service;
 
+import com.taskpilot.contracts.user.dto.CurrentActor;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.chat.dto.ChatMessageResponse;
@@ -32,17 +32,16 @@ public class ProjectChatService {
     private final ProjectChatMessageRepository chatMessageRepository;
     private final ProjectFileRepository projectFileRepository;
     private final ProjectSecurityService projectSecurityService;
-    private final UserIdentityPort userIdentityPort;
     private final UserProfilePort userProfilePort;
     private final SimpMessagingTemplate messagingTemplate;
 
     @Transactional
-    public ChatMessageResponse sendMessage(Long projectId, String senderEmail, SendChatMessageRequest request) {
+    public ChatMessageResponse sendMessage(Long projectId, CurrentActor actor, SendChatMessageRequest request) {
         if (request.content() == null || request.content().isBlank()) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Message content cannot be blank");
         }
 
-        Long senderId = getUserId(senderEmail);
+        Long senderId = actor.userId();
         projectSecurityService.requireActiveProject(projectId);
         projectSecurityService.validateMember(projectId, senderId);
 
@@ -70,7 +69,7 @@ public class ProjectChatService {
         String senderAvatarUrl = profile != null ? profile.avatarUrl() : null;
 
         ChatMessageResponse response = ChatMessageResponse.fromEntity(
-                saved, senderName, senderEmail, senderAvatarUrl, attachedFileName);
+                saved, senderName, actor.currentEmail(), senderAvatarUrl, attachedFileName);
 
         // Broadcast to WebSocket subscribers for this project
         try {
@@ -85,8 +84,7 @@ public class ProjectChatService {
     }
 
     @Transactional(readOnly = true)
-    public Page<ChatMessageResponse> getChatHistory(Long projectId, String userEmail, Pageable pageable) {
-        Long userId = getUserId(userEmail);
+    public Page<ChatMessageResponse> getChatHistory(Long projectId, Long userId, Pageable pageable) {
         projectSecurityService.requireProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -112,12 +110,6 @@ public class ProjectChatService {
             String fileName = msg.getFileId() != null ? fileNames.get(msg.getFileId()) : null;
             return ChatMessageResponse.fromEntity(msg, name, null, avatar, fileName);
         });
-    }
-
-    private Long getUserId(String email) {
-        return userIdentityPort.findByEmail(email)
-                .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"))
-                .id();
     }
 
     private Map<Long, UserProfileLiteDto> resolveProfiles(Set<Long> userIds) {

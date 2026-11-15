@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.taskpilot.infrastructure.dto.ApiResponse;
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.projects.tasks.dto.CreateTaskRequest;
 import com.taskpilot.projects.tasks.dto.KanbanMoveRequest;
 import com.taskpilot.projects.tasks.dto.TaskDto;
@@ -42,7 +43,7 @@ public class TaskController {
             @RequestParam Long projectId,
             Authentication authentication) {
         return ApiResponse.ok("Tasks retrieved successfully",
-                taskService.getTasksByProject(projectId, authentication.getName()));
+                taskService.getTasksByProject(projectId, CurrentActorResolver.userId(authentication)));
     }
 
     @GetMapping("/{taskId}")
@@ -50,7 +51,7 @@ public class TaskController {
             @PathVariable Long taskId,
             Authentication authentication) {
         return ApiResponse.ok("Task retrieved successfully",
-                taskService.getTaskById(taskId, authentication.getName()));
+                taskService.getTaskById(taskId, CurrentActorResolver.userId(authentication)));
     }
 
     @GetMapping("/{taskId}/subtasks")
@@ -58,7 +59,7 @@ public class TaskController {
             @PathVariable Long taskId,
             Authentication authentication) {
         return ApiResponse.ok("Subtasks retrieved successfully",
-                taskService.getSubtasks(taskId, authentication.getName()));
+                taskService.getSubtasks(taskId, CurrentActorResolver.userId(authentication)));
     }
 
     @PostMapping
@@ -67,7 +68,7 @@ public class TaskController {
             @Valid @RequestBody CreateTaskRequest request,
             Authentication authentication) {
         return ApiResponse.created("Task created successfully",
-                taskService.createTask(request, authentication.getName()));
+                taskService.createTask(request, CurrentActorResolver.userId(authentication)));
     }
 
     @PutMapping("/{taskId}")
@@ -76,14 +77,14 @@ public class TaskController {
             @Valid @RequestBody UpdateTaskRequest request,
             Authentication authentication) {
         return ApiResponse.ok("Task updated successfully",
-                taskService.updateTask(taskId, request, authentication.getName()));
+                taskService.updateTask(taskId, request, CurrentActorResolver.userId(authentication)));
     }
 
     @DeleteMapping("/{taskId}")
     public ApiResponse<Void> deleteTask(
             @PathVariable Long taskId,
             Authentication authentication) {
-        taskService.deleteTask(taskId, authentication.getName());
+        taskService.deleteTask(taskId, CurrentActorResolver.userId(authentication));
         return ApiResponse.ok("Task deleted successfully", null);
     }
 
@@ -93,7 +94,7 @@ public class TaskController {
             @Valid @RequestBody KanbanMoveRequest request,
             Authentication authentication) {
         return ApiResponse.ok("Task moved successfully",
-                taskService.moveTaskKanban(taskId, request, authentication.getName()));
+                taskService.moveTaskKanban(taskId, request, CurrentActorResolver.userId(authentication)));
     }
 
     @PatchMapping("/{taskId}/sprint")
@@ -102,6 +103,6 @@ public class TaskController {
             @RequestBody UpdateTaskSprintRequest request,
             Authentication authentication) {
         return ApiResponse.ok("Task sprint updated successfully",
-                taskService.updateTaskSprint(taskId, request, authentication.getName()));
+                taskService.updateTaskSprint(taskId, request, CurrentActorResolver.userId(authentication)));
     }
 }

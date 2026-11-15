@@ -1,5 +1,14 @@
 package com.taskpilot.users.notifications.service;
 
+import com.taskpilot.contracts.user.dto.NotificationTypeDto;
+import com.taskpilot.contracts.user.dto.SystemNotificationCommandDto;
+import com.taskpilot.infrastructure.exception.BusinessException;
+import com.taskpilot.infrastructure.notification.OneSignalService;
+import com.taskpilot.users.common.entity.NotificationEntity;
+import com.taskpilot.users.common.enums.NotificationType;
+import com.taskpilot.users.common.repository.NotificationRepository;
+import com.taskpilot.users.notifications.dto.NotificationResponse;
+import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -7,41 +16,22 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import com.taskpilot.contracts.user.dto.NotificationTypeDto;
-import com.taskpilot.contracts.user.dto.SystemNotificationCommandDto;
-import com.taskpilot.infrastructure.exception.BusinessException;
-import com.taskpilot.infrastructure.notification.OneSignalService;
-import com.taskpilot.users.common.entity.NotificationEntity;
-import com.taskpilot.users.common.enums.NotificationType;
-import com.taskpilot.users.notifications.dto.NotificationResponse;
-import com.taskpilot.users.common.repository.NotificationRepository;
-import com.taskpilot.users.common.repository.UserRepository;
-
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-
-import lombok.RequiredArgsConstructor;
-
 @Service
 @RequiredArgsConstructor
 public class NotificationService {
 
     private final NotificationRepository notificationRepository;
-    private final UserRepository userRepository;
     private final OneSignalService oneSignalService;
     private final NotificationRealtimeService notificationRealtimeService;
 
-    private final Map<String, Long> userIdCache = new ConcurrentHashMap<>();
-
-    public Page<NotificationResponse> getMyNotifications(String email, Pageable pageable) {
-        Long userId = getCurrentUserIdByEmail(email);
+    @Transactional(readOnly = true)
+    public Page<NotificationResponse> getMyNotifications(long userId, Pageable pageable) {
         return notificationRepository.findByUserIdOrderByCreatedAtDesc(userId, pageable)
                 .map(NotificationResponse::fromEntity);
     }
 
     @Transactional
-    public NotificationResponse getNotificationById(Long notificationId, String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public NotificationResponse getNotificationById(Long notificationId, long userId) {
         NotificationEntity notification = notificationRepository.findByIdAndUserId(notificationId, userId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Notification not found"));
 
@@ -55,8 +45,7 @@ public class NotificationService {
     }
 
     @Transactional
-    public NotificationResponse markAsRead(Long notificationId, String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public NotificationResponse markAsRead(Long notificationId, long userId) {
         NotificationEntity notification = notificationRepository.findByIdAndUserId(notificationId, userId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Notification not found"));
 
@@ -68,20 +57,18 @@ public class NotificationService {
     }
 
     @Transactional
-    public int markAllAsRead(String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public int markAllAsRead(long userId) {
         int result = notificationRepository.markAllAsReadByUserId(userId);
         notificationRealtimeService.publish(userId, "notification.unread-count", 0L);
         return result;
     }
 
-    public long getUnreadCount(String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    @Transactional(readOnly = true)
+    public long getUnreadCount(long userId) {
         return notificationRepository.countByUserIdAndIsReadFalse(userId);
     }
 
-    public SseEmitter streamMyNotifications(String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public SseEmitter streamMyNotifications(long userId) {
         long unreadCount = notificationRepository.countByUserIdAndIsReadFalse(userId);
         return notificationRealtimeService.subscribe(userId, unreadCount);
     }
@@ -107,12 +94,6 @@ public class NotificationService {
         notificationRealtimeService.publishCreated(response, unreadCount);
         oneSignalService.sendNotificationToUser(String.valueOf(command.targetUserId()), command.title(), command.message(), command.linkAction());
         return response;
-    }
-
-    private Long getCurrentUserIdByEmail(String email) {
-        return userIdCache.computeIfAbsent(email, key -> userRepository.findByEmail(key)
-                .map(user -> user.getId())
-                .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found")));
     }
 
     private NotificationType toEntityType(NotificationTypeDto type) {

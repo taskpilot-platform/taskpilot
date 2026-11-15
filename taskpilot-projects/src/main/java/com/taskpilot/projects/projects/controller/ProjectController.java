@@ -1,6 +1,7 @@
 package com.taskpilot.projects.projects.controller;
 
 import com.taskpilot.infrastructure.dto.ApiResponse;
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.projects.projects.dto.CreateProjectRequest;
 import com.taskpilot.projects.projects.dto.JoinProjectRequest;
 import com.taskpilot.projects.projects.dto.MyProjectResponse;
@@ -38,7 +39,7 @@ public class ProjectController {
                         @RequestParam(required = false) String keyword,
                         @PageableDefault(size = 10) Pageable pageable) {
                 return ApiResponse.ok("Projects retrieved successfully",
-                                projectService.getMyProjects(authentication.getName(), keyword, pageable));
+                                projectService.getMyProjects(CurrentActorResolver.userId(authentication), keyword, pageable));
         }
 
         @Operation(summary = "Get project detail", description = "Get detailed information of a specific project")
@@ -47,7 +48,7 @@ public class ProjectController {
                         @PathVariable Long projectId,
                         Authentication authentication) {
                 return ApiResponse.ok("Project retrieved successfully",
-                                projectService.getProjectDetail(projectId, authentication.getName()));
+                                projectService.getProjectDetail(projectId, CurrentActorResolver.userId(authentication)));
         }
 
         @Operation(summary = "Create project", description = "Create a new project. Creator becomes Project Manager.")
@@ -57,7 +58,7 @@ public class ProjectController {
                         @Valid @RequestBody CreateProjectRequest request,
                         Authentication authentication) {
                 return ApiResponse.created("Project created successfully",
-                                projectService.createProject(request, authentication.getName()));
+                                projectService.createProject(request, CurrentActorResolver.userId(authentication)));
         }
 
         @Operation(summary = "Update project", description = "Update project information. Only Project Manager can update.")
@@ -67,7 +68,7 @@ public class ProjectController {
                         @Valid @RequestBody UpdateProjectRequest request,
                         Authentication authentication) {
                 return ApiResponse.ok("Project updated successfully",
-                                projectService.updateProject(projectId, request, authentication.getName()));
+                                projectService.updateProject(projectId, request, CurrentActorResolver.userId(authentication)));
         }
 
         @Operation(summary = "Join project", description = "Join a project using invitation code")
@@ -76,7 +77,7 @@ public class ProjectController {
                         @Valid @RequestBody JoinProjectRequest request,
                         Authentication authentication) {
                 return ApiResponse.ok("Joined project successfully",
-                                projectService.joinProject(request, authentication.getName()));
+                                projectService.joinProject(request, CurrentActorResolver.userId(authentication)));
         }
 
         @Operation(summary = "Leave project", description = "Leave a project (remove membership)")
@@ -84,7 +85,7 @@ public class ProjectController {
         public ApiResponse<Void> leaveProject(
                         @PathVariable Long projectId,
                         Authentication authentication) {
-                projectService.leaveProject(projectId, authentication.getName());
+                projectService.leaveProject(projectId, CurrentActorResolver.userId(authentication));
                 return ApiResponse.ok("Left project successfully", null);
         }
 
@@ -94,7 +95,7 @@ public class ProjectController {
                         @PathVariable Long projectId,
                         Authentication authentication) {
                 return ApiResponse.ok("Project summary retrieved successfully",
-                                projectService.getProjectSummary(projectId, authentication.getName()));
+                                projectService.getProjectSummary(projectId, CurrentActorResolver.userId(authentication)));
         }
 
         @Operation(summary = "Get project members", description = "Get all active members of a project")
@@ -103,7 +104,7 @@ public class ProjectController {
                         @PathVariable Long projectId,
                         Authentication authentication) {
                 return ApiResponse.ok("Project members retrieved successfully",
-                                projectService.getProjectMembers(projectId, authentication.getName()));
+                                projectService.getProjectMembers(projectId, CurrentActorResolver.userId(authentication)));
         }
 
         @Operation(summary = "Update member role", description = "Update the role of a project member (Manager only)")
@@ -113,7 +114,7 @@ public class ProjectController {
                         @PathVariable Long userId,
                         @Valid @RequestBody UpdateMemberRoleRequest request,
                         Authentication authentication) {
-                projectService.updateMemberRole(projectId, userId, request.role(), authentication.getName());
+                projectService.updateMemberRole(projectId, userId, request.role(), CurrentActorResolver.userId(authentication));
                 return ApiResponse.ok("Member role updated successfully", null);
         }
 
@@ -123,7 +124,7 @@ public class ProjectController {
                         @PathVariable Long projectId,
                         @PathVariable Long userId,
                         Authentication authentication) {
-                projectService.removeMember(projectId, userId, authentication.getName());
+                projectService.removeMember(projectId, userId, CurrentActorResolver.userId(authentication));
                 return ApiResponse.ok("Member removed successfully", null);
         }
 
@@ -132,7 +133,7 @@ public class ProjectController {
         public ApiResponse<Void> archiveProject(
                         @PathVariable Long projectId,
                         Authentication authentication) {
-                projectService.archiveProject(projectId, authentication.getName());
+                projectService.archiveProject(projectId, CurrentActorResolver.userId(authentication));
                 return ApiResponse.ok("Project archived successfully", null);
         }
 
@@ -141,7 +142,7 @@ public class ProjectController {
         public ApiResponse<Void> restoreProject(
                         @PathVariable Long projectId,
                         Authentication authentication) {
-                projectService.restoreProject(projectId, authentication.getName());
+                projectService.restoreProject(projectId, CurrentActorResolver.userId(authentication));
                 return ApiResponse.ok("Project restored successfully", null);
         }
 
@@ -150,7 +151,7 @@ public class ProjectController {
         public ApiResponse<Void> deleteProject(
                         @PathVariable Long projectId,
                         Authentication authentication) {
-                projectService.deleteProject(projectId, authentication.getName());
+                projectService.deleteProject(projectId, CurrentActorResolver.userId(authentication));
                 return ApiResponse.ok("Project deleted successfully", null);
         }
 }

@@ -5,7 +5,7 @@ import com.taskpilot.ai.entity.AiLogEntity;
 import com.taskpilot.ai.entity.ChatMessageEntity;
 import com.taskpilot.ai.entity.ChatSessionEntity;
 import com.taskpilot.ai.service.*;
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import io.swagger.v3.oas.annotations.Operation;
@@ -20,8 +20,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.beans.factory.annotation.Value;
@@ -40,7 +38,6 @@ public class AiChatController {
     private final ChatStreamStatusService chatStreamStatusService;
     private final AiLogService aiLogService;
     private final AutoAssignmentService autoAssignmentService;
-    private final UserIdentityPort userIdentityPort;
     private final ToolCallingRegistryService toolCallingRegistryService;
 
     @Value("${ai.chat.max-user-input-chars:1500}")
@@ -208,10 +205,7 @@ public class AiChatController {
     }
 
     private Long resolveUserId(Authentication authentication) {
-        return userIdentityPort.findByEmail(authentication.getName())
-                .map(identity -> identity.id())
-                .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(),
-                        "User not found"));
+        return CurrentActorResolver.userId(authentication);
     }
 
     private void validateUserMessage(String message) {

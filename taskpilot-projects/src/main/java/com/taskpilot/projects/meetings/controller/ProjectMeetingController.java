@@ -1,6 +1,7 @@
 package com.taskpilot.projects.meetings.controller;
 
 import com.taskpilot.infrastructure.dto.ApiResponse;
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.projects.common.enums.ProjectMeetingStatus;
 import com.taskpilot.projects.meetings.dto.CompleteRecordingUploadRequest;
 import com.taskpilot.projects.meetings.dto.CreateMeetingRequest;
@@ -38,7 +39,7 @@ public class ProjectMeetingController {
             Authentication authentication,
             @Valid @RequestBody CreateMeetingRequest request) {
         return ApiResponse.created("Meeting created successfully",
-                meetingService.createMeeting(projectId, authentication.getName(), request));
+                meetingService.createMeeting(projectId, CurrentActorResolver.userId(authentication), request));
     }
 
     @Operation(summary = "List project meetings", description = "Get list of meetings for project, optionally filtered by status")
@@ -48,7 +49,7 @@ public class ProjectMeetingController {
             Authentication authentication,
             @RequestParam(required = false) ProjectMeetingStatus status) {
         return ApiResponse.ok("Meetings retrieved successfully",
-                meetingService.getMeetings(projectId, authentication.getName(), status));
+                meetingService.getMeetings(projectId, CurrentActorResolver.userId(authentication), status));
     }
 
     @Operation(summary = "Get active project meeting", description = "Get current active meeting in project if one exists")
@@ -57,7 +58,7 @@ public class ProjectMeetingController {
             @PathVariable Long projectId,
             Authentication authentication) {
         return ApiResponse.ok("Active meeting retrieved successfully",
-                meetingService.getActiveMeeting(projectId, authentication.getName()).orElse(null));
+                meetingService.getActiveMeeting(projectId, CurrentActorResolver.userId(authentication)).orElse(null));
     }
 
     @Operation(summary = "Get meeting details", description = "Get detail of a specific meeting")
@@ -67,7 +68,7 @@ public class ProjectMeetingController {
             @PathVariable Long meetingId,
             Authentication authentication) {
         return ApiResponse.ok("Meeting retrieved successfully",
-                meetingService.getMeetingById(projectId, meetingId, authentication.getName()));
+                meetingService.getMeetingById(projectId, meetingId, CurrentActorResolver.userId(authentication)));
     }
 
     @Operation(summary = "Join meeting and get LiveKit token", description = "Join meeting room and acquire signed LiveKit access token")
@@ -77,7 +78,7 @@ public class ProjectMeetingController {
             @PathVariable Long meetingId,
             Authentication authentication) {
         return ApiResponse.ok("Joined meeting successfully",
-                meetingService.joinMeeting(projectId, meetingId, authentication.getName()));
+                meetingService.joinMeeting(projectId, meetingId, CurrentActorResolver.resolve(authentication)));
     }
 
     @Operation(summary = "Leave meeting", description = "Record participant departure from meeting")
@@ -86,7 +87,7 @@ public class ProjectMeetingController {
             @PathVariable Long projectId,
             @PathVariable Long meetingId,
             Authentication authentication) {
-        meetingService.leaveMeeting(projectId, meetingId, authentication.getName());
+        meetingService.leaveMeeting(projectId, meetingId, CurrentActorResolver.userId(authentication));
         return ApiResponse.ok("Left meeting successfully", null);
     }
 
@@ -97,7 +98,7 @@ public class ProjectMeetingController {
             @PathVariable Long meetingId,
             Authentication authentication) {
         return ApiResponse.ok("Meeting ended successfully",
-                meetingService.endMeeting(projectId, meetingId, authentication.getName()));
+                meetingService.endMeeting(projectId, meetingId, CurrentActorResolver.userId(authentication)));
     }
 
     @Operation(summary = "Link meeting recording", description = "Attach an uploaded project file as the meeting recording")
@@ -108,7 +109,7 @@ public class ProjectMeetingController {
             Authentication authentication,
             @Valid @RequestBody UpdateMeetingRecordingRequest request) {
         return ApiResponse.ok("Meeting recording linked successfully",
-                meetingService.updateRecordingFile(projectId, meetingId, authentication.getName(), request.recordingFileId()));
+                meetingService.updateRecordingFile(projectId, meetingId, CurrentActorResolver.userId(authentication), request.recordingFileId()));
     }
 
     @Operation(summary = "Start cloud Egress recording", description = "Start LiveKit Cloud RoomComposite Egress recording to Backblaze B2 (Host or Project Manager only)")
@@ -182,6 +183,6 @@ public class ProjectMeetingController {
             @PathVariable Long meetingId,
             Authentication authentication) {
         return ApiResponse.ok("Participants retrieved successfully",
-                meetingService.getParticipants(projectId, meetingId, authentication.getName()));
+                meetingService.getParticipants(projectId, meetingId, CurrentActorResolver.userId(authentication)));
     }
 }

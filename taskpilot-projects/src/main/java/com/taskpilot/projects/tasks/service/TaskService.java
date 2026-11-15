@@ -31,7 +31,6 @@ import com.taskpilot.projects.common.entity.TaskLabelEntity;
 import com.taskpilot.projects.common.entity.TaskRequiredSkillEntity;
 import com.taskpilot.projects.common.entity.SprintEntity;
 import com.taskpilot.contracts.skill.dto.SkillDto;
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.skill.port.out.SkillPort;
 import com.taskpilot.contracts.assignment.port.out.UserPort;
 import org.springframework.context.ApplicationEventPublisher;
@@ -46,7 +45,6 @@ public class TaskService {
     private final TaskRepository taskRepository;
     private final ProjectSecurityService projectSecurityService;
     private final ProjectMemberRepository projectMemberRepository;
-    private final UserIdentityPort userIdentityPort;
     private final SkillPort skillPort;
     private final UserPort userPort;
     private final ApplicationEventPublisher eventPublisher;
@@ -55,12 +53,6 @@ public class TaskService {
     private final TaskRequiredSkillRepository taskRequiredSkillRepository;
     private final SprintRepository sprintRepository;
     private final TaskDtoMapper taskDtoMapper;
-
-    private Long getCurrentUserIdByEmail(String email) {
-        return userIdentityPort.findByEmail(email)
-                .map(identity -> identity.id())
-                .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"));
-    }
 
     private List<TaskDto> mapToDtoWithLabels(List<TaskEntity> tasks) {
         return taskDtoMapper.mapToDtoWithLabels(tasks);
@@ -93,8 +85,7 @@ public class TaskService {
     }
 
     @Transactional(readOnly = true)
-    public List<TaskDto> getTasksByProject(Long projectId, String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public List<TaskDto> getTasksByProject(Long projectId, Long userId) {
         projectSecurityService.validateMember(projectId, userId);
 
         List<TaskEntity> tasks = taskRepository.findByProjectId(projectId);
@@ -102,11 +93,10 @@ public class TaskService {
     }
 
     @Transactional(readOnly = true)
-    public TaskDetailDto getTaskById(Long taskId, String email) {
+    public TaskDetailDto getTaskById(Long taskId, Long userId) {
         TaskEntity task = taskRepository.findById(taskId).orElseThrow(
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found"));
 
-        Long userId = getCurrentUserIdByEmail(email);
         projectSecurityService.validateMember(task.getProjectId(), userId);
 
         var assignee = task.getAssigneeId() != null ? userPort.findById(task.getAssigneeId()).orElse(null)
@@ -131,11 +121,10 @@ public class TaskService {
     }
 
     @Transactional(readOnly = true)
-    public List<TaskDto> getSubtasks(Long parentId, String email) {
+    public List<TaskDto> getSubtasks(Long parentId, Long userId) {
         TaskEntity parentTask = taskRepository.findById(parentId).orElseThrow(
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Parent task not found"));
 
-        Long userId = getCurrentUserIdByEmail(email);
         projectSecurityService.validateMember(parentTask.getProjectId(), userId);
 
         List<TaskEntity> subtasks = taskRepository.findByParentId(parentId);
@@ -143,8 +132,7 @@ public class TaskService {
     }
 
     @Transactional
-    public TaskDto createTask(CreateTaskRequest request, String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public TaskDto createTask(CreateTaskRequest request, Long userId) {
         projectSecurityService.validateMember(request.projectId(), userId);
         projectSecurityService.validateProjectNotArchived(request.projectId());
         validateTaskDateRange(request.startDate(), request.dueDate());
@@ -217,11 +205,10 @@ public class TaskService {
     }
 
     @Transactional
-    public TaskDto updateTask(Long taskId, UpdateTaskRequest request, String email) {
+    public TaskDto updateTask(Long taskId, UpdateTaskRequest request, Long userId) {
         TaskEntity task = taskRepository.findById(taskId).orElseThrow(
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found"));
 
-        Long userId = getCurrentUserIdByEmail(email);
         projectSecurityService.validateMember(task.getProjectId(), userId);
         projectSecurityService.validateProjectNotArchived(task.getProjectId());
 
@@ -306,11 +293,10 @@ public class TaskService {
     }
 
     @Transactional
-    public void deleteTask(Long taskId, String email) {
+    public void deleteTask(Long taskId, Long userId) {
         TaskEntity task = taskRepository.findById(taskId).orElseThrow(
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found"));
 
-        Long userId = getCurrentUserIdByEmail(email);
         projectSecurityService.validateMember(task.getProjectId(), userId);
         projectSecurityService.validateProjectNotArchived(task.getProjectId());
 
@@ -336,11 +322,10 @@ public class TaskService {
     }
 
     @Transactional
-    public TaskDto moveTaskKanban(Long taskId, KanbanMoveRequest request, String email) {
+    public TaskDto moveTaskKanban(Long taskId, KanbanMoveRequest request, Long userId) {
         TaskEntity task = taskRepository.findById(taskId).orElseThrow(
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found"));
 
-        Long userId = getCurrentUserIdByEmail(email);
         projectSecurityService.validateMember(task.getProjectId(), userId);
         projectSecurityService.validateProjectNotArchived(task.getProjectId());
 
@@ -352,11 +337,10 @@ public class TaskService {
     }
 
     @Transactional
-    public TaskDto updateTaskSprint(Long taskId, UpdateTaskSprintRequest request, String email) {
+    public TaskDto updateTaskSprint(Long taskId, UpdateTaskSprintRequest request, Long userId) {
         TaskEntity task = taskRepository.findById(taskId).orElseThrow(
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found"));
 
-        Long userId = getCurrentUserIdByEmail(email);
         projectSecurityService.validateMember(task.getProjectId(), userId);
         projectSecurityService.validateProjectNotArchived(task.getProjectId());
 

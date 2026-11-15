@@ -75,15 +75,21 @@ class JwtPropertiesTest {
         props.setSecretKey(VALID_PROD_KEY);
         JwtService jwtService = new JwtService(props, Mockito.mock(JwtTokenBlocklistService.class));
 
+        assertThat(props.getNormalizedIssuer()).isEqualTo("taskpilot");
+        assertThat(props.getNormalizedAudience()).isEqualTo("taskpilot-api");
         assertThat(jwtService.getJwtExpiration()).isEqualTo(900_000L);
-        String token = jwtService.generateToken("user@taskpilot.test", "MEMBER");
+        java.util.UUID sessionId = java.util.UUID.randomUUID();
+        String token = jwtService.generateToken(42L, 1L, sessionId, "MEMBER");
         assertThat(jwtService.isTokenValid(token)).isTrue();
-        assertThat(jwtService.extractEmail(token)).isEqualTo("user@taskpilot.test");
+        var claims = jwtService.parseAndValidate(token).orElseThrow();
+        assertThat(claims.userId()).isEqualTo(42L);
+        assertThat(claims.tokenVersion()).isEqualTo(1L);
+        assertThat(claims.sessionId()).isEqualTo(sessionId);
 
         JwtProperties paddedProps = new JwtProperties();
         paddedProps.setSecretKey("  " + VALID_PROD_KEY + "  ");
         JwtService paddedService = new JwtService(paddedProps, Mockito.mock(JwtTokenBlocklistService.class));
         assertThat(paddedService.isTokenValid(token)).isTrue();
-        assertThat(jwtService.isTokenValid(paddedService.generateToken("user@taskpilot.test", "MEMBER"))).isTrue();
+        assertThat(jwtService.isTokenValid(paddedService.generateToken(42L, 1L, sessionId, "MEMBER"))).isTrue();
     }
 }

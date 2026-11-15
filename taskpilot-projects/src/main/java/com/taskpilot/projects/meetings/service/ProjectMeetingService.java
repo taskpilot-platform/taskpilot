@@ -1,7 +1,7 @@
 package com.taskpilot.projects.meetings.service;
 
+import com.taskpilot.contracts.user.dto.CurrentActor;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.ProjectEntity;
@@ -45,7 +45,6 @@ public class ProjectMeetingService {
     private final ProjectFileRepository projectFileRepository;
     private final ProjectSecurityService projectSecurityService;
     private final LiveKitTokenService liveKitTokenService;
-    private final UserIdentityPort userIdentityPort;
     private final UserProfilePort userProfilePort;
 
     private MeetingRecordingService meetingRecordingService;
@@ -56,8 +55,7 @@ public class ProjectMeetingService {
     }
 
     @Transactional
-    public ProjectMeetingResponse createMeeting(Long projectId, String userEmail, CreateMeetingRequest request) {
-        Long userId = getUserId(userEmail);
+    public ProjectMeetingResponse createMeeting(Long projectId, Long userId, CreateMeetingRequest request) {
         projectSecurityService.requireActiveProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -100,8 +98,7 @@ public class ProjectMeetingService {
     }
 
     @Transactional(readOnly = true)
-    public List<ProjectMeetingResponse> getMeetings(Long projectId, String userEmail, ProjectMeetingStatus status) {
-        Long userId = getUserId(userEmail);
+    public List<ProjectMeetingResponse> getMeetings(Long projectId, Long userId, ProjectMeetingStatus status) {
         projectSecurityService.requireProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -118,8 +115,7 @@ public class ProjectMeetingService {
     }
 
     @Transactional(readOnly = true)
-    public Optional<ProjectMeetingResponse> getActiveMeeting(Long projectId, String userEmail) {
-        Long userId = getUserId(userEmail);
+    public Optional<ProjectMeetingResponse> getActiveMeeting(Long projectId, Long userId) {
         projectSecurityService.requireProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -128,8 +124,7 @@ public class ProjectMeetingService {
     }
 
     @Transactional(readOnly = true)
-    public ProjectMeetingResponse getMeetingById(Long projectId, Long meetingId, String userEmail) {
-        Long userId = getUserId(userEmail);
+    public ProjectMeetingResponse getMeetingById(Long projectId, Long meetingId, Long userId) {
         projectSecurityService.requireProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -140,8 +135,8 @@ public class ProjectMeetingService {
     }
 
     @Transactional
-    public MeetingTokenResponse joinMeeting(Long projectId, Long meetingId, String userEmail) {
-        Long userId = getUserId(userEmail);
+    public MeetingTokenResponse joinMeeting(Long projectId, Long meetingId, CurrentActor actor) {
+        Long userId = actor.userId();
         projectSecurityService.requireActiveProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -184,7 +179,7 @@ public class ProjectMeetingService {
 
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("userId", userId);
-        metadata.put("email", userEmail);
+        metadata.put("email", actor.currentEmail());
         metadata.put("role", isHost ? "HOST" : "PARTICIPANT");
         if (profile != null && profile.avatarUrl() != null) {
             metadata.put("avatarUrl", profile.avatarUrl());
@@ -212,8 +207,7 @@ public class ProjectMeetingService {
     }
 
     @Transactional
-    public void leaveMeeting(Long projectId, Long meetingId, String userEmail) {
-        Long userId = getUserId(userEmail);
+    public void leaveMeeting(Long projectId, Long meetingId, Long userId) {
         projectSecurityService.validateMember(projectId, userId);
 
         participantRepository.findFirstByMeetingIdAndUserIdAndLeftAtIsNullOrderByJoinedAtDesc(meetingId, userId)
@@ -224,8 +218,7 @@ public class ProjectMeetingService {
     }
 
     @Transactional
-    public ProjectMeetingResponse endMeeting(Long projectId, Long meetingId, String userEmail) {
-        Long userId = getUserId(userEmail);
+    public ProjectMeetingResponse endMeeting(Long projectId, Long meetingId, Long userId) {
         projectSecurityService.requireActiveProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -262,8 +255,7 @@ public class ProjectMeetingService {
     }
 
     @Transactional
-    public ProjectMeetingResponse updateRecordingFile(Long projectId, Long meetingId, String userEmail, Long recordingFileId) {
-        Long userId = getUserId(userEmail);
+    public ProjectMeetingResponse updateRecordingFile(Long projectId, Long meetingId, Long userId, Long recordingFileId) {
         projectSecurityService.requireActiveProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -287,8 +279,7 @@ public class ProjectMeetingService {
     }
 
     @Transactional(readOnly = true)
-    public List<MeetingParticipantResponse> getParticipants(Long projectId, Long meetingId, String userEmail) {
-        Long userId = getUserId(userEmail);
+    public List<MeetingParticipantResponse> getParticipants(Long projectId, Long meetingId, Long userId) {
         projectSecurityService.requireProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -370,8 +361,7 @@ public class ProjectMeetingService {
     }
 
     @Transactional(readOnly = true)
-    public List<ProjectMeetingResponse> getMyMeetings(String userEmail) {
-        Long userId = getUserId(userEmail);
+    public List<ProjectMeetingResponse> getMyMeetings(Long userId) {
         List<ProjectMemberEntity> memberships = projectMemberRepository.findByUserId(userId);
         if (memberships.isEmpty()) {
             return Collections.emptyList();
@@ -387,11 +377,5 @@ public class ProjectMeetingService {
         return projectMemberRepository.findByProjectIdAndUserId(projectId, userId)
                 .map(m -> m.getRole() == MemberRole.MANAGER)
                 .orElse(false);
-    }
-
-    private Long getUserId(String email) {
-        return userIdentityPort.findByEmail(email)
-                .map(u -> u.id())
-                .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"));
     }
 }

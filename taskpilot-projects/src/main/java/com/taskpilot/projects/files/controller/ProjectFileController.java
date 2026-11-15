@@ -1,6 +1,7 @@
 package com.taskpilot.projects.files.controller;
 
 import com.taskpilot.infrastructure.config.security.FileStreamTokenService;
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import com.taskpilot.projects.files.dto.FileDownloadResource;
 import com.taskpilot.projects.files.dto.FileStreamResource;
@@ -54,7 +55,7 @@ public class ProjectFileController {
             @RequestParam("file") MultipartFile file,
             @RequestParam(value = "description", required = false) String description) {
         return ApiResponse.created("File uploaded successfully",
-                projectFileService.uploadFile(projectId, authentication.getName(), file, description));
+                projectFileService.uploadFile(projectId, CurrentActorResolver.resolve(authentication), file, description));
     }
 
     @Operation(summary = "List project files", description = "Get paginated list of project files with optional search keyword")
@@ -65,7 +66,7 @@ public class ProjectFileController {
             @RequestParam(required = false) String keyword,
             @PageableDefault(size = 20) Pageable pageable) {
         return ApiResponse.ok("Files retrieved successfully",
-                projectFileService.listFiles(projectId, authentication.getName(), keyword, pageable));
+                projectFileService.listFiles(projectId, CurrentActorResolver.userId(authentication), keyword, pageable));
     }
 
     @Operation(summary = "Download project file", description = "Stream download a project file")
@@ -74,7 +75,7 @@ public class ProjectFileController {
             @PathVariable Long projectId,
             @PathVariable Long fileId,
             Authentication authentication) {
-        FileDownloadResource resource = projectFileService.downloadFile(projectId, fileId, authentication.getName());
+        FileDownloadResource resource = projectFileService.downloadFile(projectId, fileId, CurrentActorResolver.userId(authentication));
 
         String encodedFilename = URLEncoder.encode(resource.fileName(), StandardCharsets.UTF_8).replace("+", "%20");
         MediaType mediaType = MediaType.APPLICATION_OCTET_STREAM;
@@ -177,7 +178,7 @@ public class ProjectFileController {
             @PathVariable Long projectId,
             @PathVariable Long fileId,
             Authentication authentication) {
-        projectFileService.deleteFile(projectId, fileId, authentication.getName());
+        projectFileService.deleteFile(projectId, fileId, CurrentActorResolver.userId(authentication));
         return ApiResponse.ok("File deleted successfully", null);
     }
 

@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.taskpilot.infrastructure.dto.ApiResponse;
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.projects.tasks.dto.CommentSearchResultDto;
 import com.taskpilot.projects.tasks.service.TaskCommentService;
 
@@ -38,7 +39,7 @@ public class CommentSearchController {
                         taskId,
                         authorId,
                         mentionedMe,
-                        authentication.getName(),
+                        CurrentActorResolver.userId(authentication),
                         pageable));
     }
 }

@@ -82,6 +82,20 @@ class ReconciledFlywayIntegrationTest {
             assertThat(scalar(c, "SELECT has_table_privilege('anon','taskpilot_migrations.flyway_schema_history_v2','SELECT')")).isEqualTo("f");
             assertThat(scalar(c, "SELECT has_table_privilege('authenticated','taskpilot_migrations.flyway_schema_history_v2','INSERT')")).isEqualTo("f");
             assertThat(scalar(c, "SELECT c.relrowsecurity::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='oauth2_authorization_requests'")).isEqualTo("true");
+            assertThat(scalar(c, "SELECT c.relrowsecurity::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='refresh_token_history'")).isEqualTo("true");
+            assertThat(scalar(c, "SELECT count(*) FROM pg_policies WHERE schemaname='public' AND tablename='refresh_token_history' AND policyname='deny_all_refresh_token_history'")).isEqualTo("1");
+        }
+        try (var c = DriverManager.getConnection(url, "test", "test"); var s = c.createStatement()) {
+            c.setAutoCommit(false);
+            try {
+                s.execute("SET LOCAL ROLE authenticated");
+                assertThatThrownBy(() -> s.executeUpdate(
+                        "INSERT INTO public.refresh_token_history(session_id, user_id, token_hash, consumed_at, expires_at) " +
+                                "VALUES ('00000000-0000-0000-0000-000000000001', 1, repeat('a', 64), now(), now() + interval '1 day')"))
+                        .hasMessageContaining("row-level security");
+            } finally {
+                c.rollback();
+            }
         }
     }
 

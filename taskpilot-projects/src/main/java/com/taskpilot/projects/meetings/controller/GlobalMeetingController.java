@@ -1,6 +1,7 @@
 package com.taskpilot.projects.meetings.controller;
 
 import com.taskpilot.infrastructure.dto.ApiResponse;
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.projects.meetings.dto.ProjectMeetingResponse;
 import com.taskpilot.projects.meetings.service.ProjectMeetingService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -25,6 +26,6 @@ public class GlobalMeetingController {
     @GetMapping("/my")
     public ApiResponse<List<ProjectMeetingResponse>> getMyMeetings(Authentication authentication) {
         return ApiResponse.ok("User meetings retrieved successfully",
-                meetingService.getMyMeetings(authentication.getName()));
+                meetingService.getMyMeetings(CurrentActorResolver.userId(authentication)));
     }
 }

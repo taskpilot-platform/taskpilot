@@ -3,9 +3,8 @@ package com.taskpilot.ai.rag.controller;
 import com.taskpilot.ai.rag.domain.ScoredChunk;
 import com.taskpilot.ai.rag.dto.DocumentResponse;
 import com.taskpilot.ai.rag.service.ProjectDocumentService;
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.infrastructure.dto.ApiResponse;
-import com.taskpilot.infrastructure.exception.BusinessException;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -26,7 +25,6 @@ import java.util.List;
 public class ProjectDocumentController {
 
     private final ProjectDocumentService projectDocumentService;
-    private final UserIdentityPort userIdentityPort;
 
     @Operation(summary = "Upload and ingest project document", description = "Upload a document to S3 and automatically trigger background RAG chunking and vector indexing")
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -100,11 +98,6 @@ public class ProjectDocumentController {
     }
 
     private Long resolveUserId(Authentication authentication) {
-        if (authentication == null || authentication.getName() == null) {
-            throw new BusinessException(HttpStatus.UNAUTHORIZED.value(), "Authentication required");
-        }
-        return userIdentityPort.findByEmail(authentication.getName())
-                .map(identity -> identity.id())
-                .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"));
+        return CurrentActorResolver.userId(authentication);
     }
 }

@@ -1,7 +1,7 @@
 package com.taskpilot.projects.files.service;
 
+import com.taskpilot.contracts.user.dto.CurrentActor;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.infrastructure.storage.EgressS3StorageService;
@@ -60,7 +60,6 @@ public class ProjectFileService {
     private final GoogleDriveService googleDriveService;
     private final ProjectSecurityService projectSecurityService;
     private final ProjectMemberRepository projectMemberRepository;
-    private final UserIdentityPort userIdentityPort;
     private final UserProfilePort userProfilePort;
 
     private EgressS3StorageService egressS3StorageService;
@@ -71,7 +70,7 @@ public class ProjectFileService {
     }
 
     @Transactional
-    public ProjectFileResponse uploadFile(Long projectId, String userEmail, MultipartFile file, String description) {
+    public ProjectFileResponse uploadFile(Long projectId, CurrentActor actor, MultipartFile file, String description) {
         if (file == null || file.isEmpty()) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "File cannot be empty");
         }
@@ -79,7 +78,7 @@ public class ProjectFileService {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "File size exceeds 50MB limit");
         }
 
-        Long userId = getUserId(userEmail);
+        Long userId = actor.userId();
         projectSecurityService.requireActiveProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -155,12 +154,11 @@ public class ProjectFileService {
 
         ProjectFileEntity saved = projectFileRepository.save(entity);
         String uploaderName = getUserName(userId);
-        return ProjectFileResponse.fromEntity(saved, uploaderName, userEmail);
+        return ProjectFileResponse.fromEntity(saved, uploaderName, actor.currentEmail());
     }
 
     @Transactional(readOnly = true)
-    public Page<ProjectFileResponse> listFiles(Long projectId, String userEmail, String keyword, Pageable pageable) {
-        Long userId = getUserId(userEmail);
+    public Page<ProjectFileResponse> listFiles(Long projectId, Long userId, String keyword, Pageable pageable) {
         projectSecurityService.requireProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -185,8 +183,7 @@ public class ProjectFileService {
     }
 
     @Transactional(readOnly = true)
-    public FileDownloadResource downloadFile(Long projectId, Long fileId, String userEmail) {
-        Long userId = getUserId(userEmail);
+    public FileDownloadResource downloadFile(Long projectId, Long fileId, Long userId) {
         projectSecurityService.requireProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -337,8 +334,7 @@ public class ProjectFileService {
     }
 
     @Transactional
-    public void deleteFile(Long projectId, Long fileId, String userEmail) {
-        Long userId = getUserId(userEmail);
+    public void deleteFile(Long projectId, Long fileId, Long userId) {
         projectSecurityService.requireActiveProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -369,12 +365,6 @@ public class ProjectFileService {
         }
 
         projectFileRepository.delete(entity);
-    }
-
-    private Long getUserId(String email) {
-        return userIdentityPort.findByEmail(email)
-                .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"))
-                .id();
     }
 
     private String getUserName(Long userId) {

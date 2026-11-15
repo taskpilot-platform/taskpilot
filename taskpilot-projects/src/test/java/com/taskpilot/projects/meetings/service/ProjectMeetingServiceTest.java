@@ -1,8 +1,7 @@
 package com.taskpilot.projects.meetings.service;
 
-import com.taskpilot.contracts.user.dto.UserIdentityDto;
+import com.taskpilot.contracts.user.dto.CurrentActor;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.ProjectEntity;
@@ -60,9 +59,6 @@ class ProjectMeetingServiceTest {
     private LiveKitTokenService liveKitTokenService;
 
     @Mock
-    private UserIdentityPort userIdentityPort;
-
-    @Mock
     private UserProfilePort userProfilePort;
 
     @InjectMocks
@@ -70,13 +66,7 @@ class ProjectMeetingServiceTest {
 
     private final Long projectId = 10L;
     private final Long userId = 100L;
-    private final String email = "developer@taskpilot.io";
-
-    @BeforeEach
-    void setUp() {
-        lenient().when(userIdentityPort.findByEmail(email))
-                .thenReturn(Optional.of(new UserIdentityDto(userId, email)));
-    }
+    private final CurrentActor actor = new CurrentActor(userId, "developer@taskpilot.io", "USER", 1L);
 
     @Test
     void createMeeting_success() {
@@ -93,7 +83,7 @@ class ProjectMeetingServiceTest {
         when(participantRepository.countByMeetingIdAndLeftAtIsNull(1L)).thenReturn(1L);
         when(participantRepository.countByMeetingId(1L)).thenReturn(1L);
 
-        ProjectMeetingResponse response = projectMeetingService.createMeeting(projectId, email, request);
+        ProjectMeetingResponse response = projectMeetingService.createMeeting(projectId, userId, request);
 
         assertNotNull(response);
         assertEquals(1L, response.id());
@@ -126,7 +116,7 @@ class ProjectMeetingServiceTest {
         when(liveKitTokenService.createAccessToken(eq("tp-proj-10-room-abc"), eq("user_100"), anyString(), eq(true), anyMap()))
                 .thenReturn("mock-signed-jwt-token");
 
-        MeetingTokenResponse tokenResponse = projectMeetingService.joinMeeting(projectId, meetingId, email);
+        MeetingTokenResponse tokenResponse = projectMeetingService.joinMeeting(projectId, meetingId, actor);
 
         assertNotNull(tokenResponse);
         assertEquals("mock-signed-jwt-token", tokenResponse.token());
@@ -151,7 +141,7 @@ class ProjectMeetingServiceTest {
         when(meetingRepository.findByIdAndProjectId(meetingId, projectId)).thenReturn(Optional.of(meeting));
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> projectMeetingService.joinMeeting(projectId, meetingId, email));
+                () -> projectMeetingService.joinMeeting(projectId, meetingId, actor));
 
         assertEquals(HttpStatus.BAD_REQUEST.value(), ex.getStatus());
         assertTrue(ex.getMessage().contains("ended"));
@@ -178,7 +168,7 @@ class ProjectMeetingServiceTest {
                         .joinedAt(Instant.now().minusSeconds(300))
                         .build()));
 
-        ProjectMeetingResponse response = projectMeetingService.endMeeting(projectId, meetingId, email);
+        ProjectMeetingResponse response = projectMeetingService.endMeeting(projectId, meetingId, userId);
 
         assertNotNull(response);
         assertEquals(ProjectMeetingStatus.ENDED, meeting.getStatus());
@@ -206,7 +196,7 @@ class ProjectMeetingServiceTest {
                         .build()));
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> projectMeetingService.endMeeting(projectId, meetingId, email));
+                () -> projectMeetingService.endMeeting(projectId, meetingId, userId));
 
         assertEquals(HttpStatus.FORBIDDEN.value(), ex.getStatus());
         verify(meetingRepository, never()).save(any());
@@ -231,7 +221,7 @@ class ProjectMeetingServiceTest {
                 .thenReturn(Optional.of(ProjectFileEntity.builder().id(recordingFileId).projectId(projectId).build()));
         when(meetingRepository.save(any(ProjectMeetingEntity.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        ProjectMeetingResponse res = projectMeetingService.updateRecordingFile(projectId, meetingId, email, recordingFileId);
+        ProjectMeetingResponse res = projectMeetingService.updateRecordingFile(projectId, meetingId, userId, recordingFileId);
 
         assertNotNull(res);
         assertEquals(recordingFileId, res.recordingFileId());
@@ -256,7 +246,7 @@ class ProjectMeetingServiceTest {
         when(projectFileRepository.findByIdAndProjectId(recordingFileId, projectId)).thenReturn(Optional.empty());
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> projectMeetingService.updateRecordingFile(projectId, meetingId, email, recordingFileId));
+                () -> projectMeetingService.updateRecordingFile(projectId, meetingId, userId, recordingFileId));
 
         assertEquals(HttpStatus.NOT_FOUND.value(), ex.getStatus());
         verify(meetingRepository, never()).save(any());
@@ -280,7 +270,7 @@ class ProjectMeetingServiceTest {
                 .thenReturn(Optional.of(ProjectMemberEntity.builder().role(MemberRole.MEMBER).build()));
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> projectMeetingService.updateRecordingFile(projectId, meetingId, email, 101L));
+                () -> projectMeetingService.updateRecordingFile(projectId, meetingId, userId, 101L));
 
         assertEquals(HttpStatus.FORBIDDEN.value(), ex.getStatus());
         verify(meetingRepository, never()).save(any());

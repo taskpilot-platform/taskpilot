@@ -1,5 +1,6 @@
 package com.taskpilot.projects.chat.controller;
 
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import com.taskpilot.projects.chat.dto.ChatMessageResponse;
 import com.taskpilot.projects.chat.dto.SendChatMessageRequest;
@@ -29,7 +30,7 @@ public class ProjectChatController {
             Authentication authentication,
             @PageableDefault(size = 50) Pageable pageable) {
         return ApiResponse.ok("Chat messages retrieved successfully",
-                projectChatService.getChatHistory(projectId, authentication.getName(), pageable));
+                projectChatService.getChatHistory(projectId, CurrentActorResolver.userId(authentication), pageable));
     }
 
     @Operation(summary = "Send chat message via REST", description = "Send a chat message to the project chat room and broadcast over WebSocket")
@@ -39,6 +40,6 @@ public class ProjectChatController {
             Authentication authentication,
             @Valid @RequestBody SendChatMessageRequest request) {
         return ApiResponse.created("Message sent successfully",
-                projectChatService.sendMessage(projectId, authentication.getName(), request));
+                projectChatService.sendMessage(projectId, CurrentActorResolver.resolve(authentication), request));
     }
 }

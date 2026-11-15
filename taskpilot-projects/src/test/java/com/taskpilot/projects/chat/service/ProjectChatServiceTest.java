@@ -1,8 +1,7 @@
 package com.taskpilot.projects.chat.service;
 
-import com.taskpilot.contracts.user.dto.UserIdentityDto;
+import com.taskpilot.contracts.user.dto.CurrentActor;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.chat.dto.ChatMessageResponse;
@@ -42,9 +41,6 @@ class ProjectChatServiceTest {
     private ProjectSecurityService projectSecurityService;
 
     @Mock
-    private UserIdentityPort userIdentityPort;
-
-    @Mock
     private UserProfilePort userProfilePort;
 
     @Mock
@@ -55,12 +51,7 @@ class ProjectChatServiceTest {
 
     private final Long projectId = 5L;
     private final Long userId = 42L;
-    private final String email = "alice@example.com";
-
-    @BeforeEach
-    void setUp() {
-        lenient().when(userIdentityPort.findByEmail(email)).thenReturn(Optional.of(new UserIdentityDto(userId, email)));
-    }
+    private final CurrentActor actor = new CurrentActor(userId, "alice@example.com", "USER", 1L);
 
     @Test
     void sendMessage_success() {
@@ -76,7 +67,7 @@ class ProjectChatServiceTest {
         when(chatMessageRepository.save(any())).thenReturn(savedEntity);
         when(userProfilePort.findLiteById(userId)).thenReturn(Optional.of(new UserProfileLiteDto(userId, "Alice", "/avatar.png")));
 
-        ChatMessageResponse response = projectChatService.sendMessage(projectId, email, request);
+        ChatMessageResponse response = projectChatService.sendMessage(projectId, actor, request);
 
         assertNotNull(response);
         assertEquals(101L, response.id());
@@ -92,7 +83,7 @@ class ProjectChatServiceTest {
     void sendMessage_blankContent_throwsBadRequest() {
         SendChatMessageRequest request = new SendChatMessageRequest("   ", "TEXT", null);
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> projectChatService.sendMessage(projectId, email, request));
+                () -> projectChatService.sendMessage(projectId, actor, request));
         assertEquals(400, ex.getStatus());
         verify(chatMessageRepository, never()).save(any());
     }
@@ -111,7 +102,7 @@ class ProjectChatServiceTest {
         when(userProfilePort.findLiteByIds(anySet()))
                 .thenReturn(List.of(new UserProfileLiteDto(userId, "Alice", "/avatar.png")));
 
-        Page<ChatMessageResponse> history = projectChatService.getChatHistory(projectId, email, pageRequest);
+        Page<ChatMessageResponse> history = projectChatService.getChatHistory(projectId, userId, pageRequest);
 
         assertEquals(1, history.getTotalElements());
         assertEquals("First message", history.getContent().get(0).content());

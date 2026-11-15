@@ -79,6 +79,8 @@ application:
     jwt:
       secret-key: ${JWT_SECRET:}
       expiration: ${JWT_EXPIRATION:900000}
+      issuer: ${JWT_ISSUER:taskpilot}
+      audience: ${JWT_AUDIENCE:taskpilot-api}
       blocklist:
         provider: ${JWT_BLOCKLIST_PROVIDER:memory}
     password-reset:

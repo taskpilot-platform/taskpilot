@@ -7,4 +7,6 @@ import java.util.Optional;
 public interface UserIdentityPort {
 
     Optional<UserIdentityDto> findByEmail(String email);
+
+    Optional<UserIdentityDto> findById(long userId);
 }

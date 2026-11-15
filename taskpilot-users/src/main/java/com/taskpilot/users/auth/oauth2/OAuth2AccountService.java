@@ -36,14 +36,19 @@ public class OAuth2AccountService {
 
         if (existingIdentity.isPresent()) {
             UserIdentityEntity identity = existingIdentity.get();
+            UserEntity matchedUser = identity.getUser();
+            if (!matchedUser.isActiveAccount()) {
+                log.warn("OAuth2 login rejected for inactive userId={}", matchedUser.getId());
+                throw new BusinessException(HttpStatus.FORBIDDEN.value(), "account_inactive");
+            }
             identity.setLastLoginAt(Instant.now());
             if (userInfo.email() != null && !userInfo.email().isBlank()) {
                 identity.setEmail(userInfo.email());
             }
             userIdentityRepository.save(identity);
             log.info("OAuth2 login: matched existing identity provider={}, userId={}",
-                    userInfo.provider(), identity.getUser().getId());
-            return identity.getUser();
+                    userInfo.provider(), matchedUser.getId());
+            return matchedUser;
         }
 
         // 2. Nếu là danh tính mới, bắt buộc email phải đã được nhà cung cấp xác minh
@@ -60,7 +65,11 @@ public class OAuth2AccountService {
 
         if (existingUserOpt.isPresent()) {
             user = existingUserOpt.get();
-            log.info("OAuth2 login: linking provider={} to existing user email={}", userInfo.provider(), normalizedEmail);
+            if (!user.isActiveAccount()) {
+                log.warn("OAuth2 linking rejected for inactive userId={}", user.getId());
+                throw new BusinessException(HttpStatus.FORBIDDEN.value(), "account_inactive");
+            }
+            log.info("OAuth2 login: linking provider={} to existing userId={}", userInfo.provider(), user.getId());
             // Chỉ cập nhật avatar nếu người dùng chưa có
             if ((user.getAvatarUrl() == null || user.getAvatarUrl().isBlank())
                     && userInfo.avatarUrl() != null && !userInfo.avatarUrl().isBlank()) {

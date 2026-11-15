@@ -8,7 +8,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.infrastructure.util.ValidationUtils;
 import com.taskpilot.projects.common.entity.ProjectEntity;
@@ -37,12 +36,11 @@ public class SprintService {
     private final ProjectSecurityService projectSecurityService;
     private final TaskRepository taskRepository;
     private final TaskDtoMapper taskDtoMapper;
-    private final UserIdentityPort userIdentityPort;
 
     @Transactional
-    public SprintDto createSprint(Long projectId, CreateSprintRequest request, String email) {
+    public SprintDto createSprint(Long projectId, CreateSprintRequest request, Long userId) {
         projectSecurityService.requireActiveProject(projectId);
-        projectSecurityService.validateManager(projectId, getCurrentUserIdByEmail(email));
+        projectSecurityService.validateManager(projectId, userId);
         ValidationUtils.validateDateRange(request.startDate(), request.endDate(), "Sprint end date must be greater than or equal to start date");
 
         SprintEntity sprint = SprintEntity.builder()
@@ -57,16 +55,16 @@ public class SprintService {
     }
 
     @Transactional(readOnly = true)
-    public List<SprintDto> listSprints(Long projectId, String email) {
+    public List<SprintDto> listSprints(Long projectId, Long userId) {
         projectSecurityService.requireProject(projectId);
-        projectSecurityService.validateMember(projectId, getCurrentUserIdByEmail(email));
+        projectSecurityService.validateMember(projectId, userId);
         return sortedSprints(projectId).stream().map(SprintDto::fromEntity).toList();
     }
 
     @Transactional
-    public SprintDto updateSprint(Long projectId, Long sprintId, UpdateSprintRequest request, String email) {
+    public SprintDto updateSprint(Long projectId, Long sprintId, UpdateSprintRequest request, Long userId) {
         projectSecurityService.requireActiveProject(projectId);
-        projectSecurityService.validateManager(projectId, getCurrentUserIdByEmail(email));
+        projectSecurityService.validateManager(projectId, userId);
         SprintEntity sprint = findSprintInProject(projectId, sprintId);
 
         if (sprint.getStatus() == SprintStatus.COMPLETED) {
@@ -93,9 +91,9 @@ public class SprintService {
     }
 
     @Transactional
-    public void deleteSprint(Long projectId, Long sprintId, String email) {
+    public void deleteSprint(Long projectId, Long sprintId, Long userId) {
         projectSecurityService.requireActiveProject(projectId);
-        projectSecurityService.validateManager(projectId, getCurrentUserIdByEmail(email));
+        projectSecurityService.validateManager(projectId, userId);
         SprintEntity sprint = findSprintInProject(projectId, sprintId);
 
         if (sprint.getStatus() != SprintStatus.PLANNING) {
@@ -107,9 +105,9 @@ public class SprintService {
     }
 
     @Transactional
-    public SprintDto startSprint(Long projectId, Long sprintId, String email) {
+    public SprintDto startSprint(Long projectId, Long sprintId, Long userId) {
         projectSecurityService.requireActiveProject(projectId);
-        projectSecurityService.validateManager(projectId, getCurrentUserIdByEmail(email));
+        projectSecurityService.validateManager(projectId, userId);
         SprintEntity sprint = findSprintInProject(projectId, sprintId);
 
         if (sprint.getStatus() != SprintStatus.PLANNING) {
@@ -124,9 +122,9 @@ public class SprintService {
     }
 
     @Transactional
-    public SprintDto completeSprint(Long projectId, Long sprintId, String email) {
+    public SprintDto completeSprint(Long projectId, Long sprintId, Long userId) {
         projectSecurityService.requireActiveProject(projectId);
-        projectSecurityService.validateManager(projectId, getCurrentUserIdByEmail(email));
+        projectSecurityService.validateManager(projectId, userId);
         SprintEntity sprint = findSprintInProject(projectId, sprintId);
 
         if (sprint.getStatus() != SprintStatus.ACTIVE) {
@@ -138,9 +136,9 @@ public class SprintService {
     }
 
     @Transactional(readOnly = true)
-    public BacklogResponse getBacklog(Long projectId, String email) {
+    public BacklogResponse getBacklog(Long projectId, Long userId) {
         projectSecurityService.requireProject(projectId);
-        projectSecurityService.validateMember(projectId, getCurrentUserIdByEmail(email));
+        projectSecurityService.validateMember(projectId, userId);
 
         var unscheduled = taskDtoMapper.mapToDtoWithLabels(
                 taskRepository.findByProjectIdAndSprintIdIsNullOrderByPositionAsc(projectId));
@@ -158,9 +156,9 @@ public class SprintService {
     }
 
     @Transactional(readOnly = true)
-    public BoardResponse getBoard(Long projectId, String email) {
+    public BoardResponse getBoard(Long projectId, Long userId) {
         ProjectEntity project = projectSecurityService.requireProject(projectId);
-        projectSecurityService.validateMember(projectId, getCurrentUserIdByEmail(email));
+        projectSecurityService.validateMember(projectId, userId);
 
         if (project.getWorkflowMode() == WorkflowMode.SCRUM) {
             return sprintRepository.findByProjectIdAndStatus(projectId, SprintStatus.ACTIVE)
@@ -189,11 +187,5 @@ public class SprintService {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Sprint does not belong to this project");
         }
         return sprint;
-    }
-
-    private Long getCurrentUserIdByEmail(String email) {
-        return userIdentityPort.findByEmail(email)
-                .map(identity -> identity.id())
-                .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"));
     }
 }

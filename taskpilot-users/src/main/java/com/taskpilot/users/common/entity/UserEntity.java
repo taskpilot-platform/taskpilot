@@ -1,12 +1,15 @@
 package com.taskpilot.users.common.entity;
 
 import com.taskpilot.infrastructure.base.BaseEntity;
+import com.taskpilot.users.common.enums.AccountLifecycle;
 import com.taskpilot.users.common.enums.UserRole;
 import com.taskpilot.users.common.enums.UserStatus;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
+
+import java.time.Instant;
 
 @Entity
 @Table(name = "users")
@@ -45,4 +48,35 @@ public class UserEntity extends BaseEntity {
     @Builder.Default
     @Column(name = "current_workload")
     private Integer currentWorkload = 0;
+
+    @Builder.Default
+    @Column(name = "token_version", nullable = false)
+    private Long tokenVersion = 0L;
+
+    @Builder.Default
+    @Enumerated(EnumType.STRING)
+    @Column(name = "account_state", nullable = false, length = 32)
+    private AccountLifecycle accountState = AccountLifecycle.ACTIVE;
+
+    @Builder.Default
+    @Column(name = "email_verified", nullable = false)
+    private Boolean emailVerified = Boolean.FALSE;
+
+    @Column(name = "email_verified_at")
+    private Instant emailVerifiedAt;
+
+    public boolean isActiveAccount() {
+        AccountLifecycle effectiveLifecycle = accountState != null ? accountState : AccountLifecycle.ACTIVE;
+        return effectiveLifecycle == AccountLifecycle.ACTIVE && status != UserStatus.DEACTIVATED;
+    }
+
+    public long effectiveTokenVersion() {
+        return tokenVersion != null ? tokenVersion : 0L;
+    }
+
+    public long incrementTokenVersion() {
+        long next = effectiveTokenVersion() + 1L;
+        this.tokenVersion = next;
+        return next;
+    }
 }

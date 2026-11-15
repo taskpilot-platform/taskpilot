@@ -17,7 +17,6 @@ import org.springframework.transaction.annotation.Transactional;
 import com.taskpilot.contracts.assignment.port.out.UserPort;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
 import com.taskpilot.contracts.user.event.ProjectMemberEvent;
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.infrastructure.util.PageableUtils;
@@ -54,7 +53,6 @@ public class ProjectServiceImpl {
     private final ProjectRepository projectRepository;
     private final ProjectMemberRepository projectMemberRepository;
     private final ProjectSecurityService projectSecurityService;
-    private final UserIdentityPort userIdentityPort;
     private final UserPort userPort;
     private final ApplicationEventPublisher eventPublisher;
     private final TaskRepository taskRepository;
@@ -66,8 +64,7 @@ public class ProjectServiceImpl {
     /**
      * Get all projects the user has joined
      */
-    public Page<MyProjectResponse> getMyProjects(String email, String keyword, Pageable pageable) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public Page<MyProjectResponse> getMyProjects(Long userId, String keyword, Pageable pageable) {
         Pageable safePageable = PageableUtils.sanitize(pageable, "joinedAt", Sort.Direction.DESC, "projectId", "userId", "joinedAt", "role");
 
         Page<ProjectMemberEntity> page;
@@ -91,8 +88,7 @@ public class ProjectServiceImpl {
     /**
      * Get project detail by ID (user must be a member)
      */
-    public ProjectResponse getProjectDetail(Long projectId, String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public ProjectResponse getProjectDetail(Long projectId, Long userId) {
         ProjectEntity project = projectSecurityService.requireProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
         return ProjectResponse.fromEntity(project);
@@ -102,8 +98,7 @@ public class ProjectServiceImpl {
      * Create a new project (creator becomes PROJECT_MANAGER)
      */
     @Transactional
-    public ProjectResponse createProject(CreateProjectRequest request, String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public ProjectResponse createProject(CreateProjectRequest request, Long userId) {
         ValidationUtils.validateDateRange(request.startDate(), request.endDate(),
                 "Project end date must be greater than or equal to start date");
 
@@ -139,8 +134,7 @@ public class ProjectServiceImpl {
      * Update project (only PROJECT_MANAGER can update)
      */
     @Transactional
-    public ProjectResponse updateProject(Long projectId, UpdateProjectRequest request, String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public ProjectResponse updateProject(Long projectId, UpdateProjectRequest request, Long userId) {
         ProjectEntity project = projectSecurityService.requireProject(projectId);
         projectSecurityService.validateManager(projectId, userId);
 
@@ -185,8 +179,7 @@ public class ProjectServiceImpl {
      * Join a project by invitation code (simple: project ID as code)
      */
     @Transactional
-    public ProjectMemberResponse joinProject(JoinProjectRequest request, String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public ProjectMemberResponse joinProject(JoinProjectRequest request, Long userId) {
         Long projectId = parseProjectCode(request.projectCode());
 
         ProjectEntity project = projectSecurityService.requireProject(projectId);
@@ -230,8 +223,7 @@ public class ProjectServiceImpl {
      * Leave a project (remove membership record)
      */
     @Transactional
-    public void leaveProject(Long projectId, String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public void leaveProject(Long projectId, Long userId) {
         ProjectEntity project = projectSecurityService.requireProject(projectId);
 
         ProjectMemberEntity member = projectMemberRepository.findByProjectIdAndUserId(projectId, userId)
@@ -274,8 +266,7 @@ public class ProjectServiceImpl {
      * Update member role (only MANAGER can do this)
      */
     @Transactional
-    public void updateMemberRole(Long projectId, Long targetUserId, MemberRole newRole, String email) {
-        Long currentUserId = getCurrentUserIdByEmail(email);
+    public void updateMemberRole(Long projectId, Long targetUserId, MemberRole newRole, Long currentUserId) {
         ProjectEntity project = projectSecurityService.requireProject(projectId);
         projectSecurityService.validateProjectNotArchived(project);
         projectSecurityService.validateManager(projectId, currentUserId);
@@ -305,8 +296,7 @@ public class ProjectServiceImpl {
      * Remove member from project (only MANAGER can do this)
      */
     @Transactional
-    public void removeMember(Long projectId, Long targetUserId, String email) {
-        Long currentUserId = getCurrentUserIdByEmail(email);
+    public void removeMember(Long projectId, Long targetUserId, Long currentUserId) {
         ProjectEntity project = projectSecurityService.requireProject(projectId);
         projectSecurityService.validateProjectNotArchived(project);
         projectSecurityService.validateManager(projectId, currentUserId);
@@ -330,8 +320,7 @@ public class ProjectServiceImpl {
     // ==================== PROJECT LIFECYCLE ====================
 
     @Transactional
-    public void archiveProject(Long projectId, String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public void archiveProject(Long projectId, Long userId) {
         ProjectEntity project = projectSecurityService.requireProject(projectId);
         projectSecurityService.validateManager(projectId, userId);
 
@@ -340,8 +329,7 @@ public class ProjectServiceImpl {
     }
 
     @Transactional
-    public void restoreProject(Long projectId, String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public void restoreProject(Long projectId, Long userId) {
         ProjectEntity project = projectSecurityService.requireProject(projectId);
         projectSecurityService.validateManager(projectId, userId);
 
@@ -350,8 +338,7 @@ public class ProjectServiceImpl {
     }
 
     @Transactional
-    public void deleteProject(Long projectId, String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public void deleteProject(Long projectId, Long userId) {
         ProjectEntity project = projectSecurityService.requireProject(projectId);
         projectSecurityService.validateManager(projectId, userId);
 
@@ -365,8 +352,7 @@ public class ProjectServiceImpl {
     /**
      * Get project summary (statistics)
      */
-    public ProjectSummaryResponse getProjectSummary(Long projectId, String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public ProjectSummaryResponse getProjectSummary(Long projectId, Long userId) {
         ProjectEntity project = projectSecurityService.requireProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -395,8 +381,7 @@ public class ProjectServiceImpl {
     /**
      * Get all active members of a project
      */
-    public List<ProjectMemberResponse> getProjectMembers(Long projectId, String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public List<ProjectMemberResponse> getProjectMembers(Long projectId, Long userId) {
         projectSecurityService.requireProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -423,12 +408,6 @@ public class ProjectServiceImpl {
     }
 
     // ==================== HELPER METHODS ====================
-    private Long getCurrentUserIdByEmail(String email) {
-        return userIdentityPort.findByEmail(email)
-                .map(identity -> identity.id())
-                .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"));
-    }
-
     private Long parseProjectCode(String projectCode) {
         String normalized = projectCode == null ? "" : projectCode.trim().toUpperCase();
         if (normalized.startsWith(PROJECT_CODE_PREFIX)) {

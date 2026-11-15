@@ -1,8 +1,7 @@
 package com.taskpilot.projects.files.service;
 
-import com.taskpilot.contracts.user.dto.UserIdentityDto;
+import com.taskpilot.contracts.user.dto.CurrentActor;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.infrastructure.storage.StorageService;
@@ -56,9 +55,6 @@ class ProjectFileServiceTest {
     private ProjectMemberRepository projectMemberRepository;
 
     @Mock
-    private UserIdentityPort userIdentityPort;
-
-    @Mock
     private UserProfilePort userProfilePort;
 
     @InjectMocks
@@ -66,12 +62,7 @@ class ProjectFileServiceTest {
 
     private final Long projectId = 10L;
     private final Long userId = 100L;
-    private final String email = "user@test.com";
-
-    @BeforeEach
-    void setUp() {
-        lenient().when(userIdentityPort.findByEmail(email)).thenReturn(Optional.of(new UserIdentityDto(userId, email)));
-    }
+    private final CurrentActor actor = new CurrentActor(userId, "user@test.com", "USER", 1L);
 
     @Test
     void uploadFile_success() throws IOException {
@@ -92,7 +83,7 @@ class ProjectFileServiceTest {
         when(projectFileRepository.save(any())).thenReturn(savedEntity);
         when(userProfilePort.findLiteById(userId)).thenReturn(Optional.of(new UserProfileLiteDto(userId, "John Doe", null)));
 
-        ProjectFileResponse response = projectFileService.uploadFile(projectId, email, file, "Spec document");
+        ProjectFileResponse response = projectFileService.uploadFile(projectId, actor, file, "Spec document");
 
         assertNotNull(response);
         assertEquals(1L, response.id());
@@ -106,7 +97,7 @@ class ProjectFileServiceTest {
     void uploadFile_emptyFile_throwsBadRequest() {
         MockMultipartFile file = new MockMultipartFile("file", "", "text/plain", new byte[0]);
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> projectFileService.uploadFile(projectId, email, file, "desc"));
+                () -> projectFileService.uploadFile(projectId, actor, file, "desc"));
         assertEquals(400, ex.getStatus());
     }
 
@@ -126,7 +117,7 @@ class ProjectFileServiceTest {
         when(userProfilePort.findLiteByIds(anySet()))
                 .thenReturn(List.of(new UserProfileLiteDto(userId, "John Doe", null)));
 
-        Page<ProjectFileResponse> result = projectFileService.listFiles(projectId, email, null, pageRequest);
+        Page<ProjectFileResponse> result = projectFileService.listFiles(projectId, userId, null, pageRequest);
 
         assertEquals(1, result.getTotalElements());
         assertEquals("plan.docx", result.getContent().get(0).fileName());
@@ -149,7 +140,7 @@ class ProjectFileServiceTest {
         when(storageService.downloadFile("documents", "projects/10/files/guide.pdf"))
                 .thenReturn(new ByteArrayInputStream("pdf data".getBytes()));
 
-        FileDownloadResource resource = projectFileService.downloadFile(projectId, 1L, email);
+        FileDownloadResource resource = projectFileService.downloadFile(projectId, 1L, userId);
 
         assertNotNull(resource);
         assertEquals("guide.pdf", resource.fileName());
@@ -167,7 +158,7 @@ class ProjectFileServiceTest {
                 .build();
         when(projectFileRepository.findByIdAndProjectId(1L, projectId)).thenReturn(Optional.of(entity));
 
-        projectFileService.deleteFile(projectId, 1L, email);
+        projectFileService.deleteFile(projectId, 1L, userId);
 
         verify(storageService).deleteFile("documents", "projects/10/files/test.txt");
         verify(projectFileRepository).delete(entity);
@@ -192,7 +183,7 @@ class ProjectFileServiceTest {
         when(projectMemberRepository.findByProjectIdAndUserId(projectId, userId))
                 .thenReturn(Optional.of(managerMember));
 
-        projectFileService.deleteFile(projectId, 1L, email);
+        projectFileService.deleteFile(projectId, 1L, userId);
 
         verify(projectFileRepository).delete(entity);
     }
@@ -215,7 +206,7 @@ class ProjectFileServiceTest {
                 .thenReturn(Optional.of(regularMember));
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> projectFileService.deleteFile(projectId, 1L, email));
+                () -> projectFileService.deleteFile(projectId, 1L, userId));
         assertEquals(403, ex.getStatus());
         verify(projectFileRepository, never()).delete(any());
     }

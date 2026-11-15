@@ -1,5 +1,12 @@
 package com.taskpilot.users.notifications.controller;
 
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
+import com.taskpilot.infrastructure.dto.ApiResponse;
+import com.taskpilot.users.notifications.dto.NotificationResponse;
+import com.taskpilot.users.notifications.service.NotificationService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
@@ -11,14 +18,6 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
-
-import com.taskpilot.infrastructure.dto.ApiResponse;
-import com.taskpilot.users.notifications.dto.NotificationResponse;
-import com.taskpilot.users.notifications.service.NotificationService;
-
-import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.tags.Tag;
-import lombok.RequiredArgsConstructor;
 
 @Tag(name = "08. Notifications", description = "APIs for user notifications")
 @RestController
@@ -34,20 +33,20 @@ public class NotificationController {
             Authentication authentication,
             @PageableDefault(size = 20) Pageable pageable) {
         return ApiResponse.ok("Notifications retrieved successfully",
-                notificationService.getMyNotifications(authentication.getName(), pageable));
+                notificationService.getMyNotifications(CurrentActorResolver.userId(authentication), pageable));
     }
 
     @Operation(summary = "Get unread notifications count")
     @GetMapping("/my/unread-count")
     public ApiResponse<Long> getUnreadCount(Authentication authentication) {
         return ApiResponse.ok("Unread notifications count retrieved successfully",
-                notificationService.getUnreadCount(authentication.getName()));
+                notificationService.getUnreadCount(CurrentActorResolver.userId(authentication)));
     }
 
     @Operation(summary = "Stream my notifications")
     @GetMapping(value = "/my/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamMyNotifications(Authentication authentication) {
-        return notificationService.streamMyNotifications(authentication.getName());
+        return notificationService.streamMyNotifications(CurrentActorResolver.userId(authentication));
     }
 
     @Operation(summary = "Get notification detail by ID")
@@ -56,7 +55,7 @@ public class NotificationController {
             @PathVariable Long notificationId,
             Authentication authentication) {
         return ApiResponse.ok("Notification retrieved successfully",
-                notificationService.getNotificationById(notificationId, authentication.getName()));
+                notificationService.getNotificationById(notificationId, CurrentActorResolver.userId(authentication)));
     }
 
     @Operation(summary = "Mark one notification as read")
@@ -65,13 +64,13 @@ public class NotificationController {
             @PathVariable Long notificationId,
             Authentication authentication) {
         return ApiResponse.ok("Notification marked as read",
-                notificationService.markAsRead(notificationId, authentication.getName()));
+                notificationService.markAsRead(notificationId, CurrentActorResolver.userId(authentication)));
     }
 
     @Operation(summary = "Mark all notifications as read")
     @PutMapping("/read-all")
     public ApiResponse<Integer> markAllAsRead(Authentication authentication) {
         return ApiResponse.ok("All notifications marked as read",
-                notificationService.markAllAsRead(authentication.getName()));
+                notificationService.markAllAsRead(CurrentActorResolver.userId(authentication)));
     }
 }

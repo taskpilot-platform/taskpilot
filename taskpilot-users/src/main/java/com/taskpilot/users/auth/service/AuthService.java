@@ -1,6 +1,6 @@
 package com.taskpilot.users.auth.service;
 
-import com.taskpilot.infrastructure.config.security.JwtService;
+import com.taskpilot.contracts.user.dto.SecurityChangeReason;
 import com.taskpilot.infrastructure.config.security.oauth2.OAuth2OneTimeCodeStore;
 import com.taskpilot.infrastructure.config.security.oauth2.OAuth2Properties;
 import com.taskpilot.infrastructure.exception.BusinessException;
@@ -12,8 +12,8 @@ import com.taskpilot.users.auth.dto.RegisterRequest;
 import com.taskpilot.users.auth.dto.ResetPasswordRequest;
 import com.taskpilot.users.auth.service.email.EmailService;
 import com.taskpilot.users.common.entity.PasswordResetTokenEntity;
-import com.taskpilot.users.common.entity.RefreshTokenEntity;
 import com.taskpilot.users.common.entity.UserEntity;
+import com.taskpilot.users.common.enums.AccountLifecycle;
 import com.taskpilot.users.common.enums.UserRole;
 import com.taskpilot.users.common.repository.PasswordResetTokenRepository;
 import com.taskpilot.users.common.repository.UserRepository;
@@ -39,13 +39,13 @@ public class AuthService {
     private final UserRepository userRepository;
     private final PasswordResetTokenRepository passwordResetTokenRepository;
     private final PasswordEncoder passwordEncoder;
-    private final JwtService jwtService;
-    private final RefreshTokenService refreshTokenService;
+    private final UserSessionService userSessionService;
     private final EmailService emailService;
     private final PasswordResetThrottleService passwordResetThrottleService;
     private final OAuth2OneTimeCodeStore oAuth2OneTimeCodeStore;
     private final OAuth2Properties oAuth2Properties;
 
+    @Transactional
     public void register(RegisterRequest request) {
         String email = normalizeEmail(request.email());
         if (userRepository.existsByEmailIgnoreCase(email)) {
@@ -57,11 +57,15 @@ public class AuthService {
                 .password(passwordEncoder.encode(request.password()))
                 .fullName(request.fullName())
                 .role(UserRole.USER)
+                .accountState(AccountLifecycle.ACTIVE)
+                .emailVerified(Boolean.FALSE)
+                .tokenVersion(0L)
                 .build();
 
         userRepository.save(newUser);
     }
 
+    @Transactional
     public AuthResponse login(LoginRequest request) {
         String email = normalizeEmail(request.email());
         UserEntity user = userRepository.findByEmail(email)
@@ -70,23 +74,19 @@ public class AuthService {
         if (user.getPassword() == null || !passwordEncoder.matches(request.password(), user.getPassword())) {
             throw new BusinessException(HttpStatus.UNAUTHORIZED.value(), "Invalid email or password");
         }
-        String token = jwtService.generateToken(user.getEmail(), user.getRole().name());
-        RefreshTokenEntity refreshToken = refreshTokenService.createRefreshToken(user);
+        if (!user.isActiveAccount()) {
+            throw new BusinessException(HttpStatus.FORBIDDEN.value(), "Account is not active");
+        }
 
-        return new AuthResponse(token, refreshToken.getToken(), "Bearer", jwtService.getJwtExpiration());
+        return userSessionService.issueSession(user.getId());
     }
 
+    @Transactional
     public AuthResponse exchangeOAuth2Code(String code) {
         Long userId = oAuth2OneTimeCodeStore.consume(code)
                 .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST.value(), "Invalid or expired exchange code"));
 
-        UserEntity user = userRepository.findById(userId)
-                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
-
-        String token = jwtService.generateToken(user.getEmail(), user.getRole().name());
-        RefreshTokenEntity refreshToken = refreshTokenService.createRefreshToken(user);
-
-        return new AuthResponse(token, refreshToken.getToken(), "Bearer", jwtService.getJwtExpiration());
+        return userSessionService.issueSession(userId);
     }
 
     public java.util.List<String> getEnabledOAuth2Providers() {
@@ -100,40 +100,14 @@ public class AuthService {
         return providers;
     }
 
+    @Transactional(noRollbackFor = BusinessException.class)
     public AuthResponse refreshToken(RefreshTokenRequest request) {
-        return refreshTokenService.findByToken(request.refreshToken())
-                .map(refreshTokenService::verifyExpiration)
-                .map(RefreshTokenEntity::getUser)
-                .map(user -> {
-                    String token = jwtService.generateToken(user.getEmail(), user.getRole().name());
-                    return new AuthResponse(token, request.refreshToken(), "Bearer", jwtService.getJwtExpiration());
-                })
-                .orElseThrow(
-                        () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Refresh token is not in database!"));
+        return userSessionService.rotateRefreshToken(request.refreshToken());
     }
 
+    @Transactional
     public void logout(RefreshTokenRequest request, String authorizationHeader) {
-        String accessToken = extractBearerToken(authorizationHeader);
-        if (accessToken != null) {
-            jwtService.revokeToken(accessToken);
-        }
-
-        RefreshTokenEntity refreshToken = refreshTokenService.findByToken(request.refreshToken())
-                .orElse(null);
-
-        if (refreshToken == null) {
-            log.debug("Logout called with non-existing refresh token");
-            return;
-        }
-
-        refreshTokenService.delete(refreshToken);
-    }
-
-    private String extractBearerToken(String authorizationHeader) {
-        if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer ")) {
-            return null;
-        }
-        return authorizationHeader.substring(7);
+        userSessionService.logoutSession(request != null ? request.refreshToken() : null, authorizationHeader);
     }
 
     @Transactional
@@ -154,12 +128,15 @@ public class AuthService {
                     "Reset token is invalid or expired. Please request a new reset link.");
         }
 
-        UserEntity user = tokenEntity.getUser();
-        user.setPassword(passwordEncoder.encode(request.newPassword()));
+        UserEntity lockedUser = userRepository.findByIdForUpdate(tokenEntity.getUser().getId())
+                .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST.value(), "User not found"));
+        lockedUser.setPassword(passwordEncoder.encode(request.newPassword()));
+        userRepository.save(lockedUser);
 
         tokenEntity.setUsed(true);
+        passwordResetTokenRepository.save(tokenEntity);
 
-        refreshTokenService.deleteByUser(user);
+        userSessionService.invalidateAll(lockedUser.getId(), SecurityChangeReason.PASSWORD_RESET);
     }
 
     private void issuePasswordResetTokenAndNotify(UserEntity user) {
@@ -177,7 +154,7 @@ public class AuthService {
         try {
             emailService.sendPasswordResetEmail(user.getEmail(), savedToken.getToken(), passwordResetExpirationMs);
         } catch (Exception ex) {
-            log.error("Failed to send password reset email to {}", user.getEmail(), ex);
+            log.error("Failed to send password reset email to userId={}", user.getId(), ex);
         }
     }
 

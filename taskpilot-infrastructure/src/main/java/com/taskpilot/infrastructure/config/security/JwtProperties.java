@@ -30,6 +30,8 @@ public class JwtProperties {
     public static final long MAX_EXPIRATION_MS = 3_600_000L; // 1 hour upper bound
     public static final int MIN_SECRET_BYTES = 32;
     public static final int MIN_DISTINCT_BYTES = 8;
+    public static final String DEFAULT_ISSUER = "taskpilot";
+    public static final String DEFAULT_AUDIENCE = "taskpilot-api";
 
     static final String KNOWN_PUBLIC_SAMPLE_KEY =
             "404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970";
@@ -47,6 +49,8 @@ public class JwtProperties {
 
     private String secretKey;
     private long expiration = DEFAULT_EXPIRATION_MS;
+    private String issuer = DEFAULT_ISSUER;
+    private String audience = DEFAULT_AUDIENCE;
 
     @Autowired(required = false)
     private Environment environment;
@@ -55,10 +59,19 @@ public class JwtProperties {
         return secretKey == null ? null : secretKey.trim();
     }
 
+    public String getNormalizedIssuer() {
+        return issuer == null ? null : issuer.trim();
+    }
+
+    public String getNormalizedAudience() {
+        return audience == null ? null : audience.trim();
+    }
+
     @PostConstruct
     public void validate() {
         validateSecretKey(secretKey, isNonProdProfileActive());
         validateExpiration(expiration);
+        validateIssuerAndAudience(issuer, audience);
     }
 
     public void validateForProfiles(String... activeProfiles) {
@@ -68,6 +81,7 @@ public class JwtProperties {
                 .anyMatch(p -> "prod".equalsIgnoreCase(p));
         validateSecretKey(secretKey, nonProd && !prod);
         validateExpiration(expiration);
+        validateIssuerAndAudience(issuer, audience);
     }
 
     private boolean isNonProdProfileActive() {
@@ -119,6 +133,15 @@ public class JwtProperties {
         if (expirationMs < MIN_EXPIRATION_MS || expirationMs > MAX_EXPIRATION_MS) {
             throw new IllegalStateException(
                     "JWT expiration must be between " + MIN_EXPIRATION_MS + " and " + MAX_EXPIRATION_MS + " ms");
+        }
+    }
+
+    private static void validateIssuerAndAudience(String rawIssuer, String rawAudience) {
+        if (rawIssuer == null || rawIssuer.isBlank()) {
+            throw new IllegalStateException("JWT issuer must not be blank (application.security.jwt.issuer)");
+        }
+        if (rawAudience == null || rawAudience.isBlank()) {
+            throw new IllegalStateException("JWT audience must not be blank (application.security.jwt.audience)");
         }
     }
 }

@@ -8,7 +8,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.entity.SprintEntity;
@@ -32,14 +31,9 @@ public class TimelineService {
     private final ProjectMemberRepository projectMemberRepository;
     private final SprintRepository sprintRepository;
     private final TaskRepository taskRepository;
-    private final UserIdentityPort userIdentityPort;
 
     @Transactional(readOnly = true)
-    public TimelineResponse getTimeline(Long projectId, String email) {
-        Long userId = userIdentityPort.findByEmail(email)
-                .map(identity -> identity.id())
-                .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"));
-
+    public TimelineResponse getTimeline(Long projectId, Long userId) {
         ProjectEntity project = projectRepository.findById(projectId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Project not found"));
 

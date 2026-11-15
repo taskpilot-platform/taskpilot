@@ -2,6 +2,7 @@ package com.taskpilot.users.admin.service;
 
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.users.admin.dto.AdminCreateUserRequest;
+import com.taskpilot.users.auth.service.UserSessionService;
 import com.taskpilot.users.auth.service.email.EmailService;
 import com.taskpilot.users.common.entity.PasswordResetTokenEntity;
 import com.taskpilot.users.common.entity.UserEntity;
@@ -28,11 +29,12 @@ class AdminUserRecoveryTest {
     @Mock PasswordEncoder passwords;
     @Mock EmailService mail;
     @Mock PasswordResetTokenRepository resets;
+    @Mock UserSessionService userSessionService;
     private AdminUserService service;
 
     @BeforeEach
     void setUp() {
-        service = new AdminUserService(users, passwords, mail, resets);
+        service = new AdminUserService(users, passwords, mail, resets, userSessionService);
     }
 
     @Test

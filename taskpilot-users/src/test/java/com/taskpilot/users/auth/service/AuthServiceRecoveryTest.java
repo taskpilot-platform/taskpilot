@@ -1,6 +1,5 @@
 package com.taskpilot.users.auth.service;
 
-import com.taskpilot.infrastructure.config.security.JwtService;
 import com.taskpilot.infrastructure.config.security.oauth2.OAuth2OneTimeCodeStore;
 import com.taskpilot.infrastructure.config.security.oauth2.OAuth2Properties;
 import com.taskpilot.infrastructure.exception.BusinessException;
@@ -30,8 +29,7 @@ class AuthServiceRecoveryTest {
     @Mock UserRepository users;
     @Mock PasswordResetTokenRepository resets;
     @Mock PasswordEncoder passwords;
-    @Mock JwtService jwt;
-    @Mock RefreshTokenService refresh;
+    @Mock UserSessionService userSessionService;
     @Mock EmailService mail;
     @Mock PasswordResetThrottleService throttle;
     @Mock OAuth2OneTimeCodeStore codes;
@@ -39,7 +37,7 @@ class AuthServiceRecoveryTest {
 
     @BeforeEach
     void setUp() {
-        service = new AuthService(users, resets, passwords, jwt, refresh, mail, throttle,
+        service = new AuthService(users, resets, passwords, userSessionService, mail, throttle,
                 codes, new OAuth2Properties());
     }
 

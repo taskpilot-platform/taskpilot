@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.taskpilot.infrastructure.dto.ApiResponse;
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.projects.sprints.dto.BacklogResponse;
 import com.taskpilot.projects.sprints.dto.BoardResponse;
 import com.taskpilot.projects.sprints.dto.CreateSprintRequest;
@@ -41,7 +42,7 @@ public class SprintController {
             @Valid @RequestBody CreateSprintRequest request,
             Authentication authentication) {
         return ApiResponse.created("Sprint created successfully",
-                sprintService.createSprint(projectId, request, authentication.getName()));
+                sprintService.createSprint(projectId, request, CurrentActorResolver.userId(authentication)));
     }
 
     @GetMapping("/sprints")
@@ -49,7 +50,7 @@ public class SprintController {
             @PathVariable Long projectId,
             Authentication authentication) {
         return ApiResponse.ok("Sprints retrieved successfully",
-                sprintService.listSprints(projectId, authentication.getName()));
+                sprintService.listSprints(projectId, CurrentActorResolver.userId(authentication)));
     }
 
     @PutMapping("/sprints/{sprintId}")
@@ -59,7 +60,7 @@ public class SprintController {
             @Valid @RequestBody UpdateSprintRequest request,
             Authentication authentication) {
         return ApiResponse.ok("Sprint updated successfully",
-                sprintService.updateSprint(projectId, sprintId, request, authentication.getName()));
+                sprintService.updateSprint(projectId, sprintId, request, CurrentActorResolver.userId(authentication)));
     }
 
     @DeleteMapping("/sprints/{sprintId}")
@@ -67,7 +68,7 @@ public class SprintController {
             @PathVariable Long projectId,
             @PathVariable Long sprintId,
             Authentication authentication) {
-        sprintService.deleteSprint(projectId, sprintId, authentication.getName());
+        sprintService.deleteSprint(projectId, sprintId, CurrentActorResolver.userId(authentication));
         return ApiResponse.ok("Sprint deleted successfully", null);
     }
 
@@ -77,7 +78,7 @@ public class SprintController {
             @PathVariable Long sprintId,
             Authentication authentication) {
         return ApiResponse.ok("Sprint started successfully",
-                sprintService.startSprint(projectId, sprintId, authentication.getName()));
+                sprintService.startSprint(projectId, sprintId, CurrentActorResolver.userId(authentication)));
     }
 
     @PostMapping("/sprints/{sprintId}/complete")
@@ -86,7 +87,7 @@ public class SprintController {
             @PathVariable Long sprintId,
             Authentication authentication) {
         return ApiResponse.ok("Sprint completed successfully",
-                sprintService.completeSprint(projectId, sprintId, authentication.getName()));
+                sprintService.completeSprint(projectId, sprintId, CurrentActorResolver.userId(authentication)));
     }
 
     @GetMapping("/backlog")
@@ -94,7 +95,7 @@ public class SprintController {
             @PathVariable Long projectId,
             Authentication authentication) {
         return ApiResponse.ok("Backlog retrieved successfully",
-                sprintService.getBacklog(projectId, authentication.getName()));
+                sprintService.getBacklog(projectId, CurrentActorResolver.userId(authentication)));
     }
 
     @GetMapping("/board")
@@ -102,6 +103,6 @@ public class SprintController {
             @PathVariable Long projectId,
             Authentication authentication) {
         return ApiResponse.ok("Board retrieved successfully",
-                sprintService.getBoard(projectId, authentication.getName()));
+                sprintService.getBoard(projectId, CurrentActorResolver.userId(authentication)));
     }
 }
