@@ -1,0 +1,24 @@
+{
+  "phases": {
+    "P0": {
+      "required": {
+        "com.taskpilot.app.migration.MigrationSchemaIntegrationTest": [
+          "freshPublicMigrationStartsRealBackend",
+          "upgradedPublicMigrationStartsRealBackend"
+        ],
+        "com.taskpilot.app.migration.ReconciledFlywayIntegrationTest": [
+          "normalForwardMigrationDoesNotRequireChangingJavaRecoveryPolicy",
+          "unqualifiedForwardObjectsCannotPassCompleteValidation",
+          "metadataObjectsAreRejectedEvenBeforeHistoryExists"
+        ],
+        "com.taskpilot.ai.rag.RealDocumentPipelineVerificationTest": [
+          "testRealDocxParsing",
+          "testRealMarkdownParsing"
+        ],
+        "com.taskpilot.ai.rag.GoogleAiEmbeddingModelVerificationTest": [
+          "testGoogleAiEmbeddingModelConfiguration"
+        ]
+      }
+    }
+  }
+}

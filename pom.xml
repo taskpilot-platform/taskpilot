@@ -29,6 +29,8 @@
         <tika.version>3.1.0</tika.version>
         <livekit.server.version>0.17.0</livekit.server.version>
         <opentelemetry.logback.appender.version>2.28.1-alpha</opentelemetry.logback.appender.version>
+        <test.excludedGroups>provider-live</test.excludedGroups>
+        <remediation.runId>untracked</remediation.runId>
     </properties>
 
     <modules>
@@ -206,6 +208,10 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
                     <argLine>-Dnet.bytebuddy.experimental=true --enable-preview</argLine>
+                    <excludedGroups>${test.excludedGroups}</excludedGroups>
+                    <systemPropertyVariables>
+                        <remediation.runId>${remediation.runId}</remediation.runId>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
         </plugins>

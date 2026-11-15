@@ -4,6 +4,7 @@ import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.model.googleai.GoogleAiEmbeddingModel;
 import dev.langchain4j.model.output.Response;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -23,6 +24,7 @@ class GoogleAiEmbeddingModelVerificationTest {
     }
 
     @Test
+    @Tag("provider-live")
     @DisplayName("Verify live API generates 768-dimensional vector using gemini-embedding-2")
     void testLiveEmbeddingGenerationDimension() {
         String apiKey = resolveGeminiApiKey();

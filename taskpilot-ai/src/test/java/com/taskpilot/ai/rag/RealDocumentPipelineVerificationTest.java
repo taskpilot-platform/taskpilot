@@ -6,12 +6,18 @@ import com.taskpilot.ai.rag.service.TikaDocumentTextExtractor;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -27,38 +33,41 @@ class RealDocumentPipelineVerificationTest {
     }
 
     @Test
-    @DisplayName("Verify Apache Tika extracts text from real DOCX document in workspace")
-    void testRealDocxParsing() throws Exception {
-        Path docxPath = findWorkspaceFile("DeCuongChiTiet_DoAn2_TaskPilot_revised.docx");
-        Assumptions.assumeTrue(docxPath != null && Files.exists(docxPath), "DOCX file not found in workspace");
+    @DisplayName("Verify Apache Tika extracts text from deterministic DOCX fixture")
+    void testRealDocxParsing(@TempDir Path tempDir) throws Exception {
+        Path docxPath = writeMinimalDocxFixture(
+                tempDir.resolve("taskpilot-fixture.docx"),
+                "TaskPilot RAG pipeline DOCX parsing verification fixture."
+        );
 
         try (InputStream is = Files.newInputStream(docxPath)) {
             String extractedText = textExtractor.extractText(is, docxPath.getFileName().toString(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
 
             assertThat(extractedText).isNotNull().isNotBlank();
-            System.out.println("Extracted DOCX text length: " + extractedText.length() + " characters");
-            System.out.println("DOCX snippet: " + extractedText.substring(0, Math.min(250, extractedText.length())).replace("\n", " "));
-
             assertThat(extractedText).containsIgnoringCase("TaskPilot");
         }
     }
 
     @Test
-    @DisplayName("Verify Apache Tika extracts text from real Markdown document in workspace")
-    void testRealMarkdownParsing() throws Exception {
-        Path mdPath = findWorkspaceFile("architecture.md");
-        Assumptions.assumeTrue(mdPath != null && Files.exists(mdPath), "Markdown file not found in workspace");
+    @DisplayName("Verify Apache Tika extracts text from deterministic Markdown fixture")
+    void testRealMarkdownParsing(@TempDir Path tempDir) throws Exception {
+        Path mdPath = tempDir.resolve("taskpilot-architecture-fixture.md");
+        Files.writeString(
+                mdPath,
+                "# TaskPilot Architecture Fixture\n\nDeterministic Markdown extraction verification for TaskPilot.\n",
+                StandardCharsets.UTF_8
+        );
 
         try (InputStream is = Files.newInputStream(mdPath)) {
             String extractedText = textExtractor.extractText(is, mdPath.getFileName().toString(), "text/markdown");
 
             assertThat(extractedText).isNotNull().isNotBlank();
-            System.out.println("Extracted Markdown text length: " + extractedText.length() + " characters");
             assertThat(extractedText).containsIgnoringCase("TaskPilot");
         }
     }
 
     @Test
+    @Tag("provider-live")
     @DisplayName("Verify End-to-End Real Document RAG Pipeline: Tika -> Chunker -> Gemini Embedding 2 (768-dim) -> Semantic Similarity Search")
     void testEndToEndPipelineWithRealDocument() throws Exception {
         String apiKey = resolveGeminiApiKey();
@@ -160,6 +169,49 @@ class RealDocumentPipelineVerificationTest {
             return 0.0;
         }
         return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+    }
+
+    private Path writeMinimalDocxFixture(Path targetPath, String bodyText) throws IOException {
+        String contentTypesXml = """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+                  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+                  <Default Extension="xml" ContentType="application/xml"/>
+                  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+                </Types>
+                """;
+        String relsXml = """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+                </Relationships>
+                """;
+        String escapedBody = bodyText.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+        String documentXml = """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body>
+                    <w:p>
+                      <w:r>
+                        <w:t>%s</w:t>
+                      </w:r>
+                    </w:p>
+                  </w:body>
+                </w:document>
+                """.formatted(escapedBody);
+
+        try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(targetPath))) {
+            writeZipEntry(zip, "[Content_Types].xml", contentTypesXml);
+            writeZipEntry(zip, "_rels/.rels", relsXml);
+            writeZipEntry(zip, "word/document.xml", documentXml);
+        }
+        return targetPath;
+    }
+
+    private void writeZipEntry(ZipOutputStream zip, String name, String content) throws IOException {
+        zip.putNextEntry(new ZipEntry(name));
+        zip.write(content.getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
     }
 
     private Path findWorkspaceFile(String filename) {
