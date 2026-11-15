@@ -22,7 +22,8 @@ public class JwtService {
         this.jwtProperties = jwtProperties;
         this.tokenBlocklistService = tokenBlocklistService;
         jwtProperties.validate();
-        this.signingKey = Keys.hmacShaKeyFor(jwtProperties.getSecretKey().getBytes(StandardCharsets.UTF_8));
+        this.signingKey = Keys.hmacShaKeyFor(
+                jwtProperties.getNormalizedSecretKey().getBytes(StandardCharsets.UTF_8));
     }
 
     public long getJwtExpiration() {

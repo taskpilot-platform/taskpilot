@@ -57,22 +57,25 @@ class OAuth2AuthorizationRequestRepositoryTest {
 
     @Test
     void twoPendingTabsDoNotOverwriteEachOther() {
+        TestCookieJar jar = new TestCookieJar();
+
         MockHttpServletRequest initTab1 = new MockHttpServletRequest("GET", "/oauth2/authorization/google");
+        jar.attachTo(initTab1);
         MockHttpServletResponse respTab1 = new MockHttpServletResponse();
         repository.saveAuthorizationRequest(sampleRequest("state-tab-1"), initTab1, respTab1);
+        jar.applySetCookies(respTab1.getHeaders("Set-Cookie"));
 
         MockHttpServletRequest initTab2 = new MockHttpServletRequest("GET", "/oauth2/authorization/google");
+        jar.attachTo(initTab2);
         MockHttpServletResponse respTab2 = new MockHttpServletResponse();
         repository.saveAuthorizationRequest(sampleRequest("state-tab-2"), initTab2, respTab2);
-
-        Map<String, Cookie> browserCookies = new LinkedHashMap<>();
-        applySetCookies(respTab1.getHeaders("Set-Cookie"), browserCookies);
-        applySetCookies(respTab2.getHeaders("Set-Cookie"), browserCookies);
+        jar.applySetCookies(respTab2.getHeaders("Set-Cookie"));
 
         MockHttpServletRequest callbackTab1 = new MockHttpServletRequest("GET", "/login/oauth2/code/google");
+        callbackTab1.setServerPort(8080);
         callbackTab1.setParameter("state", "state-tab-1");
         callbackTab1.setParameter("code", "auth-code-tab-1");
-        callbackTab1.setCookies(browserCookies.values().toArray(Cookie[]::new));
+        jar.attachTo(callbackTab1);
 
         OAuth2AuthorizationRequest loaded = repository.loadAuthorizationRequest(callbackTab1);
         assertThat(loaded).isNotNull();
@@ -109,7 +112,7 @@ class OAuth2AuthorizationRequestRepositoryTest {
                 && h.contains("Path=/"));
         assertThat(setCookies).anyMatch(h -> h.startsWith(
                 HttpCookieOAuth2AuthorizationRequestRepository.OAUTH2_REQUEST_COOKIE_PREFIX)
-                && h.contains("Path=/login/oauth2/code")
+                && h.contains("Path=/;")
                 && h.contains("HttpOnly")
                 && h.contains("SameSite=Lax")
                 && h.contains("; Secure"));
@@ -138,15 +141,14 @@ class OAuth2AuthorizationRequestRepositoryTest {
                 .build();
         repository.saveAuthorizationRequest(original, initReq, initResp);
 
-        Map<String, Cookie> jar = new LinkedHashMap<>();
-        applySetCookies(initResp.getHeaders("Set-Cookie"), jar);
-        Cookie[] savedCookies = jar.values().toArray(Cookie[]::new);
+        TestCookieJar jar = new TestCookieJar();
+        jar.applySetCookies(initResp.getHeaders("Set-Cookie"));
 
         MockHttpServletRequest callback = new MockHttpServletRequest("GET", "/login/oauth2/code/google");
         callback.setServerPort(8080);
         callback.setParameter("state", "state-pkce");
         callback.setParameter("code", "auth-code");
-        callback.setCookies(savedCookies);
+        jar.attachTo(callback);
 
         // Nondestructive load
         assertThat(repository.loadAuthorizationRequest(callback)).isNotNull();
@@ -173,29 +175,39 @@ class OAuth2AuthorizationRequestRepositoryTest {
         MockHttpServletResponse initResp = new MockHttpServletResponse();
         repository.saveAuthorizationRequest(sampleRequest("state-bind"), initReq, initResp);
 
-        Map<String, Cookie> jar = new LinkedHashMap<>();
-        applySetCookies(initResp.getHeaders("Set-Cookie"), jar);
-        Cookie[] savedCookies = jar.values().toArray(Cookie[]::new);
+        TestCookieJar jar = new TestCookieJar();
+        jar.applySetCookies(initResp.getHeaders("Set-Cookie"));
 
         // Provider mismatch (/github instead of /google)
         MockHttpServletRequest wrongProvider = new MockHttpServletRequest("GET", "/login/oauth2/code/github");
         wrongProvider.setServerPort(8080);
         wrongProvider.setParameter("state", "state-bind");
-        wrongProvider.setCookies(savedCookies);
+        jar.attachTo(wrongProvider);
         assertThat(repository.loadAuthorizationRequest(wrongProvider)).isNull();
 
-        // Host mismatch
+        // Host mismatch on remove must NOT consume valid state or burn the cookie
         MockHttpServletRequest wrongHost = new MockHttpServletRequest("GET", "/login/oauth2/code/google");
         wrongHost.setServerName("evil.example");
         wrongHost.setServerPort(8080);
         wrongHost.setParameter("state", "state-bind");
-        wrongHost.setCookies(savedCookies);
+        jar.attachTo(wrongHost);
+        MockHttpServletResponse wrongHostResp = new MockHttpServletResponse();
         assertThat(repository.loadAuthorizationRequest(wrongHost)).isNull();
+        assertThat(repository.removeAuthorizationRequest(wrongHost, wrongHostResp)).isNull();
+        assertThat(wrongHostResp.getHeaders("Set-Cookie"))
+                .noneMatch(h -> h.contains(HttpCookieOAuth2AuthorizationRequestRepository.cookieNameForState("state-bind")));
+
+        // Valid callback still succeeds after rejected host-mismatched remove
+        MockHttpServletRequest validAfterWrongHost = new MockHttpServletRequest("GET", "/login/oauth2/code/google");
+        validAfterWrongHost.setServerPort(8080);
+        validAfterWrongHost.setParameter("state", "state-bind");
+        jar.attachTo(validAfterWrongHost);
+        assertThat(repository.loadAuthorizationRequest(validAfterWrongHost)).isNotNull();
 
         // Oversize state rejected before store lookup
         MockHttpServletRequest oversizeState = new MockHttpServletRequest("GET", "/login/oauth2/code/google");
         oversizeState.setParameter("state", "s".repeat(300));
-        oversizeState.setCookies(savedCookies);
+        jar.attachTo(oversizeState);
         assertThat(repository.loadAuthorizationRequest(oversizeState)).isNull();
 
         // Tampered cookie value rejected
@@ -210,25 +222,106 @@ class OAuth2AuthorizationRequestRepositoryTest {
     }
 
     @Test
+    void defaultAndNonDefaultPortMismatchesAreRejectedAndOriginalRequestRemainsUsable() {
+        // 1) Stored non-default :8080 rejected on default port 80 / 443 even without ':port' in Host header
+        MockHttpServletRequest initNonDefault = new MockHttpServletRequest("GET", "/oauth2/authorization/google");
+        MockHttpServletResponse respNonDefault = new MockHttpServletResponse();
+        repository.saveAuthorizationRequest(sampleRequest("state-8080"), initNonDefault, respNonDefault);
+
+        TestCookieJar jar = new TestCookieJar();
+        jar.applySetCookies(respNonDefault.getHeaders("Set-Cookie"));
+
+        MockHttpServletRequest defaultHttpCallback = new MockHttpServletRequest("GET", "/login/oauth2/code/google");
+        defaultHttpCallback.setScheme("http");
+        defaultHttpCallback.setServerName("localhost");
+        defaultHttpCallback.setServerPort(80);
+        defaultHttpCallback.addHeader("Host", "localhost");
+        defaultHttpCallback.setParameter("state", "state-8080");
+        jar.attachTo(defaultHttpCallback);
+
+        MockHttpServletResponse badPortResp = new MockHttpServletResponse();
+        assertThat(repository.loadAuthorizationRequest(defaultHttpCallback)).isNull();
+        assertThat(repository.removeAuthorizationRequest(defaultHttpCallback, badPortResp)).isNull();
+        assertThat(badPortResp.getHeaders("Set-Cookie"))
+                .noneMatch(h -> h.contains(HttpCookieOAuth2AuthorizationRequestRepository.cookieNameForState("state-8080")));
+
+        // Original callback on :8080 must still load and consume cleanly
+        MockHttpServletRequest valid8080 = new MockHttpServletRequest("GET", "/login/oauth2/code/google");
+        valid8080.setServerPort(8080);
+        valid8080.setParameter("state", "state-8080");
+        jar.attachTo(valid8080);
+        assertThat(repository.loadAuthorizationRequest(valid8080)).isNotNull();
+        assertThat(repository.removeAuthorizationRequest(valid8080, new MockHttpServletResponse())).isNotNull();
+
+        // 2) Stored default HTTPS (implicit 443) accepts implicit 443 without ':443', rejects :8443 and HTTP 80
+        MockHttpServletRequest initDefaultHttps = new MockHttpServletRequest("GET", "/oauth2/authorization/google");
+        MockHttpServletResponse respDefaultHttps = new MockHttpServletResponse();
+        OAuth2AuthorizationRequest defaultHttpsReq = OAuth2AuthorizationRequest.authorizationCode()
+                .authorizationUri("https://accounts.google.com/o/oauth2/v2/auth")
+                .clientId("test-client-id")
+                .redirectUri("https://app.taskpilot.example/login/oauth2/code/google")
+                .scopes(Set.of("openid", "email"))
+                .state("state-443")
+                .attributes(attrs -> attrs.put("registration_id", "google"))
+                .build();
+        repository.saveAuthorizationRequest(defaultHttpsReq, initDefaultHttps, respDefaultHttps);
+        jar.applySetCookies(respDefaultHttps.getHeaders("Set-Cookie"));
+
+        MockHttpServletRequest wrongHttpsPort = new MockHttpServletRequest("GET", "/login/oauth2/code/google");
+        wrongHttpsPort.setScheme("https");
+        wrongHttpsPort.setServerName("app.taskpilot.example");
+        wrongHttpsPort.setServerPort(8443);
+        wrongHttpsPort.addHeader("Host", "app.taskpilot.example:8443");
+        wrongHttpsPort.setParameter("state", "state-443");
+        jar.attachTo(wrongHttpsPort);
+        assertThat(repository.loadAuthorizationRequest(wrongHttpsPort)).isNull();
+
+        MockHttpServletRequest validDefaultHttps = new MockHttpServletRequest("GET", "/login/oauth2/code/google");
+        validDefaultHttps.setScheme("https");
+        validDefaultHttps.setServerName("app.taskpilot.example");
+        validDefaultHttps.setServerPort(443);
+        validDefaultHttps.addHeader("Host", "app.taskpilot.example");
+        validDefaultHttps.setParameter("state", "state-443");
+        jar.attachTo(validDefaultHttps);
+        assertThat(repository.loadAuthorizationRequest(validDefaultHttps)).isNotNull();
+    }
+
+    @Test
     void perBrowserPendingLimitRejectsFloodAfterPruningStaleCookies() {
         properties.setMaxPendingCookiesPerBrowser(2);
-        Map<String, Cookie> jar = new LinkedHashMap<>();
+        TestCookieJar jar = new TestCookieJar();
 
         for (int i = 1; i <= 2; i++) {
             MockHttpServletRequest req = new MockHttpServletRequest("GET", "/oauth2/authorization/google");
-            req.setCookies(jar.values().toArray(Cookie[]::new));
+            jar.attachTo(req);
             MockHttpServletResponse resp = new MockHttpServletResponse();
             repository.saveAuthorizationRequest(sampleRequest("state-" + i), req, resp);
-            applySetCookies(resp.getHeaders("Set-Cookie"), jar);
+            jar.applySetCookies(resp.getHeaders("Set-Cookie"));
         }
 
+        // Proof 1: active cookies obey RFC 6265 Path and block the 3rd pending tab
         MockHttpServletRequest thirdReq = new MockHttpServletRequest("GET", "/oauth2/authorization/google");
-        thirdReq.setCookies(jar.values().toArray(Cookie[]::new));
+        jar.attachTo(thirdReq);
+        assertThat(thirdReq.getCookies()).isNotNull().hasSize(2);
         MockHttpServletResponse thirdResp = new MockHttpServletResponse();
-
         assertThatThrownBy(() -> repository.saveAuthorizationRequest(sampleRequest("state-3"), thirdReq, thirdResp))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Too many pending");
+
+        // Proof 2: when one pending request becomes stale in DB (consumed/expired), initiating again
+        // prunes the stale cookie with Max-Age=0 and allows the new initiation
+        store.markConsumedByState("state-1");
+        String staleCookieName = HttpCookieOAuth2AuthorizationRequestRepository.cookieNameForState("state-1");
+
+        MockHttpServletRequest retryReq = new MockHttpServletRequest("GET", "/oauth2/authorization/google");
+        jar.attachTo(retryReq);
+        MockHttpServletResponse retryResp = new MockHttpServletResponse();
+        repository.saveAuthorizationRequest(sampleRequest("state-3"), retryReq, retryResp);
+
+        assertThat(retryResp.getHeaders("Set-Cookie"))
+                .anyMatch(h -> h.startsWith(staleCookieName + "=;") && h.contains("Max-Age=0") && h.contains("Path=/"));
+        jar.applySetCookies(retryResp.getHeaders("Set-Cookie"));
+        assertThat(jar.cookiesForPath("/oauth2/authorization/google")).hasSize(2);
     }
 
     private static OAuth2AuthorizationRequest sampleRequest(String state) {
@@ -250,19 +343,64 @@ class OAuth2AuthorizationRequestRepositoryTest {
         }
     }
 
-    private static void applySetCookies(List<String> setCookieHeaders, Map<String, Cookie> jar) {
-        for (String header : setCookieHeaders) {
-            String nameValue = header.split(";", 2)[0];
-            int eq = nameValue.indexOf('=');
-            if (eq > 0) {
+    private static final class TestCookieJar {
+        private record StoredCookie(String name, String value, String path) {}
+
+        private final Map<String, StoredCookie> cookies = new LinkedHashMap<>();
+
+        void applySetCookies(List<String> setCookieHeaders) {
+            for (String header : setCookieHeaders) {
+                String[] parts = header.split(";");
+                String nameValue = parts[0];
+                int eq = nameValue.indexOf('=');
+                if (eq <= 0) {
+                    continue;
+                }
                 String name = nameValue.substring(0, eq).trim();
                 String value = nameValue.substring(eq + 1).trim();
-                if (header.contains("Max-Age=0")) {
-                    jar.remove(name);
+                String path = "/";
+                boolean expired = false;
+                for (int i = 1; i < parts.length; i++) {
+                    String attr = parts[i].trim();
+                    if (attr.regionMatches(true, 0, "Path=", 0, 5)) {
+                        path = attr.substring(5).trim();
+                    } else if (attr.equalsIgnoreCase("Max-Age=0")) {
+                        expired = true;
+                    }
+                }
+                if (expired) {
+                    cookies.remove(name + "|" + path);
                 } else {
-                    jar.put(name, new Cookie(name, value));
+                    cookies.put(name + "|" + path, new StoredCookie(name, value, path));
                 }
             }
+        }
+
+        List<Cookie> cookiesForPath(String requestPath) {
+            return cookies.values().stream()
+                    .filter(c -> matchesPath(requestPath, c.path()))
+                    .map(c -> new Cookie(c.name(), c.value()))
+                    .toList();
+        }
+
+        void attachTo(MockHttpServletRequest request) {
+            List<Cookie> matching = cookiesForPath(request.getRequestURI());
+            if (!matching.isEmpty()) {
+                request.setCookies(matching.toArray(Cookie[]::new));
+            }
+        }
+
+        private static boolean matchesPath(String requestPath, String cookiePath) {
+            if (requestPath == null || cookiePath == null) {
+                return false;
+            }
+            if ("/".equals(cookiePath) || requestPath.equals(cookiePath)) {
+                return true;
+            }
+            if (!requestPath.startsWith(cookiePath)) {
+                return false;
+            }
+            return cookiePath.endsWith("/") || requestPath.charAt(cookiePath.length()) == '/';
         }
     }
 
@@ -270,6 +408,14 @@ class OAuth2AuthorizationRequestRepositoryTest {
         private record Entry(SaveCommand command, Instant expiresAt, boolean consumed) {}
 
         private final Map<String, Entry> entries = new ConcurrentHashMap<>();
+
+        void markConsumedByState(String state) {
+            entries.forEach((handle, entry) -> {
+                if (state.equals(entry.command().authorizationRequest().getState())) {
+                    entries.put(handle, new Entry(entry.command(), entry.expiresAt(), true));
+                }
+            });
+        }
 
         @Override
         public StoredHandle put(SaveCommand command) {

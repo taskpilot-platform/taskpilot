@@ -51,6 +51,10 @@ public class JwtProperties {
     @Autowired(required = false)
     private Environment environment;
 
+    public String getNormalizedSecretKey() {
+        return secretKey == null ? null : secretKey.trim();
+    }
+
     @PostConstruct
     public void validate() {
         validateSecretKey(secretKey, isNonProdProfileActive());
@@ -87,7 +91,7 @@ public class JwtProperties {
             throw new IllegalStateException("JWT signing key uses the forbidden public sample key");
         }
 
-        byte[] bytes = rawKey.getBytes(StandardCharsets.UTF_8);
+        byte[] bytes = trimmed.getBytes(StandardCharsets.UTF_8);
         if (bytes.length < MIN_SECRET_BYTES) {
             throw new IllegalStateException(
                     "JWT signing key must be at least " + MIN_SECRET_BYTES + " UTF-8 bytes");

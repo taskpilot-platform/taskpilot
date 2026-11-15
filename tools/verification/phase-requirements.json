@@ -31,16 +31,25 @@
           "unqualifiedForwardObjectsCannotPassCompleteValidation",
           "metadataObjectsAreRejectedEvenBeforeHistoryExists"
         ],
+        "com.taskpilot.ai.rag.RealDocumentPipelineVerificationTest": [
+          "testRealDocxParsing",
+          "testRealMarkdownParsing"
+        ],
+        "com.taskpilot.ai.rag.GoogleAiEmbeddingModelVerificationTest": [
+          "testGoogleAiEmbeddingModelConfiguration"
+        ],
         "com.taskpilot.infrastructure.config.security.oauth2.OAuth2AuthorizationRequestRepositoryTest": [
           "legacySerializedBenignCookieIsRejectedWithoutDeserializing",
           "twoPendingTabsDoNotOverwriteEachOther",
           "validCallbackLoadsNondestructivelyConsumesOnceAndAllowsHarmlessHandlerCleanup",
+          "defaultAndNonDefaultPortMismatchesAreRejectedAndOriginalRequestRemainsUsable",
           "perBrowserPendingLimitRejectsFloodAfterPruningStaleCookies"
         ],
         "com.taskpilot.infrastructure.config.security.oauth2.OAuth2AuthorizationRequestStoreIntegrationTest": [
           "nondestructiveLoadAndAtomicConsumeAcrossTwoStoreInstancesPreservePkceAndOidc",
           "concurrentDoubleConsumeHasExactlyOneWinner",
           "concurrentPutEnforcesCapacityLimitWithoutSilentOverflow",
+          "concurrentTwelvePutCallsSucceedWithoutExhaustingSerializationRetries",
           "serverOnlyTableDeniesRestrictedApiRolesWhilePreservingOwnerAccess"
         ],
         "com.taskpilot.infrastructure.config.security.JwtPropertiesTest": [

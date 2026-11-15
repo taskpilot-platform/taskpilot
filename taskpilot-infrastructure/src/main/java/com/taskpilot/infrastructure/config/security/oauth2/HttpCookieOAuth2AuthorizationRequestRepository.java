@@ -38,7 +38,7 @@ public class HttpCookieOAuth2AuthorizationRequestRepository
     public static final String OAUTH2_AUTHORIZATION_REQUEST_COOKIE_NAME = "tp_oauth2_auth_req";
     public static final String OAUTH2_REQUEST_COOKIE_PREFIX = "tp_oauth2_req_";
 
-    private static final String CALLBACK_COOKIE_PATH = "/login/oauth2/code";
+    private static final String REQUEST_COOKIE_PATH = "/";
     private static final String LEGACY_COOKIE_PATH = "/";
     private static final int NONCE_BYTES = 32;
     private static final int MAX_STATE_LENGTH = 256;
@@ -71,7 +71,7 @@ public class HttpCookieOAuth2AuthorizationRequestRepository
         if (authorizationRequest == null) {
             String state = extractBoundedState(request);
             if (state != null) {
-                expireCookie(response, cookieNameForState(state), CALLBACK_COOKIE_PATH);
+                expireCookie(response, cookieNameForState(state), REQUEST_COOKIE_PATH);
             }
             return;
         }
@@ -100,7 +100,7 @@ public class HttpCookieOAuth2AuthorizationRequestRepository
 
         String cookieName = cookieNameForState(state);
         String cookieValue = stored.handle() + "." + browserNonce;
-        addCookie(response, cookieName, cookieValue, oAuth2Properties.getRequestTtlSeconds(), CALLBACK_COOKIE_PATH);
+        addCookie(response, cookieName, cookieValue, oAuth2Properties.getRequestTtlSeconds(), REQUEST_COOKIE_PATH);
     }
 
     @Override
@@ -109,16 +109,24 @@ public class HttpCookieOAuth2AuthorizationRequestRepository
             HttpServletResponse response) {
         expireCookie(response, OAUTH2_AUTHORIZATION_REQUEST_COOKIE_NAME, LEGACY_COOKIE_PATH);
 
-        String state = extractBoundedState(request);
-        if (state != null) {
-            expireCookie(response, cookieNameForState(state), CALLBACK_COOKIE_PATH);
-        }
-
         Optional<ParsedCallback> parsed = parseCallbackRequest(request);
         if (parsed.isEmpty()) {
+            String state = extractBoundedState(request);
+            if (state != null) {
+                expireCookie(response, cookieNameForState(state), REQUEST_COOKIE_PATH);
+            }
             return null;
         }
         ParsedCallback cb = parsed.get();
+        Optional<OAuth2AuthorizationRequest> loaded = store.load(cb.lookupKey());
+        if (loaded.isPresent() && !matchesCallbackContext(request, loaded.get(), cb.provider())) {
+            return null;
+        }
+
+        expireCookie(response, cookieNameForState(cb.lookupKey().state()), REQUEST_COOKIE_PATH);
+        if (loaded.isEmpty()) {
+            return null;
+        }
         return store.consume(cb.lookupKey())
                 .filter(authReq -> matchesCallbackContext(request, authReq, cb.provider()))
                 .orElse(null);
@@ -137,7 +145,7 @@ public class HttpCookieOAuth2AuthorizationRequestRepository
             }
             CookieTokens tokens = parseCookieTokens(cookie.getValue());
             if (tokens == null || !store.isActive(tokens.handle(), tokens.browserNonce())) {
-                expireCookie(response, name, CALLBACK_COOKIE_PATH);
+                expireCookie(response, name, REQUEST_COOKIE_PATH);
                 continue;
             }
             activeCount++;
@@ -197,13 +205,9 @@ public class HttpCookieOAuth2AuthorizationRequestRepository
         if (request.getServerName() == null || !request.getServerName().equalsIgnoreCase(storedUri.getHost())) {
             return false;
         }
-        String hostHeader = request.getHeader("Host");
         int storedPort = effectivePort(storedUri.getScheme(), storedUri.getPort());
         int reqPort = effectivePort(request.getScheme(), request.getServerPort());
-        if ((hostHeader != null && hostHeader.contains(":")) || (reqPort != 80 && reqPort != 443)) {
-            return reqPort == storedPort;
-        }
-        return true;
+        return reqPort == storedPort;
     }
 
     private static int effectivePort(String scheme, int port) {

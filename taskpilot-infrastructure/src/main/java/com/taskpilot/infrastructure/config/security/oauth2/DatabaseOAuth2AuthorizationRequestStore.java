@@ -4,7 +4,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -19,7 +18,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
-import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -40,14 +38,14 @@ import java.util.Set;
  * PostgreSQL-backed OAuth2 authorization request store.
  * Uses SHA-256 hashes of opaque handle, browser nonce, and OAuth state,
  * bounded allowlist JSON payload (preserving PKCE & OIDC metadata),
- * SERIALIZABLE capacity enforcement, and single-SQL atomic consume.
+ * transaction-scoped advisory-lock capacity serialization, and single-SQL atomic consume.
  */
 @Slf4j
 @Service
 public class DatabaseOAuth2AuthorizationRequestStore implements OAuth2AuthorizationRequestStore {
 
     private static final int TOKEN_BYTES = 32;
-    private static final int MAX_SERIALIZATION_RETRIES = 6;
+    private static final long PUT_CAPACITY_ADVISORY_LOCK_KEY = 84170043L;
     private static final int MAX_PAYLOAD_JSON_BYTES = 16_384;
     private static final Duration CONSUMED_RETENTION = Duration.ofMinutes(5);
 
@@ -77,7 +75,6 @@ public class DatabaseOAuth2AuthorizationRequestStore implements OAuth2Authorizat
     private final OAuth2AuthorizationRequestJpaRepository repository;
     private final JdbcTemplate jdbcTemplate;
     private final OAuth2Properties oAuth2Properties;
-    private final TransactionTemplate serializableTx;
     private final TransactionTemplate writeTx;
     private final Clock clock;
 
@@ -101,9 +98,6 @@ public class DatabaseOAuth2AuthorizationRequestStore implements OAuth2Authorizat
         this.oAuth2Properties = oAuth2Properties;
         this.clock = clock;
 
-        this.serializableTx = new TransactionTemplate(transactionManager);
-        this.serializableTx.setIsolationLevel(TransactionDefinition.ISOLATION_SERIALIZABLE);
-
         this.writeTx = new TransactionTemplate(transactionManager);
         this.writeTx.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
     }
@@ -117,47 +111,44 @@ public class DatabaseOAuth2AuthorizationRequestStore implements OAuth2Authorizat
         String handle = randomToken();
         String handleHash = sha256Hex(handle);
 
-        for (int attempt = 1; attempt <= MAX_SERIALIZATION_RETRIES; attempt++) {
-            try {
-                Instant expiresAt = serializableTx.execute(status -> {
-                    Instant now = clock.instant();
-                    purgeExpiredInternal(now);
-                    long activeCount = countActiveInternal(now);
-                    if (activeCount >= oAuth2Properties.getMaxPendingRequests()) {
-                        throw new IllegalStateException("OAuth2 pending authorization request capacity exceeded");
-                    }
-                    Instant exp = now.plusSeconds(oAuth2Properties.getRequestTtlSeconds());
-                    try {
-                        jdbcTemplate.update(
-                                """
-                                INSERT INTO public.oauth2_authorization_requests
-                                    (handle_hash, nonce_hash, state_hash, provider, purpose, target_user_id,
-                                     redirect_uri, payload_json, created_at, expires_at)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                """,
-                                handleHash,
-                                nonceHash,
-                                stateHash,
-                                command.provider(),
-                                command.purpose().name(),
-                                command.targetUserId(),
-                                command.callbackRedirectUri(),
-                                payloadJson,
-                                toUtcOffset(now),
-                                toUtcOffset(exp));
-                    } catch (DuplicateKeyException dup) {
-                        throw new IllegalStateException("Duplicate OAuth2 authorization state", dup);
-                    }
-                    return exp;
-                });
-                return new StoredHandle(handle, expiresAt);
-            } catch (ConcurrencyFailureException ex) {
-                if (attempt == MAX_SERIALIZATION_RETRIES || !isSerializationFailure(ex)) {
-                    throw ex;
-                }
+        Instant expiresAt = writeTx.execute(status -> {
+            jdbcTemplate.execute("SET LOCAL statement_timeout = '5s'");
+            jdbcTemplate.queryForObject(
+                    "SELECT pg_advisory_xact_lock(?)",
+                    Object.class,
+                    PUT_CAPACITY_ADVISORY_LOCK_KEY);
+
+            Instant now = clock.instant();
+            purgeExpiredInternal(now);
+            long activeCount = countActiveInternal(now);
+            if (activeCount >= oAuth2Properties.getMaxPendingRequests()) {
+                throw new IllegalStateException("OAuth2 pending authorization request capacity exceeded");
             }
-        }
-        throw new IllegalStateException("Unable to store OAuth2 authorization request after serialization retries");
+            Instant exp = now.plusSeconds(oAuth2Properties.getRequestTtlSeconds());
+            try {
+                jdbcTemplate.update(
+                        """
+                        INSERT INTO public.oauth2_authorization_requests
+                            (handle_hash, nonce_hash, state_hash, provider, purpose, target_user_id,
+                             redirect_uri, payload_json, created_at, expires_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        handleHash,
+                        nonceHash,
+                        stateHash,
+                        command.provider(),
+                        command.purpose().name(),
+                        command.targetUserId(),
+                        command.callbackRedirectUri(),
+                        payloadJson,
+                        toUtcOffset(now),
+                        toUtcOffset(exp));
+            } catch (DuplicateKeyException dup) {
+                throw new IllegalStateException("Duplicate OAuth2 authorization state", dup);
+            }
+            return exp;
+        });
+        return new StoredHandle(handle, expiresAt);
     }
 
     @Override
@@ -466,17 +457,6 @@ public class DatabaseOAuth2AuthorizationRequestStore implements OAuth2Authorizat
             throw new IllegalArgumentException(fieldName + " exceeds maximum length of " + maxLength);
         }
         return value;
-    }
-
-    private static boolean isSerializationFailure(Throwable throwable) {
-        Throwable cursor = throwable;
-        while (cursor != null) {
-            if (cursor instanceof SQLException sqlEx && "40001".equals(sqlEx.getSQLState())) {
-                return true;
-            }
-            cursor = cursor.getCause();
-        }
-        return false;
     }
 
     private static OffsetDateTime toUtcOffset(Instant instant) {

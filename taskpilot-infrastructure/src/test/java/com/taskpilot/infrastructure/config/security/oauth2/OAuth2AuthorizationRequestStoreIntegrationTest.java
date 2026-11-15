@@ -243,6 +243,37 @@ class OAuth2AuthorizationRequestStoreIntegrationTest {
 
     @Test
     @Timeout(60)
+    void concurrentTwelvePutCallsSucceedWithoutExhaustingSerializationRetries() throws Exception {
+        properties.setMaxPendingRequests(100);
+        int threads = 12;
+        CountDownLatch ready = new CountDownLatch(threads);
+        CountDownLatch go = new CountDownLatch(1);
+        try (ExecutorService pool = Executors.newFixedThreadPool(threads)) {
+            List<Future<StoredHandle>> futures = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                final int idx = i;
+                futures.add(pool.submit(() -> {
+                    ready.countDown();
+                    go.await();
+                    OAuth2AuthorizationRequest req = sampleRequest("burst-state-" + idx);
+                    return storeA.put(new SaveCommand(req, "google", Purpose.LOGIN, null, "burst-nonce-" + idx, req.getRedirectUri()));
+                }));
+            }
+            ready.await();
+            go.countDown();
+
+            for (Future<StoredHandle> f : futures) {
+                assertThat(f.get().handle()).isNotBlank();
+            }
+            Long activeCount = jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM public.oauth2_authorization_requests WHERE consumed_at IS NULL",
+                    Long.class);
+            assertThat(activeCount).isEqualTo((long) threads);
+        }
+    }
+
+    @Test
+    @Timeout(60)
     void expiredRequestFailsLookupAndPurgeCleansUpExpiredRows() {
         OAuth2AuthorizationRequest req = sampleRequest("state-ttl");
         StoredHandle handle = storeA.put(new SaveCommand(

@@ -23,8 +23,10 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -54,50 +56,75 @@ class OAuth2CallbackAndStartupIntegrationTest {
                     .followRedirects(HttpClient.Redirect.NEVER)
                     .build();
 
-            // 1. Initiate two simultaneous OAuth2 tabs on instance 1 (shared external ingress Host)
+            // 1. Initiate two simultaneous OAuth2 tabs on instance 1 using an RFC 6265 path-matching cookie jar
             int ingressPort = 18080;
+            Rfc6265CookieJar cookieJar = new Rfc6265CookieJar();
+
             RawHttpResponse initTab1 = sendGetWithHost(
-                    port1, ingressPort, "/oauth2/authorization/google", null);
+                    port1, ingressPort, "/oauth2/authorization/google", cookieJar.headerForPath("/oauth2/authorization/google"));
             assertThat(initTab1.statusCode()).isEqualTo(302);
             String state1 = extractQueryParam(initTab1.firstHeader("Location"), "state");
-            String cookie1 = extractOpaqueRequestCookie(initTab1.headers("Set-Cookie"));
-            assertThat(cookie1).startsWith("tp_oauth2_req_");
+            cookieJar.applySetCookies(initTab1.headers("Set-Cookie"));
+            assertThat(cookieJar.headerForPath("/oauth2/authorization/google")).contains("tp_oauth2_req_");
 
             RawHttpResponse initTab2 = sendGetWithHost(
-                    port1, ingressPort, "/oauth2/authorization/google", cookie1);
+                    port1, ingressPort, "/oauth2/authorization/google", cookieJar.headerForPath("/oauth2/authorization/google"));
             assertThat(initTab2.statusCode()).isEqualTo(302);
             String state2 = extractQueryParam(initTab2.firstHeader("Location"), "state");
-            String cookie2 = extractOpaqueRequestCookie(initTab2.headers("Set-Cookie"));
+            cookieJar.applySetCookies(initTab2.headers("Set-Cookie"));
             assertThat(state2).isNotEqualTo(state1);
-            assertThat(cookie2).isNotEqualTo(cookie1);
 
             Long pendingBefore = jdbc.queryForObject(
                     "SELECT count(*) FROM public.oauth2_authorization_requests WHERE consumed_at IS NULL",
                     Long.class);
             assertThat(pendingBefore).isEqualTo(2L);
 
-            // 2. Callback for tab 1 hits instance 2 (cross-instance!), sending both cookies.
+            // 1b. With max-pending-cookies-per-browser=2, initiating a 3rd active tab is blocked because RFC 6265 sends both cookies
+            RawHttpResponse initTab3Flood = sendGetWithHost(
+                    port1, ingressPort, "/oauth2/authorization/google", cookieJar.headerForPath("/oauth2/authorization/google"));
+            assertThat(initTab3Flood.statusCode()).isGreaterThanOrEqualTo(400);
+            Long pendingAfterFlood = jdbc.queryForObject(
+                    "SELECT count(*) FROM public.oauth2_authorization_requests WHERE consumed_at IS NULL",
+                    Long.class);
+            assertThat(pendingAfterFlood).isEqualTo(2L);
+
+            // 1c. Mismatched port callback must be rejected without burning tab 1's valid DB state
+            String encodedState1 = URLEncoder.encode(state1, StandardCharsets.UTF_8);
+            RawHttpResponse wrongPortTab1 = sendGetWithHost(
+                    port2, 9999,
+                    "/login/oauth2/code/google?error=access_denied&state=" + encodedState1,
+                    cookieJar.headerForPath("/login/oauth2/code/google"));
+            assertThat(wrongPortTab1.statusCode()).isEqualTo(302);
+            assertThat(wrongPortTab1.firstHeader("Location"))
+                    .isEqualTo("http://localhost:5173/auth/callback?error=invalid_state");
+            Long pendingAfterWrongPort = jdbc.queryForObject(
+                    "SELECT count(*) FROM public.oauth2_authorization_requests WHERE consumed_at IS NULL",
+                    Long.class);
+            assertThat(pendingAfterWrongPort).isEqualTo(2L);
+
+            // 2. Callback for tab 1 hits instance 2 (cross-instance!), sending RFC 6265 jar cookies.
             // Uses error=access_denied so OAuth2LoginAuthenticationFilter consumes the DB row before
             // OAuth2LoginAuthenticationProvider fails fast locally with zero external provider HTTP calls.
-            String encodedState1 = URLEncoder.encode(state1, StandardCharsets.UTF_8);
             RawHttpResponse callbackTab1 = sendGetWithHost(
                     port2, ingressPort,
                     "/login/oauth2/code/google?error=access_denied&state=" + encodedState1,
-                    cookie1 + "; " + cookie2);
+                    cookieJar.headerForPath("/login/oauth2/code/google"));
             assertThat(callbackTab1.statusCode()).isEqualTo(302);
             String redirect1 = callbackTab1.firstHeader("Location");
             assertThat(redirect1).isEqualTo("http://localhost:5173/auth/callback?error=access_denied");
+            String staleCookie1Header = cookieJar.headerForPath("/login/oauth2/code/google");
+            cookieJar.applySetCookies(callbackTab1.headers("Set-Cookie"));
 
             Long pendingAfterTab1 = jdbc.queryForObject(
                     "SELECT count(*) FROM public.oauth2_authorization_requests WHERE consumed_at IS NULL",
                     Long.class);
             assertThat(pendingAfterTab1).isEqualTo(1L);
 
-            // 3. Replaying tab 1 callback fails as invalid_state
+            // 3. Replaying tab 1 callback (even with previously captured cookie) fails as invalid_state
             RawHttpResponse replayTab1 = sendGetWithHost(
                     port2, ingressPort,
                     "/login/oauth2/code/google?error=access_denied&state=" + encodedState1,
-                    cookie1 + "; " + cookie2);
+                    staleCookie1Header);
             assertThat(replayTab1.statusCode()).isEqualTo(302);
             assertThat(replayTab1.firstHeader("Location"))
                     .isEqualTo("http://localhost:5173/auth/callback?error=invalid_state");
@@ -107,10 +134,11 @@ class OAuth2CallbackAndStartupIntegrationTest {
             RawHttpResponse callbackTab2 = sendGetWithHost(
                     port1, ingressPort,
                     "/login/oauth2/code/google?error=access_denied&state=" + encodedState2,
-                    cookie2);
+                    cookieJar.headerForPath("/login/oauth2/code/google"));
             assertThat(callbackTab2.statusCode()).isEqualTo(302);
             assertThat(callbackTab2.firstHeader("Location"))
                     .isEqualTo("http://localhost:5173/auth/callback?error=access_denied");
+            cookieJar.applySetCookies(callbackTab2.headers("Set-Cookie"));
 
             Long pendingFinal = jdbc.queryForObject(
                     "SELECT count(*) FROM public.oauth2_authorization_requests WHERE consumed_at IS NULL",
@@ -158,6 +186,7 @@ class OAuth2CallbackAndStartupIntegrationTest {
                 "--application.security.oauth2.google.client-secret=dummy-google-client-secret",
                 "--application.security.oauth2.github.client-id=",
                 "--application.security.oauth2.github.client-secret=",
+                "--application.security.oauth2.max-pending-cookies-per-browser=2",
                 "--ai.gemini.api-key=local-dummy-not-a-secret",
                 "--ai.gemini.api-keys=",
                 "--ai.groq.enabled=false",
@@ -245,12 +274,56 @@ class OAuth2CallbackAndStartupIntegrationTest {
         }
     }
 
-    private static String extractOpaqueRequestCookie(List<String> setCookieHeaders) {
-        return setCookieHeaders.stream()
-                .map(h -> h.split(";", 2)[0].trim())
-                .filter(nv -> nv.startsWith("tp_oauth2_req_") && !nv.endsWith("="))
-                .findFirst()
-                .orElseThrow();
+    private static final class Rfc6265CookieJar {
+        private record Entry(String name, String value, String path) {}
+
+        private final Map<String, Entry> store = new LinkedHashMap<>();
+
+        void applySetCookies(List<String> setCookieHeaders) {
+            for (String header : setCookieHeaders) {
+                String[] parts = header.split(";");
+                String nv = parts[0];
+                int eq = nv.indexOf('=');
+                if (eq <= 0) {
+                    continue;
+                }
+                String name = nv.substring(0, eq).trim();
+                String value = nv.substring(eq + 1).trim();
+                String path = "/";
+                boolean expire = false;
+                for (int i = 1; i < parts.length; i++) {
+                    String attr = parts[i].trim();
+                    if (attr.regionMatches(true, 0, "Path=", 0, 5)) {
+                        path = attr.substring(5).trim();
+                    } else if (attr.equalsIgnoreCase("Max-Age=0")) {
+                        expire = true;
+                    }
+                }
+                if (expire) {
+                    store.remove(name + "|" + path);
+                } else {
+                    store.put(name + "|" + path, new Entry(name, value, path));
+                }
+            }
+        }
+
+        String headerForPath(String requestPath) {
+            return store.values().stream()
+                    .filter(e -> matchesPath(requestPath, e.path()))
+                    .map(e -> e.name() + "=" + e.value())
+                    .reduce((a, b) -> a + "; " + b)
+                    .orElse(null);
+        }
+
+        private static boolean matchesPath(String requestPath, String cookiePath) {
+            if ("/".equals(cookiePath) || requestPath.equals(cookiePath)) {
+                return true;
+            }
+            if (!requestPath.startsWith(cookiePath)) {
+                return false;
+            }
+            return cookiePath.endsWith("/") || requestPath.charAt(cookiePath.length()) == '/';
+        }
     }
 
     private static String extractQueryParam(String url, String key) {

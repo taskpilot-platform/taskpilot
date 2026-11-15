@@ -20,7 +20,9 @@ class JwtPropertiesTest {
                 "   ",
                 JwtProperties.KNOWN_PUBLIC_SAMPLE_KEY,
                 JwtProperties.KNOWN_PUBLIC_SAMPLE_KEY.toLowerCase(),
+                "  " + JwtProperties.KNOWN_PUBLIC_SAMPLE_KEY + "  ",
                 "too-short-key",
+                "   too-short-key" + " ".repeat(40),
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }) {
             JwtProperties props = new JwtProperties();
@@ -77,5 +79,11 @@ class JwtPropertiesTest {
         String token = jwtService.generateToken("user@taskpilot.test", "MEMBER");
         assertThat(jwtService.isTokenValid(token)).isTrue();
         assertThat(jwtService.extractEmail(token)).isEqualTo("user@taskpilot.test");
+
+        JwtProperties paddedProps = new JwtProperties();
+        paddedProps.setSecretKey("  " + VALID_PROD_KEY + "  ");
+        JwtService paddedService = new JwtService(paddedProps, Mockito.mock(JwtTokenBlocklistService.class));
+        assertThat(paddedService.isTokenValid(token)).isTrue();
+        assertThat(jwtService.isTokenValid(paddedService.generateToken("user@taskpilot.test", "MEMBER"))).isTrue();
     }
 }
