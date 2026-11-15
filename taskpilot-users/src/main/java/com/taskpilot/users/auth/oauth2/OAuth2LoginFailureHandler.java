@@ -30,7 +30,8 @@ public class OAuth2LoginFailureHandler extends SimpleUrlAuthenticationFailureHan
         String errorCode = mapErrorCode(exception);
         log.warn("OAuth2 authentication failed with code={}: {}", errorCode, exception.getMessage());
 
-        String targetUrl = UriComponentsBuilder.fromUriString(oAuth2Properties.getSuccessRedirectUri())
+        String safeRedirectBase = oAuth2Properties.validateRedirectUri(oAuth2Properties.getSuccessRedirectUri());
+        String targetUrl = UriComponentsBuilder.fromUriString(safeRedirectBase)
                 .queryParam("error", errorCode)
                 .build()
                 .toUriString();

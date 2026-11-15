@@ -27,6 +27,9 @@ class SqlPolicyTest(unittest.TestCase):
             'CREATE TABLE "public"."Mixed Case"(id bigint);',
             "CREATE TABLE public.example(id bigint GENERATED ALWAYS AS IDENTITY (SEQUENCE NAME public.example_seq));",
             "SET LOCAL lock_timeout='5s'; CREATE TABLE public.example(id bigint);",
+            "ALTER TABLE public.example ENABLE ROW LEVEL SECURITY;",
+            "CREATE POLICY deny_all_example ON public.example FOR ALL TO PUBLIC USING (false) WITH CHECK (false);",
+            "REVOKE ALL ON TABLE public.example FROM PUBLIC;",
         ]:
             with self.subTest(sql=sql):
                 self.assertEqual(self.plan(sql)["new_local_versions"], [43])
@@ -66,6 +69,10 @@ class SqlPolicyTest(unittest.TestCase):
             "BEGIN; CREATE TABLE public.example(id bigint); COMMIT;",
             "COPY public.example FROM PROGRAM 'anything';",
             "CREATE TABL public.broken(id int);",
+            "CREATE POLICY deny_unqualified ON example FOR ALL TO PUBLIC USING (false);",
+            "REVOKE ALL ON TABLE example FROM PUBLIC;",
+            "GRANT SELECT ON TABLE public.example TO PUBLIC;",
+            "REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;",
         ]:
             with self.subTest(sql=sql), self.assertRaisesRegex(check.CheckError, "MIGRATION_SQL_POLICY"):
                 self.plan(sql)

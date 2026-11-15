@@ -99,6 +99,7 @@ class MigrationSchemaIntegrationTest {
                 "--application.security.oauth2.github.client-id=","--application.security.oauth2.github.client-secret=",
                 "--onesignal.app-id=","--onesignal.api-key=","--livekit.api-key=local-dummy","--livekit.api-secret=local-dummy",
                 "--supabase.s3.endpoint=http://127.0.0.1:9","--supabase.s3.access-key=local-dummy","--supabase.s3.secret-key=local-dummy",
+                "--application.security.jwt.secret-key=taskpilot-test-only-migration-jwt-signing-key-2026-32bytes",
                 "--application.security.jwt.blocklist.provider=memory","--application.security.password-reset.rate-limit.provider=memory",
                 "--rag.embedding.poll-interval-ms=86400000","--decorator.datasource.p6spy.enable-logging=false",
                 "--logging.level.root=WARN"

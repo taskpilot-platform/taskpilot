@@ -3,43 +3,40 @@ package com.taskpilot.infrastructure.config.security;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
-import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.SecretKey;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Date;
 import java.util.function.Function;
 
 @Service
-@RequiredArgsConstructor
 public class JwtService {
 
-    @Value("${application.security.jwt.secret-key}")
-    private String secretKey;
-
-    @Value("${application.security.jwt.expiration}")
-    private long jwtExpiration;
-
+    private final JwtProperties jwtProperties;
     private final JwtTokenBlocklistService tokenBlocklistService;
+    private final SecretKey signingKey;
 
-    public long getJwtExpiration() {
-        return jwtExpiration;
+    public JwtService(JwtProperties jwtProperties, JwtTokenBlocklistService tokenBlocklistService) {
+        this.jwtProperties = jwtProperties;
+        this.tokenBlocklistService = tokenBlocklistService;
+        jwtProperties.validate();
+        this.signingKey = Keys.hmacShaKeyFor(jwtProperties.getSecretKey().getBytes(StandardCharsets.UTF_8));
     }
 
-    private SecretKey getSignInKey() {
-        byte[] keyBytes = secretKey.getBytes();
-        return Keys.hmacShaKeyFor(keyBytes);
+    public long getJwtExpiration() {
+        return jwtProperties.getExpiration();
     }
 
     public String generateToken(String email, String role) {
+        long now = System.currentTimeMillis();
         return Jwts.builder()
                 .subject(email)
                 .claim("role", role)
-                .issuedAt(new Date(System.currentTimeMillis()))
-                .expiration(new Date(System.currentTimeMillis() + jwtExpiration))
-                .signWith(getSignInKey())
+                .issuedAt(new Date(now))
+                .expiration(new Date(now + jwtProperties.getExpiration()))
+                .signWith(signingKey)
                 .compact();
     }
 
@@ -58,7 +55,7 @@ public class JwtService {
 
     private Claims extractAllClaims(String token) {
         return Jwts.parser()
-                .verifyWith(getSignInKey()) // Dùng đúng chìa khóa lúc nãy để mở
+                .verifyWith(signingKey)
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();
@@ -90,6 +87,7 @@ public class JwtService {
             Date expiration = extractClaim(token, Claims::getExpiration);
             tokenBlocklistService.revoke(token, Instant.ofEpochMilli(expiration.getTime()));
         } catch (Exception e) {
+            // Invalid/expired tokens cannot be added safely to blocklist
         }
     }
 }

@@ -50,7 +50,8 @@ public class OAuth2LoginSuccessHandler extends SimpleUrlAuthenticationSuccessHan
 
             cookieRepository.removeAuthorizationRequest(request, response);
 
-            String targetUrl = UriComponentsBuilder.fromUriString(oAuth2Properties.getSuccessRedirectUri())
+            String safeRedirectBase = oAuth2Properties.validateRedirectUri(oAuth2Properties.getSuccessRedirectUri());
+            String targetUrl = UriComponentsBuilder.fromUriString(safeRedirectBase)
                     .queryParam("code", code)
                     .build()
                     .toUriString();
@@ -70,7 +71,8 @@ public class OAuth2LoginSuccessHandler extends SimpleUrlAuthenticationSuccessHan
 
     private void redirectToFailure(HttpServletRequest request, HttpServletResponse response, String error)
             throws IOException {
-        String targetUrl = UriComponentsBuilder.fromUriString(oAuth2Properties.getSuccessRedirectUri())
+        String safeRedirectBase = oAuth2Properties.validateRedirectUri(oAuth2Properties.getSuccessRedirectUri());
+        String targetUrl = UriComponentsBuilder.fromUriString(safeRedirectBase)
                 .queryParam("error", error != null ? error : "provider_error")
                 .build()
                 .toUriString();

@@ -1,5 +1,6 @@
 server:
   port: 8080
+  address: ${DEV_SERVER_ADDRESS:127.0.0.1}
 
 spring:
   config:
@@ -31,7 +32,14 @@ management:
     health:
       show-details: always
 
+application:
+  security:
+    jwt:
+      secret-key: ${JWT_SECRET:taskpilot-dev-only-local-loopback-jwt-signing-key-2026-01}
+    oauth2:
+      cookie-secure: false
+
 app:
   cors:
-    allowed-origins: http://localhost:*
+    allowed-origins: http://localhost:5173,http://127.0.0.1:5173
 

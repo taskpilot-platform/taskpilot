@@ -1,7 +1,6 @@
 package com.taskpilot.infrastructure.config.security;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -35,8 +34,7 @@ import java.util.List;
 @EnableWebSecurity
 @EnableMethodSecurity
 public class SecurityConfig {
-        @Value("${FE_ORIGIN:${app.cors.allowed-origins:http://localhost:5173}}")
-        private String feOrigin;
+        private final CorsOriginProperties corsOriginProperties;
         private final JwtAuthenticationFilter jwtAuthFilter;
 
         @Autowired(required = false)
@@ -129,16 +127,16 @@ public class SecurityConfig {
         @Bean
         public CorsConfigurationSource corsConfigurationSource() {
                 CorsConfiguration configuration = new CorsConfiguration();
-                configuration.setAllowedOriginPatterns(List.of("*"));
+                configuration.setAllowedOrigins(corsOriginProperties.getAllowedOrigins());
                 configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-                configuration.setAllowedHeaders(List.of("*"));
+                configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "Cache-Control"));
                 configuration.setExposedHeaders(List.of(
                                 "Authorization",
                                 // Range streaming headers
                                 "Accept-Ranges", "Content-Range", "Content-Length", "Content-Disposition",
                                 // SSE required headers
                                 "Cache-Control", "Content-Type", "X-Accel-Buffering"));
-                configuration.setAllowCredentials(true);
+                configuration.setAllowCredentials(false);
                 configuration.setMaxAge(3600L);
 
                 UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

@@ -77,8 +77,8 @@ spring:
 application:
   security:
     jwt:
-      secret-key: ${JWT_SECRET:404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
-      expiration: ${JWT_EXPIRATION:86400000}
+      secret-key: ${JWT_SECRET:}
+      expiration: ${JWT_EXPIRATION:900000}
       blocklist:
         provider: ${JWT_BLOCKLIST_PROVIDER:memory}
     password-reset:
@@ -91,7 +91,12 @@ application:
         max-per-ip-per-hour: ${PASSWORD_RESET_MAX_PER_IP_PER_HOUR:20}
     oauth2:
       success-redirect-uri: ${OAUTH2_SUCCESS_REDIRECT_URI:http://localhost:5173/auth/callback}
+      allowed-redirect-origins: ${OAUTH2_ALLOWED_REDIRECT_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
       code-ttl-seconds: ${OAUTH2_CODE_TTL_SECONDS:60}
+      request-ttl-seconds: ${OAUTH2_REQUEST_TTL_SECONDS:300}
+      max-pending-requests: ${OAUTH2_MAX_PENDING_REQUESTS:10000}
+      max-pending-cookies-per-browser: ${OAUTH2_MAX_PENDING_COOKIES_PER_BROWSER:5}
+      cookie-secure: ${OAUTH2_COOKIE_SECURE:false}
       google:
         client-id: ${GOOGLE_OAUTH_CLIENT_ID:}
         client-secret: ${GOOGLE_OAUTH_CLIENT_SECRET:}
@@ -309,8 +314,8 @@ egress:
 decorator:
   datasource:
     p6spy:
-      enable-logging: ${P6SPY_LOGGING_ENABLED:true}
-      multiline: true
+      enable-logging: ${P6SPY_LOGGING_ENABLED:false}
+      multiline: false
       logging: slf4j
-      custom-format: vn.elca.training.util.P6SpySqlFormatter
+      custom-format: com.taskpilot.infrastructure.util.P6SpySqlFormatter
 

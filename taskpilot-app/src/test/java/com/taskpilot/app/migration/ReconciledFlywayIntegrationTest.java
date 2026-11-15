@@ -81,6 +81,7 @@ class ReconciledFlywayIntegrationTest {
             assertThat(scalar(c, "SELECT count(*) FROM system_settings WHERE key_name='heuristic.weights'")).isEqualTo("1");
             assertThat(scalar(c, "SELECT has_table_privilege('anon','taskpilot_migrations.flyway_schema_history_v2','SELECT')")).isEqualTo("f");
             assertThat(scalar(c, "SELECT has_table_privilege('authenticated','taskpilot_migrations.flyway_schema_history_v2','INSERT')")).isEqualTo("f");
+            assertThat(scalar(c, "SELECT c.relrowsecurity::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='oauth2_authorization_requests'")).isEqualTo("true");
         }
     }
 

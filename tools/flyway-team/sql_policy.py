@@ -14,10 +14,11 @@ RELATION_TARGETS = {
     "CreateStmt": "relation", "IndexStmt": "relation", "AlterTableStmt": "relation",
     "CreateSeqStmt": "sequence", "AlterSeqStmt": "sequence", "ViewStmt": "view",
     "InsertStmt": "relation", "UpdateStmt": "relation", "DeleteStmt": "relation",
+    "CreatePolicyStmt": "table",
 }
 SUPPORTED = set(RELATION_TARGETS) | {
     "CreateEnumStmt", "AlterEnumStmt", "CreateTableAsStmt", "DropStmt",
-    "CommentStmt", "SelectStmt", "VariableSetStmt",
+    "CommentStmt", "SelectStmt", "VariableSetStmt", "GrantStmt",
 }
 FUNCTIONS = {
     "lower", "upper", "btrim", "ltrim", "rtrim", "length", "char_length",
@@ -30,7 +31,7 @@ FUNCTIONS = {
 def validate(sql):
     try:
         from pglast import ast, parse_sql
-        from pglast.enums import ObjectType
+        from pglast.enums import GrantTargetType, ObjectType
     except ImportError:
         raise SqlPolicyError("install tools/flyway-team/requirements.txt (PostgreSQL 17 parser required)") from None
     try:
@@ -100,6 +101,14 @@ def validate(sql):
         elif kind == "VariableSetStmt":
             if not statement.is_local or statement.name not in {"lock_timeout", "statement_timeout"}:
                 raise SqlPolicyError("only SET LOCAL lock_timeout/statement_timeout is supported")
+        elif kind == "GrantStmt":
+            if (statement.is_grant
+                    or statement.targtype != GrantTargetType.ACL_TARGET_OBJECT
+                    or statement.objtype != ObjectType.OBJECT_TABLE
+                    or not statement.objects):
+                raise SqlPolicyError("only explicit REVOKE ... ON TABLE public.<table> is supported")
+            for obj in statement.objects:
+                relation(obj)
 
         for node, ctes in walk(statement):
             node_kind = type(node).__name__
