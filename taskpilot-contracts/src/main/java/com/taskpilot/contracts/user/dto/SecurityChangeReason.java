@@ -10,5 +10,7 @@ public enum SecurityChangeReason {
     USER_DEACTIVATED,
     USER_SUSPENDED,
     USER_DELETED,
+    USER_RESTORED,
+    EMAIL_VERIFIED,
     SESSION_COMPROMISED
 }
