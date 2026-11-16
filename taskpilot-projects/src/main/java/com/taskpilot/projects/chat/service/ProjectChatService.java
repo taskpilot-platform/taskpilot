@@ -4,6 +4,7 @@ import com.taskpilot.contracts.user.dto.CurrentActor;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
+import com.taskpilot.infrastructure.realtime.RealtimeAfterCommitDispatcher;
 import com.taskpilot.projects.chat.dto.ChatMessageResponse;
 import com.taskpilot.projects.chat.dto.SendChatMessageRequest;
 import com.taskpilot.projects.common.entity.ProjectChatMessageEntity;
@@ -70,14 +71,17 @@ public class ProjectChatService {
         ChatMessageResponse response = ChatMessageResponse.fromEntity(
                 saved, senderName, actor.currentEmail(), senderAvatarUrl, attachedFileName);
 
-        // Broadcast to WebSocket subscribers for this project
-        try {
-            String destination = "/topic/projects/" + projectId + "/chat";
-            messagingTemplate.convertAndSend(destination, response);
-            log.debug("Broadcasted chat message {} to {}", saved.getId(), destination);
-        } catch (Exception e) {
-            log.warn("Failed to broadcast chat message over WebSocket: {}", e.getMessage());
-        }
+        // Broadcast to WebSocket subscribers only after business commit
+        String destination = "/topic/projects/" + projectId + "/chat";
+        Long savedId = saved.getId();
+        RealtimeAfterCommitDispatcher.runAfterCommit(() -> {
+            try {
+                messagingTemplate.convertAndSend(destination, response);
+                log.debug("Broadcasted chat message {} to {}", savedId, destination);
+            } catch (Exception e) {
+                log.warn("Failed to broadcast chat message over WebSocket: {}", e.getMessage());
+            }
+        });
 
         return response;
     }
