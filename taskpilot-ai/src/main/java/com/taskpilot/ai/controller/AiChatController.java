@@ -181,12 +181,12 @@ public class AiChatController {
     @Operation(summary = "Update human feedback on an AI log (ACCEPTED / REJECTED)")
     @PatchMapping("/logs/{logId}/feedback")
     public ApiResponse<Void> updateFeedback(@PathVariable Long logId,
-            @RequestParam String feedback) {
+            @RequestParam String feedback, Authentication authentication) {
         if (!List.of("ACCEPTED", "REJECTED", "PENDING").contains(feedback.toUpperCase())) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
                     "Feedback must be ACCEPTED, REJECTED, or PENDING");
         }
-        aiLogService.updateFeedback(logId, feedback.toUpperCase());
+        aiLogService.updateFeedback(logId, feedback.toUpperCase(java.util.Locale.ROOT), CurrentActorResolver.resolve(authentication));
         return ApiResponse.success(null);
     }
 
