@@ -340,7 +340,6 @@ public class TaskPilotAiTools {
         return systemAiTools.confirmPendingAction(actionId);
     }
 
-    @Tool("Confirm and execute the most recent pending write action in this session.")
     public Object confirmLatestPendingAction() {
         return systemAiTools.confirmLatestPendingAction();
     }

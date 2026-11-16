@@ -233,7 +233,7 @@ public class StreamingToolCoordinator {
                     || "deleteProject".equals(name) || "deleteTask".equals(name) || "deleteSprint".equals(name)) {
                 sb.append("Đã yêu cầu thực hiện thao tác ").append(name).append(". Vui lòng xác nhận.\n");
             } else if ("confirmPendingAction".equals(name)) {
-                sb.append("Đã xác nhận thao tác thành công. Kết quả: ").append(text).append("\n");
+                sb.append("Chưa thực hiện thao tác. Hãy dùng nút xác nhận trong ứng dụng. Chi tiết: ").append(text).append("\n");
             } else if ("smartQuery".equals(name)) {
                 sb.append("Đã thực hiện truy vấn thông tin hệ thống thành công.\n");
             } else {
