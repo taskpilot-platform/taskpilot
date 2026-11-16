@@ -18,6 +18,10 @@ import com.taskpilot.contracts.assignment.port.out.UserPort;
 import com.taskpilot.contracts.project.dto.AccessRevocationReason;
 import com.taskpilot.contracts.project.dto.ProjectAccessRevokedEvent;
 import com.taskpilot.contracts.project.exception.SoleActiveManagerException;
+import com.taskpilot.contracts.storage.ProjectStorageInventoryContributor;
+import com.taskpilot.contracts.storage.StorageCleanupPort;
+import com.taskpilot.contracts.storage.StorageCleanupRequest;
+import com.taskpilot.contracts.storage.StorageObjectLocator;
 import com.taskpilot.contracts.user.dto.AccountAuthStateDto;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
 import com.taskpilot.contracts.user.event.ProjectMemberEvent;
@@ -27,6 +31,7 @@ import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.infrastructure.util.PageableUtils;
 import com.taskpilot.infrastructure.util.ValidationUtils;
 import com.taskpilot.projects.common.entity.ProjectEntity;
+import com.taskpilot.projects.common.entity.ProjectFileEntity;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
 import com.taskpilot.projects.common.entity.TaskEntity;
 import com.taskpilot.projects.common.enums.HeuristicMode;
@@ -34,6 +39,7 @@ import com.taskpilot.projects.common.enums.MemberRole;
 import com.taskpilot.projects.common.enums.ProjectStatus;
 import com.taskpilot.projects.common.enums.TaskStatus;
 import com.taskpilot.projects.common.repository.LabelRepository;
+import com.taskpilot.projects.common.repository.ProjectFileRepository;
 import com.taskpilot.projects.common.repository.ProjectInvitationRepository;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
 import com.taskpilot.projects.common.repository.ProjectRepository;
@@ -66,6 +72,9 @@ public class ProjectServiceImpl {
     private final SprintRepository sprintRepository;
     private final LabelRepository labelRepository;
     private final UserProfilePort userProfilePort;
+    private final ProjectFileRepository projectFileRepository;
+    private final StorageCleanupPort storageCleanupPort;
+    private final List<ProjectStorageInventoryContributor> storageInventoryContributors;
 
     // ==================== PROJECT CRUD ====================
 
@@ -429,14 +438,58 @@ public class ProjectServiceImpl {
 
     @Transactional
     public void deleteProject(Long projectId, Long userId) {
-        ProjectEntity project = projectSecurityService.requireProject(projectId);
+        projectRepository.findByIdForUpdate(projectId)
+                .orElseThrow(() -> new BusinessException(404,"Project not found"));
         projectSecurityService.validateManager(projectId, userId);
+
+        List<StorageCleanupRequest> cleanupRequests = inventoryProjectStorageBeforeDelete(projectId);
 
         taskRepository.deleteByProjectId(projectId);
         sprintRepository.deleteByProjectId(projectId);
         labelRepository.deleteByProjectId(projectId);
         projectMemberRepository.deleteByProjectId(projectId);
         projectRepository.deleteProjectById(projectId);
+
+        if (storageCleanupPort != null && !cleanupRequests.isEmpty()) {
+            storageCleanupPort.enqueueCleanupBatch(cleanupRequests);
+        }
+    }
+
+    private List<StorageCleanupRequest> inventoryProjectStorageBeforeDelete(Long projectId) {
+        List<StorageCleanupRequest> requests = new ArrayList<>();
+        if (projectFileRepository != null) {
+            for (ProjectFileEntity file : projectFileRepository.findByProjectId(projectId)) {
+                if (file.getStorageKey() != null && !file.getStorageKey().isBlank()) {
+                    requests.add(new StorageCleanupRequest(
+                            StorageObjectLocator.of(file.getStorageBucket(), file.getStorageKey()),
+                            "PROJECT_FILE",
+                            file.getId() != null ? String.valueOf(file.getId()) : null,
+                            projectId,
+                            null
+                    ));
+                }
+            }
+        }
+        if (storageInventoryContributors != null) {
+            for (ProjectStorageInventoryContributor contributor : storageInventoryContributors) {
+                List<StorageObjectLocator> locators = contributor.listProjectOwnedObjects(projectId);
+                if (locators == null) {
+                    continue;
+                }
+                for (StorageObjectLocator locator : locators) {
+                    if (locator != null) {
+                        requests.add(new StorageCleanupRequest(
+                                locator,
+                                contributor.sourceType(),
+                                String.valueOf(projectId),
+                                projectId,
+                                null
+                        ));
+                    }
+                }
+            }
+        }
+        return requests;
     }
 
     public ProjectSummaryResponse getProjectSummary(Long projectId, Long userId) {
