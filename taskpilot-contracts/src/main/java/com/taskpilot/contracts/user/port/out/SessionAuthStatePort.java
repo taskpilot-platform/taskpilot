@@ -11,4 +11,8 @@ import java.util.UUID;
 public interface SessionAuthStatePort {
 
     Optional<SessionAuthStateDto> findById(UUID sessionId);
+
+    default Optional<SessionAuthStateDto> findByIdForUpdate(UUID sessionId) {
+        return findById(sessionId);
+    }
 }
