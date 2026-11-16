@@ -1,15 +1,20 @@
 package com.taskpilot.users.notifications.controller;
 
+import com.taskpilot.contracts.user.dto.RealtimeAccessContext;
 import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.infrastructure.dto.ApiResponse;
+import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.users.notifications.dto.NotificationResponse;
 import com.taskpilot.users.notifications.service.NotificationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -45,8 +50,25 @@ public class NotificationController {
 
     @Operation(summary = "Stream my notifications")
     @GetMapping(value = "/my/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter streamMyNotifications(Authentication authentication) {
-        return notificationService.streamMyNotifications(CurrentActorResolver.userId(authentication));
+    public SseEmitter streamMyNotifications(
+            Authentication authentication,
+            HttpServletResponse response) throws IOException {
+        try {
+            RealtimeAccessContext context = CurrentActorResolver.extractRealtimeContext(authentication)
+                    .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "Authenticated realtime session required"));
+            return notificationService.streamMyNotifications(context);
+        } catch (BusinessException ex) {
+            if (!response.isCommitted()) {
+                response.setStatus(ex.getStatus());
+                response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+                String escapedMsg = (ex.getMessage() != null ? ex.getMessage() : "Unauthorized")
+                        .replace("\\", "\\\\")
+                        .replace("\"", "\\\"");
+                response.getWriter().write("{\"status\":" + ex.getStatus() + ",\"message\":\"" + escapedMsg + "\"}");
+                response.getWriter().flush();
+            }
+            return null;
+        }
     }
 
     @Operation(summary = "Get notification detail by ID")
