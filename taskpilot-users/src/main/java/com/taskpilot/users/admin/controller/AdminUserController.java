@@ -39,7 +39,7 @@ public class AdminUserController {
                 adminUserService.getUserDetail(id));
     }
 
-    @Operation(summary = "Add System User", description = "Create a new user with auto-generated password.")
+    @Operation(summary = "Add System User", description = "Provision a new pending-verification user and send verification/setup link.")
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<AdminUserResponse> createUser(@Valid @RequestBody AdminCreateUserRequest request) {
@@ -47,7 +47,7 @@ public class AdminUserController {
                 adminUserService.createUser(request));
     }
 
-    @Operation(summary = "Edit System User", description = "Update user role, status, or workload.")
+    @Operation(summary = "Edit System User", description = "Update user role, availability, or workload.")
     @PutMapping("/{id}")
     public ApiResponse<AdminUserResponse> updateUser(@PathVariable Long id,
             @Valid @RequestBody AdminUpdateUserRequest request) {
@@ -55,17 +55,35 @@ public class AdminUserController {
                 adminUserService.updateUser(id, request));
     }
 
-    @Operation(summary = "Delete System User", description = "Soft delete: set user status to DEACTIVATED.")
+    @Operation(summary = "Suspend System User", description = "Administratively suspend user immediately and queue project recovery.")
+    @PostMapping("/{id}/suspend")
+    public ApiResponse<AdminUserResponse> suspendUser(
+            @PathVariable Long id,
+            @RequestParam(required = false) String reason) {
+        return ApiResponse.ok("User suspended successfully",
+                adminUserService.suspendUser(id, reason));
+    }
+
+    @Operation(summary = "Reactivate System User", description = "Administratively reactivate a verified suspended/disabled user.")
+    @PostMapping("/{id}/reactivate")
+    public ApiResponse<AdminUserResponse> reactivateUser(
+            @PathVariable Long id,
+            @RequestParam(required = false) String reason) {
+        return ApiResponse.ok("User reactivated successfully",
+                adminUserService.reactivateUser(id, reason));
+    }
+
+    @Operation(summary = "Suspend System User (Compat)", description = "Administratively suspend user account.")
     @DeleteMapping("/{id}")
     public ApiResponse<Void> deactivateUser(@PathVariable Long id) {
         adminUserService.deactivateUser(id);
         return ApiResponse.ok("User deactivated successfully", null);
     }
 
-    @Operation(summary = "Reset User Password", description = "Generate a new random password for the user.")
+    @Operation(summary = "Reset User Password", description = "Invalidate existing password/sessions and send a purpose-bound reset link.")
     @PutMapping("/{id}/reset-password")
     public ApiResponse<Void> resetPassword(@PathVariable Long id) {
         adminUserService.resetPassword(id);
-        return ApiResponse.ok("Password reset successfully. New password will be sent via email.", null);
+        return ApiResponse.ok("Password reset link sent.", null);
     }
 }

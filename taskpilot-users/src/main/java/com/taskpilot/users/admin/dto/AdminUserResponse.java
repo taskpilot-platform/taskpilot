@@ -1,6 +1,7 @@
 package com.taskpilot.users.admin.dto;
 
 import com.taskpilot.users.common.entity.UserEntity;
+import com.taskpilot.users.common.enums.AccountLifecycle;
 import com.taskpilot.users.common.enums.UserRole;
 import com.taskpilot.users.common.enums.UserStatus;
 import java.time.Instant;
@@ -14,9 +15,20 @@ public record AdminUserResponse(
         UserStatus status,
         Integer currentWorkload,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        String accountState,
+        String availability,
+        Boolean emailVerified,
+        Boolean legacyReviewRequired
 ) {
     public static AdminUserResponse fromEntity(UserEntity entity) {
+        AccountLifecycle lifecycle = entity.getAccountState() != null
+                ? entity.getAccountState()
+                : AccountLifecycle.ACTIVE;
+        if (entity.getStatus() == UserStatus.DEACTIVATED && lifecycle == AccountLifecycle.ACTIVE) {
+            lifecycle = AccountLifecycle.LEGACY_DISABLED;
+        }
+        UserStatus availability = entity.effectiveAvailability();
         return new AdminUserResponse(
                 entity.getId(),
                 entity.getEmail(),
@@ -26,7 +38,11 @@ public record AdminUserResponse(
                 entity.getStatus(),
                 entity.getCurrentWorkload(),
                 entity.getCreatedAt(),
-                entity.getUpdatedAt()
+                entity.getUpdatedAt(),
+                lifecycle.name(),
+                availability.name(),
+                Boolean.TRUE.equals(entity.getEmailVerified()),
+                Boolean.TRUE.equals(entity.getLegacyReviewRequired())
         );
     }
 }
