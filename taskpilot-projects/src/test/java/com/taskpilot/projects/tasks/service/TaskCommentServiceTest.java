@@ -153,6 +153,7 @@ class TaskCommentServiceTest {
         when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
+        when(projectMemberRepository.findMembers(PROJECT_ID)).thenReturn(members(1L, 2L));
         when(commentRepository.findByIdAndTaskId(PARENT_COMMENT_ID, TASK_ID)).thenReturn(Optional.of(parent));
         when(commentRepository.save(any(CommentEntity.class))).thenAnswer(invocation -> {
             CommentEntity comment = invocation.getArgument(0);
@@ -175,9 +176,48 @@ class TaskCommentServiceTest {
         verify(eventPublisher).publishEvent(captor.capture());
 
         TaskCommentedEvent event = captor.getValue();
+        assertEquals(PROJECT_ID, event.projectId());
+        assertEquals(TASK_ID, event.taskId());
+        assertEquals(COMMENT_ID, event.commentId());
         assertEquals(2L, event.targetUserId());
         assertEquals(NotificationTypeDto.REPLY, event.type());
         assertEquals("/tasks?taskId=" + TASK_ID + "&commentId=" + COMMENT_ID, event.linkAction());
+    }
+
+    @Test
+    void createCommentExcludesHistoricalNonMembersFromNotificationEvents() {
+        TaskEntity task = task();
+        task.setAssigneeId(2L);
+        task.setReporterId(99L); // former reporter removed from project
+        CommentEntity parent = comment(98L, PARENT_COMMENT_ID, TASK_ID); // former commenter removed
+
+        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task));
+        when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
+        when(projectMemberRepository.findMembers(PROJECT_ID)).thenReturn(members(1L, 2L));
+        when(commentRepository.findByIdAndTaskId(PARENT_COMMENT_ID, TASK_ID)).thenReturn(Optional.of(parent));
+        when(commentRepository.save(any(CommentEntity.class))).thenAnswer(invocation -> {
+            CommentEntity comment = invocation.getArgument(0);
+            comment.setId(COMMENT_ID);
+            comment.setCreatedAt(Instant.parse("2026-05-13T00:00:00Z"));
+            comment.setUpdatedAt(Instant.parse("2026-05-13T00:00:00Z"));
+            return comment;
+        });
+        when(commentMentionRepository.findByCommentIdIn(anyCollection())).thenReturn(List.of());
+        when(userProfilePort.findLiteByIds(anySet())).thenAnswer(invocation -> profiles(invocation.getArgument(0)));
+        when(commentRepository.findParticipantUserIdsByTaskId(TASK_ID)).thenReturn(Set.of(ACTOR_ID, 2L, 97L, 98L));
+
+        service.createComment(TASK_ID,
+                new CreateTaskCommentRequest("Check current members", PARENT_COMMENT_ID, Set.of()), ACTOR_ID);
+
+        ArgumentCaptor<TaskCommentedEvent> captor = ArgumentCaptor.forClass(TaskCommentedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+
+        TaskCommentedEvent event = captor.getValue();
+        assertEquals(2L, event.targetUserId());
+        assertEquals(PROJECT_ID, event.projectId());
+        assertEquals(TASK_ID, event.taskId());
+        assertEquals(COMMENT_ID, event.commentId());
     }
 
     @Test
