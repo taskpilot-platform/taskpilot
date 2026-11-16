@@ -5,6 +5,7 @@ import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import com.taskpilot.projects.files.dto.FileDownloadResource;
 import com.taskpilot.projects.files.dto.FileStreamResource;
+import com.taskpilot.projects.files.dto.ProjectFileDownloadResult;
 import com.taskpilot.projects.files.dto.ProjectFileResponse;
 import com.taskpilot.projects.files.service.ProjectFileService;
 import com.taskpilot.projects.files.service.RecordingArchiveWorker;
@@ -26,6 +27,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -69,28 +71,66 @@ public class ProjectFileController {
                 projectFileService.listFiles(projectId, CurrentActorResolver.userId(authentication), keyword, pageable));
     }
 
-    @Operation(summary = "Download project file", description = "Stream download a project file")
+    @Operation(summary = "Download project file", description = "Stream download a project file with single-range HTTP 206/416 support")
     @GetMapping("/{fileId}/download")
     public ResponseEntity<Resource> downloadFile(
             @PathVariable Long projectId,
             @PathVariable Long fileId,
+            @RequestHeader(value = HttpHeaders.RANGE, required = false) String rangeHeader,
+            @RequestHeader(value = HttpHeaders.IF_RANGE, required = false) String ifRangeHeader,
             Authentication authentication) {
-        FileDownloadResource resource = projectFileService.downloadFile(projectId, fileId, CurrentActorResolver.userId(authentication));
+        ProjectFileDownloadResult result = projectFileService.downloadFileWithRange(
+                projectId,
+                fileId,
+                CurrentActorResolver.userId(authentication),
+                rangeHeader,
+                ifRangeHeader
+        );
 
-        String encodedFilename = URLEncoder.encode(resource.fileName(), StandardCharsets.UTF_8).replace("+", "%20");
-        MediaType mediaType = MediaType.APPLICATION_OCTET_STREAM;
-        if (resource.contentType() != null && !resource.contentType().isBlank()) {
-            try {
-                mediaType = MediaType.parseMediaType(resource.contentType());
-            } catch (Exception ignored) {
+        try {
+            if (result.status() == ProjectFileDownloadResult.Status.RANGE_NOT_SATISFIABLE_416) {
+                closeQuietly(result.inputStream());
+                return ResponseEntity.status(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                        .header(HttpHeaders.ACCEPT_RANGES, "bytes")
+                        .header(HttpHeaders.CONTENT_RANGE, "bytes */" + result.totalBytes())
+                        .build();
             }
-        }
 
-        return ResponseEntity.ok()
-                .contentType(mediaType)
-                .contentLength(resource.fileSize())
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + encodedFilename)
-                .body(new InputStreamResource(resource.inputStream()));
+            String encodedFilename = URLEncoder.encode(result.fileName(), StandardCharsets.UTF_8).replace("+", "%20");
+            MediaType mediaType = MediaType.APPLICATION_OCTET_STREAM;
+            if (result.contentType() != null && !result.contentType().isBlank()) {
+                try {
+                    mediaType = MediaType.parseMediaType(result.contentType());
+                } catch (Exception ignored) {
+                }
+            }
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.set(HttpHeaders.ACCEPT_RANGES, "bytes");
+            headers.set(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + encodedFilename);
+            result.etag().ifPresent(headers::setETag);
+            result.lastModified().ifPresent(lastModified -> headers.setLastModified(lastModified.toEpochMilli()));
+
+            if (result.status() == ProjectFileDownloadResult.Status.PARTIAL_206 && result.servedRange().isPresent()) {
+                headers.set(HttpHeaders.CONTENT_RANGE, result.servedRange().get().toContentRangeHeader(result.totalBytes()));
+                return ResponseEntity.status(HttpStatus.PARTIAL_CONTENT)
+                        .headers(headers)
+                        .contentType(mediaType)
+                        .contentLength(result.responseBytes())
+                        .body(new InputStreamResource(result.inputStream()));
+            }
+
+            ResponseEntity.BodyBuilder okBuilder = ResponseEntity.ok()
+                    .headers(headers)
+                    .contentType(mediaType);
+            if (result.totalBytes() >= 0) {
+                okBuilder.contentLength(result.totalBytes());
+            }
+            return okBuilder.body(new InputStreamResource(result.inputStream()));
+        } catch (RuntimeException ex) {
+            closeQuietly(result.inputStream());
+            throw ex;
+        }
     }
 
     @Operation(summary = "Stream project file with HTTP Range support",
@@ -200,5 +240,14 @@ public class ProjectFileController {
                     "Archive transfer did not complete; check archive_error or retry shortly");
         }
         return ApiResponse.ok("File archived to private Google Drive", true);
+    }
+
+    private static void closeQuietly(InputStream stream) {
+        if (stream != null) {
+            try {
+                stream.close();
+            } catch (IOException ignored) {
+            }
+        }
     }
 }
