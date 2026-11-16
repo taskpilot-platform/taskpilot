@@ -74,6 +74,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
         AccountAuthStateDto account = maybeAccount.get();
         if (!ACTIVE_LIFECYCLE.equals(account.lifecycle())
+                || !account.emailVerified()
                 || account.tokenVersion() != claims.tokenVersion()
                 || account.role() == null
                 || account.role().isBlank()) {

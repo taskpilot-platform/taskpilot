@@ -17,8 +17,6 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.AuthenticationFailureHandler;
 import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
@@ -51,11 +49,6 @@ public class SecurityConfig {
                         .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
         @Bean
-        public PasswordEncoder passwordEncoder() {
-                return new BCryptPasswordEncoder();
-        }
-
-        @Bean
         public SecurityFilterChain filterChain(HttpSecurity http)
                         throws Exception {
                 http.cors(cors -> cors.configurationSource(corsConfigurationSource()))
@@ -72,6 +65,11 @@ public class SecurityConfig {
                                                 .requestMatchers("/api/v1/auth/logout").authenticated()
                                                 .requestMatchers(
                                                                 "/api/v1/auth/register",
+                                                                "/api/v1/auth/verify-email",
+                                                                "/api/v1/auth/verify-email/resend",
+                                                                "/api/v1/auth/password-setup/complete",
+                                                                "/api/v1/auth/restore/confirm",
+                                                                "/api/v1/auth/restore/cancel",
                                                                 "/api/v1/auth/login",
                                                                 "/api/v1/auth/refresh",
                                                                 "/api/v1/auth/forgot-password",

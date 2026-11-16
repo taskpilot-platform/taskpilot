@@ -1,5 +1,7 @@
 package com.taskpilot.infrastructure.exception;
 
+import com.taskpilot.contracts.project.exception.RetryableRosterChangeException;
+import com.taskpilot.contracts.project.exception.SoleActiveManagerException;
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import lombok.extern.slf4j.Slf4j;
 import java.io.IOException;
@@ -60,6 +62,23 @@ public class GlobalExceptionHandler {
         String msg = resolveMessage("error.access_denied", null, "Access denied. Admin role required.", locale);
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
                 .body(ApiResponse.error(HttpStatus.FORBIDDEN.value(), msg));
+    }
+
+    @ExceptionHandler(SoleActiveManagerException.class)
+    public ResponseEntity<ApiResponse<java.util.Map<String, Object>>> handleSoleActiveManagerException(
+            SoleActiveManagerException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.error(
+                        HttpStatus.CONFLICT.value(),
+                        ex.getMessage(),
+                        java.util.Map.of("blockingProjectIds", ex.getBlockingProjectIds())));
+    }
+
+    @ExceptionHandler(RetryableRosterChangeException.class)
+    public ResponseEntity<ApiResponse<Void>> handleRetryableRosterChangeException(
+            RetryableRosterChangeException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.error(HttpStatus.CONFLICT.value(), ex.getMessage()));
     }
 
     @ExceptionHandler(BusinessException.class)
