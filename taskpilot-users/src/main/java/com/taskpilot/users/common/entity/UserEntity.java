@@ -65,9 +65,36 @@ public class UserEntity extends BaseEntity {
     @Column(name = "email_verified_at")
     private Instant emailVerifiedAt;
 
+    @Column(name = "email_verification_provenance", length = 64)
+    private String emailVerificationProvenance;
+
+    @Column(name = "lifecycle_changed_at")
+    private Instant lifecycleChangedAt;
+
+    @Column(name = "lifecycle_reason", length = 255)
+    private String lifecycleReason;
+
+    @Column(name = "lifecycle_changed_by")
+    private Long lifecycleChangedBy;
+
+    @Builder.Default
+    @Column(name = "legacy_review_required", nullable = false)
+    private Boolean legacyReviewRequired = Boolean.FALSE;
+
     public boolean isActiveAccount() {
         AccountLifecycle effectiveLifecycle = accountState != null ? accountState : AccountLifecycle.ACTIVE;
         return effectiveLifecycle == AccountLifecycle.ACTIVE && status != UserStatus.DEACTIVATED;
+    }
+
+    public boolean hasUsablePassword() {
+        return password != null && !password.isBlank();
+    }
+
+    public UserStatus effectiveAvailability() {
+        if (status == null || status == UserStatus.DEACTIVATED) {
+            return UserStatus.AVAILABLE;
+        }
+        return status;
     }
 
     public long effectiveTokenVersion() {

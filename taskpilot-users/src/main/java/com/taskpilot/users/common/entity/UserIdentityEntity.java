@@ -44,4 +44,10 @@ public class UserIdentityEntity {
 
     @Column(name = "last_login_at")
     private Instant lastLoginAt;
+
+    @Column(name = "email_verified_at")
+    private Instant emailVerifiedAt;
+
+    @Column(name = "verification_provenance", length = 64)
+    private String verificationProvenance;
 }
