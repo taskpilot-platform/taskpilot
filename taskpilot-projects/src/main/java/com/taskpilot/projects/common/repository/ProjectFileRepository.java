@@ -18,6 +18,8 @@ import java.util.Optional;
 @Repository
 public interface ProjectFileRepository extends JpaRepository<ProjectFileEntity, Long> {
 
+    List<ProjectFileEntity> findByProjectId(Long projectId);
+
     Page<ProjectFileEntity> findByProjectId(Long projectId, Pageable pageable);
 
     Page<ProjectFileEntity> findByProjectIdOrderByCreatedAtDesc(Long projectId, Pageable pageable);
