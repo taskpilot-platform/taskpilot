@@ -209,7 +209,7 @@ public class AutoAssignmentService {
 
     private RawCandidate buildRawCandidate(UserProfileDto user, double projectPerformancePrior,
             List<String> requiredSkills) {
-        if (isUnavailable(user.status())) {
+        if (!user.activeAccount() || isUnavailable(user.status())) {
             return null;
         }
 
