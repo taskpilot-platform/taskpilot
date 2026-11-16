@@ -154,7 +154,11 @@ class AuthenticatedActorRegressionTest {
         String selfJwt = login(selfEmail, "Pass!12345");
         Principal selfStompPrincipal = connectStompAndVerifySendAllowed(selfJwt);
 
-        HttpResponse<String> deleteResp = delete("/api/v1/users/me", selfJwt);
+        HttpResponse<String> deleteResp = postJson(
+                "/api/v1/users/me/self-deactivate",
+                Map.of("confirmation", "DEACTIVATE", "currentPassword", "Pass!12345"),
+                selfJwt
+        );
         assertThat(deleteResp.statusCode()).isEqualTo(200);
         assertThat(get("/api/v1/users/me", selfJwt).statusCode()).isEqualTo(401);
         assertStompRejected(selfJwt, selfStompPrincipal);
@@ -313,6 +317,11 @@ class AuthenticatedActorRegressionTest {
         HttpResponse<String> reg = postJson("/api/v1/auth/register",
                 Map.of("email", email, "password", password, "fullName", fullName), null);
         assertThat(reg.statusCode()).isEqualTo(201);
+        UserEntity user = userRepository.findByEmail(email.trim().toLowerCase(java.util.Locale.ROOT)).orElseThrow();
+        user.setEmailVerified(true);
+        user.setAccountState(com.taskpilot.users.common.enums.AccountLifecycle.ACTIVE);
+        user.setPassword(context.getBean(org.springframework.security.crypto.password.PasswordEncoder.class).encode(password));
+        userRepository.saveAndFlush(user);
     }
 
     private String login(String email, String password) throws Exception {

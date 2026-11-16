@@ -312,6 +312,11 @@ class RefreshTokenRotationIntegrationTest {
         HttpResponse<String> reg = postJson("/api/v1/auth/register",
                 Map.of("email", email, "password", password, "fullName", fullName), null);
         assertThat(reg.statusCode()).isEqualTo(201);
+        UserEntity user = userRepository.findByEmail(email.trim().toLowerCase(java.util.Locale.ROOT)).orElseThrow();
+        user.setEmailVerified(true);
+        user.setAccountState(com.taskpilot.users.common.enums.AccountLifecycle.ACTIVE);
+        user.setPassword(context.getBean(org.springframework.security.crypto.password.PasswordEncoder.class).encode(password));
+        userRepository.saveAndFlush(user);
         return login(email, password);
     }
 
