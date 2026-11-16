@@ -196,21 +196,23 @@ public class AhpAssignmentAiTools {
         }
 
         CandidateScore selected = recommendation.candidates().get(0);
+        final Long selectedUserId=selected.getUserId();
+        final String selectedName=selected.getFullName();
         String safeReason = hasText(reason)
                 ? reason
                 : "AI selected the top-ranked candidate based on skill fit, workload, and project heuristic mode.";
         RecommendAndAssignResult preview = new RecommendAndAssignResult(false, resolvedTaskId, resolvedProjectId,
-                selected.getUserId(), selected.getFullName(), safeReason, recommendation, null,
-                "Ready to assign task " + taskId + " to " + selected.getFullName() + " after confirmation.");
+                selectedUserId, selectedName, safeReason, recommendation, null,
+                "Ready to assign task " + taskId + " to " + selectedName + " after confirmation.");
 
         return pendingAiActionService.create(
                 userId,
                 sessionId,
                 "recommendAndAssignTask",
                 (shouldPersistProvidedSkills ? "Save required skills and assign task " : "Assign task ")
-                        + taskId + " to " + selected.getFullName() + " (top recommended candidate)",
+                        + taskId + " to " + selectedName + " (top recommended candidate)",
                 args("taskId", resolvedTaskId, "projectId", resolvedProjectId, "skills", resolvedSkills,
-                        "difficulty", resolvedDifficulty, "memberId", selected.getUserId(), "reason", safeReason,
+                        "difficulty", resolvedDifficulty, "memberId", selectedUserId, "reason", safeReason,
                         "persistSkills", shouldPersistProvidedSkills),
                 preview,
                 () -> {
@@ -219,13 +221,13 @@ public class AhpAssignmentAiTools {
                     }
                     TaskAssignmentResultDto assignment = taskCommandPort.assignTaskToMember(
                             resolvedTaskId,
-                            selected.getUserId(),
+                            selectedUserId,
                             safeReason,
                             userId,
                             false);
-                    return new RecommendAndAssignResult(true, resolvedTaskId, resolvedProjectId, selected.getUserId(),
-                            selected.getFullName(), safeReason, recommendation, assignment,
-                            "Task " + taskId + " assigned to " + selected.getFullName() + ".");
+                    return new RecommendAndAssignResult(true, resolvedTaskId, resolvedProjectId, selectedUserId,
+                            selectedName, safeReason, recommendation, assignment,
+                            "Task " + taskId + " assigned to " + selectedName + ".");
                 });
     }
 
@@ -265,7 +267,8 @@ public class AhpAssignmentAiTools {
         Long projectId = task.projectId();
         String resolvedSkills = hasText(skills) ? skills : task.requiredSkills();
         if (!hasText(resolvedSkills)) {
-            resolvedSkills = "Java";
+            throw new com.taskpilot.infrastructure.exception.BusinessException(400,
+                    "Task requirements are missing; provide required skills before requesting recommendations");
         }
 
         Set<Long> includeIds = parseIdSet(includeMemberIds);

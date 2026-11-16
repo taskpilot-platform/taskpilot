@@ -78,6 +78,7 @@ class AutoAssignmentServiceTest {
                 100L // 100ms timeout for test determinism
         );
 
+        when(projectMemberPort.isProjectMember(PROJECT_ID, REQUESTING_USER_ID)).thenReturn(true);
         when(projectPort.findById(PROJECT_ID))
                 .thenReturn(Optional.of(new ProjectHeuristicConfigDto(PROJECT_ID, "BALANCED")));
         when(heuristicStrategyFactory.resolve("BALANCED")).thenReturn(heuristicStrategy);

@@ -140,6 +140,9 @@ public class AutoAssignmentService {
 
     public AutoAssignmentResponse recommendCandidates(Long projectId, List<String> requiredSkills,
             int taskDifficulty, Long requestingUserId, Set<Long> includeUserIds, Set<Long> excludeUserIds) {
+        if (requestingUserId == null || !projectMemberPort.isProjectMember(projectId, requestingUserId)) {
+            throw new BusinessException(HttpStatus.FORBIDDEN.value(), "You are not a member of this project");
+        }
         List<String> safeRequiredSkills = requiredSkills == null ? Collections.emptyList() : requiredSkills;
         log.info("[AutoAssign] Starting candidate scoring for project {} with skills: {}", projectId,
                 safeRequiredSkills);
