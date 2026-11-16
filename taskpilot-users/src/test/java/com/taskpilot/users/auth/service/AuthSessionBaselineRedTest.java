@@ -104,8 +104,8 @@ class AuthSessionBaselineRedTest {
 
     @Test
     void login_whenUserIsDeactivated_mustRejectAndNeverIssueJwtOrRefreshToken() {
-        UserEntity deactivated = user(10L, "deactivated@taskpilot.io", UserStatus.DEACTIVATED, AccountLifecycle.SELF_DEACTIVATED);
-        when(userRepository.findByEmail("deactivated@taskpilot.io")).thenReturn(Optional.of(deactivated));
+        UserEntity suspended = user(10L, "deactivated@taskpilot.io", UserStatus.DEACTIVATED, AccountLifecycle.ADMIN_SUSPENDED);
+        when(userRepository.findByEmail("deactivated@taskpilot.io")).thenReturn(Optional.of(suspended));
         when(passwordEncoder.matches("CorrectPass1!", "encoded-pass")).thenReturn(true);
 
         BusinessException ex = catchThrowableOfType(
@@ -115,12 +115,22 @@ class AuthSessionBaselineRedTest {
 
         assertThat(ex).isNotNull();
         assertThat(ex.getStatus()).isIn(HttpStatus.UNAUTHORIZED.value(), HttpStatus.FORBIDDEN.value());
+
+        UserEntity selfDeactivated = user(14L, "self-deact@taskpilot.io", UserStatus.DEACTIVATED, AccountLifecycle.SELF_DEACTIVATED);
+        when(userRepository.findByEmail("self-deact@taskpilot.io")).thenReturn(Optional.of(selfDeactivated));
+        AuthResponse restoreResp = authService.login(new LoginRequest("self-deact@taskpilot.io", "CorrectPass1!"));
+        assertThat(restoreResp.outcome()).isEqualTo("RESTORE_REQUIRED");
+        assertThat(restoreResp.token()).isNull();
+        assertThat(restoreResp.refreshToken()).isNull();
+        assertThat(restoreResp.restoreTicket()).isNotBlank();
     }
 
     @Test
     void exchangeOAuth2Code_whenUserIsDeactivated_mustRejectAndNeverIssueJwt() {
         UserEntity deactivated = user(11L, "oauth-deactivated@taskpilot.io", UserStatus.DEACTIVATED, AccountLifecycle.LEGACY_DISABLED);
-        when(oauth2OneTimeCodeStore.consume("one-time-code")).thenReturn(Optional.of(11L));
+        when(oauth2OneTimeCodeStore.consumePayload("one-time-code"))
+                .thenReturn(Optional.of(
+                        com.taskpilot.infrastructure.config.security.oauth2.OAuth2OneTimeCodeStore.ExchangePayload.authenticated(11L)));
         when(userRepository.findByIdForUpdate(11L)).thenReturn(Optional.of(deactivated));
 
         BusinessException ex = catchThrowableOfType(
@@ -217,6 +227,7 @@ class AuthSessionBaselineRedTest {
                 .role(UserRole.USER)
                 .status(status)
                 .accountState(lifecycle)
+                .emailVerified(true)
                 .tokenVersion(0L)
                 .build();
     }
