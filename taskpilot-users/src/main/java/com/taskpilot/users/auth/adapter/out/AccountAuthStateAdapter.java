@@ -86,13 +86,27 @@ public class AccountAuthStateAdapter implements AccountAuthStatePort, SessionAut
             return Optional.empty();
         }
         return refreshTokenRepository.findBySessionId(sessionId)
-                .map(session -> new SessionAuthStateDto(
-                        session.getSessionId(),
-                        session.getUser().getId(),
-                        session.getTokenVersion() != null ? session.getTokenVersion() : 0L,
-                        session.getExpiryDate(),
-                        session.isRevoked()
-                ));
+                .map(AccountAuthStateAdapter::toSessionDto);
+    }
+
+    @Override
+    @Transactional
+    public Optional<SessionAuthStateDto> findByIdForUpdate(UUID sessionId) {
+        if (sessionId == null) {
+            return Optional.empty();
+        }
+        return refreshTokenRepository.findBySessionIdForUpdate(sessionId)
+                .map(AccountAuthStateAdapter::toSessionDto);
+    }
+
+    private static SessionAuthStateDto toSessionDto(com.taskpilot.users.common.entity.RefreshTokenEntity session) {
+        return new SessionAuthStateDto(
+                session.getSessionId(),
+                session.getUser().getId(),
+                session.getTokenVersion() != null ? session.getTokenVersion() : 0L,
+                session.getExpiryDate(),
+                session.isRevoked()
+        );
     }
 
     private static AccountAuthStateDto toAccountDto(UserEntity user) {
