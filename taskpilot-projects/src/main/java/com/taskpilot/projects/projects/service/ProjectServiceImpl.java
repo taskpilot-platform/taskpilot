@@ -1,37 +1,44 @@
 package com.taskpilot.projects.projects.service;
 
-import java.time.LocalDate;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.time.Instant;
+import java.util.*;
 import java.util.stream.Collectors;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.taskpilot.contracts.assignment.port.out.UserPort;
+import com.taskpilot.contracts.project.dto.AccessRevocationReason;
+import com.taskpilot.contracts.project.dto.ProjectAccessRevokedEvent;
+import com.taskpilot.contracts.project.exception.SoleActiveManagerException;
+import com.taskpilot.contracts.user.dto.AccountAuthStateDto;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
 import com.taskpilot.contracts.user.event.ProjectMemberEvent;
+import com.taskpilot.contracts.user.port.out.AccountAuthStatePort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.infrastructure.util.PageableUtils;
 import com.taskpilot.infrastructure.util.ValidationUtils;
 import com.taskpilot.projects.common.entity.ProjectEntity;
+import com.taskpilot.projects.common.entity.ProjectMemberEntity;
+import com.taskpilot.projects.common.entity.TaskEntity;
 import com.taskpilot.projects.common.enums.HeuristicMode;
 import com.taskpilot.projects.common.enums.MemberRole;
 import com.taskpilot.projects.common.enums.ProjectStatus;
 import com.taskpilot.projects.common.enums.TaskStatus;
-import com.taskpilot.projects.common.entity.ProjectMemberEntity;
+import com.taskpilot.projects.common.repository.LabelRepository;
+import com.taskpilot.projects.common.repository.ProjectInvitationRepository;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
 import com.taskpilot.projects.common.repository.ProjectRepository;
-import com.taskpilot.projects.common.repository.TaskRepository;
 import com.taskpilot.projects.common.repository.SprintRepository;
-import com.taskpilot.projects.common.repository.LabelRepository;
+import com.taskpilot.projects.common.repository.TaskRepository;
 import com.taskpilot.projects.common.service.ProjectSecurityService;
 import com.taskpilot.projects.projects.dto.CreateProjectRequest;
 import com.taskpilot.projects.projects.dto.JoinProjectRequest;
@@ -48,12 +55,12 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class ProjectServiceImpl {
 
-    private static final String PROJECT_CODE_PREFIX = "PRJ-";
-
     private final ProjectRepository projectRepository;
     private final ProjectMemberRepository projectMemberRepository;
+    private final ProjectInvitationRepository projectInvitationRepository;
     private final ProjectSecurityService projectSecurityService;
     private final UserPort userPort;
+    private final AccountAuthStatePort accountAuthStatePort;
     private final ApplicationEventPublisher eventPublisher;
     private final TaskRepository taskRepository;
     private final SprintRepository sprintRepository;
@@ -61,9 +68,7 @@ public class ProjectServiceImpl {
     private final UserProfilePort userProfilePort;
 
     // ==================== PROJECT CRUD ====================
-    /**
-     * Get all projects the user has joined
-     */
+
     public Page<MyProjectResponse> getMyProjects(Long userId, String keyword, Pageable pageable) {
         Pageable safePageable = PageableUtils.sanitize(pageable, "joinedAt", Sort.Direction.DESC, "projectId", "userId", "joinedAt", "role");
 
@@ -85,9 +90,6 @@ public class ProjectServiceImpl {
                 member.getJoinedAt() != null ? member.getJoinedAt() : member.getProject().getCreatedAt()));
     }
 
-    /**
-     * Get project detail by ID (user must be a member)
-     */
     public ProjectResponse getProjectDetail(Long projectId, Long userId) {
         ProjectEntity project = projectSecurityService.requireProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
@@ -95,7 +97,9 @@ public class ProjectServiceImpl {
     }
 
     /**
-     * Create a new project (creator becomes PROJECT_MANAGER)
+     * Create a new project (creator becomes PROJECT_MANAGER).
+     * Persists and locks the new project row before locking the creator account row
+     * so concurrent self-deactivation observes consistent ordering.
      */
     @Transactional
     public ProjectResponse createProject(CreateProjectRequest request, Long userId) {
@@ -116,23 +120,25 @@ public class ProjectServiceImpl {
                 .endDate(request.endDate())
                 .build();
 
-        projectRepository.save(project);
+        project = projectRepository.saveAndFlush(project);
 
-        // Add creator as PROJECT_MANAGER
+        AccountAuthStateDto creatorState = accountAuthStatePort.findByIdForUpdate(userId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.FORBIDDEN.value(), "Account not found"));
+        if (!ProjectAccountLifecycleAdapter.isEffectiveActive(creatorState)) {
+            throw new BusinessException(HttpStatus.FORBIDDEN.value(), "Inactive accounts cannot create projects");
+        }
+
         ProjectMemberEntity member = ProjectMemberEntity.builder()
                 .projectId(project.getId())
                 .project(project)
                 .userId(userId)
                 .role(MemberRole.MANAGER)
                 .build();
-        projectMemberRepository.save(member);
+        projectMemberRepository.saveAndFlush(member);
 
         return ProjectResponse.fromEntity(project);
     }
 
-    /**
-     * Update project (only PROJECT_MANAGER can update)
-     */
     @Transactional
     public ProjectResponse updateProject(Long projectId, UpdateProjectRequest request, Long userId) {
         ProjectEntity project = projectSecurityService.requireProject(projectId);
@@ -176,145 +182,229 @@ public class ProjectServiceImpl {
     }
 
     /**
-     * Join a project by invitation code (simple: project ID as code)
+     * Guessable PRJ-ID enrollment is intentionally disabled in P2.4.
      */
     @Transactional
     public ProjectMemberResponse joinProject(JoinProjectRequest request, Long userId) {
-        Long projectId = parseProjectCode(request.projectCode());
-
-        ProjectEntity project = projectSecurityService.requireProject(projectId);
-
-        // Check if already a member
-        if (projectMemberRepository.existsByProjectIdAndUserId(projectId, userId)) {
-            throw new BusinessException(HttpStatus.CONFLICT.value(), "You are already a member of this project");
-        }
-
-        // New member
-        ProjectMemberEntity member = ProjectMemberEntity.builder()
-                .projectId(project.getId())
-                .project(project)
-                .userId(userId)
-                .role(MemberRole.MEMBER)
-                .build();
-        projectMemberRepository.save(member);
-
-        String joinedMemberName = userPort.findById(userId)
-                .map(user -> user.fullName())
-                .orElse("A member");
-
-        List<ProjectMemberEntity> managers = projectMemberRepository.findByProjectIdAndRole(
-                project.getId(),
-                MemberRole.MANAGER);
-
-        String title = "New member joined your project";
-        String message = joinedMemberName + " has joined project \"" + project.getName() + "\".";
-        String linkAction = "/projects";
-
-        for (ProjectMemberEntity manager : managers) {
-            if (!manager.getUserId().equals(userId)) {
-                eventPublisher.publishEvent(new ProjectMemberEvent(manager.getUserId(), title, message, linkAction));
-            }
-        }
-
-        return ProjectMemberResponse.fromEntity(member);
+        throw new BusinessException(HttpStatus.GONE.value(),
+                "Joining projects by numeric PRJ-ID code is disabled. Request a private invitation link from a project manager.");
     }
 
     /**
-     * Leave a project (remove membership record)
+     * Leave a project under canonical project -> users -> tasks lock ordering,
+     * preserving at least one effective ACTIVE manager and revoking prior invitations.
      */
     @Transactional
     public void leaveProject(Long projectId, Long userId) {
-        ProjectEntity project = projectSecurityService.requireProject(projectId);
+        ProjectEntity project = projectRepository.findByIdForUpdate(projectId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Project not found"));
 
-        ProjectMemberEntity member = projectMemberRepository.findByProjectIdAndUserId(projectId, userId)
+        List<ProjectMemberEntity> members = projectMemberRepository.findMembers(projectId);
+        Set<Long> affectedUserIds = members.stream()
+                .map(ProjectMemberEntity::getUserId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        affectedUserIds.add(userId);
+        Map<Long, AccountAuthStateDto> accountStates = accountAuthStatePort.lockAndLoadByIds(affectedUserIds);
+
+        ProjectMemberEntity member = members.stream()
+                .filter(m -> m.getUserId().equals(userId))
+                .findFirst()
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(),
                         "You are not a member of this project"));
+
+        if (member.getRole() == MemberRole.MANAGER) {
+            boolean hasOtherActiveManager = members.stream()
+                    .filter(m -> m.getRole() == MemberRole.MANAGER && !m.getUserId().equals(userId))
+                    .anyMatch(m -> ProjectAccountLifecycleAdapter.isEffectiveActive(accountStates.get(m.getUserId())));
+            if (!hasOtherActiveManager) {
+                throw new SoleActiveManagerException(
+                        List.of(projectId),
+                        "You are the sole active Project Manager. Assign another active PM before leaving.");
+            }
+        }
+
+        Instant now = Instant.now();
+        AccountAuthStateDto leavingAccount = accountStates.get(userId);
+        if (leavingAccount != null && leavingAccount.email() != null) {
+            projectInvitationRepository.revokePendingByProjectIdAndEmail(
+                    projectId,
+                    leavingAccount.email().trim().toLowerCase(Locale.ROOT),
+                    now,
+                    userId,
+                    "MEMBER_LEFT");
+        }
+
+        clearOrphanTasksOnRemoval(project, userId, members, accountStates, "left the project");
+
+        projectMemberRepository.delete(member);
+        projectMemberRepository.flush();
+
+        long rosterVersion = project.bumpRosterVersion();
+        projectRepository.saveAndFlush(project);
+
+        publishAfterCommit(new ProjectAccessRevokedEvent(
+                UUID.randomUUID(), projectId, userId, rosterVersion, now, AccessRevocationReason.MEMBER_LEFT));
 
         String leavingMemberName = userPort.findById(userId)
                 .map(user -> user.fullName())
                 .orElse("A member");
-
-        List<ProjectMemberEntity> managers = projectMemberRepository.findByProjectIdAndRole(
-                projectId,
-                MemberRole.MANAGER);
-
-        // Check if user is the only MANAGER
-        if (member.getRole() == MemberRole.MANAGER) {
-            long pmCount = projectMemberRepository.findMembers(projectId).stream()
-                    .filter(m -> m.getRole() == MemberRole.MANAGER)
-                    .count();
-            if (pmCount == 1) {
-                throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
-                        "You are the only Project Manager. Please assign another PM before leaving.");
-            }
-        }
-
-        projectMemberRepository.delete(member);
-
-        String title = "Thành viên rời dự án";
-        String message = leavingMemberName + " đã rời khỏi dự án \"" + project.getName() + "\".";
-        String linkAction = "/projects";
-
-        for (ProjectMemberEntity manager : managers) {
-            if (!manager.getUserId().equals(userId)) {
-                eventPublisher.publishEvent(new ProjectMemberEvent(manager.getUserId(), title, message, linkAction));
+        for (ProjectMemberEntity mgr : members) {
+            if (mgr.getRole() == MemberRole.MANAGER
+                    && !mgr.getUserId().equals(userId)
+                    && ProjectAccountLifecycleAdapter.isEffectiveActive(accountStates.get(mgr.getUserId()))) {
+                eventPublisher.publishEvent(new ProjectMemberEvent(
+                        mgr.getUserId(),
+                        "Thành viên rời dự án",
+                        leavingMemberName + " đã rời khỏi dự án \"" + project.getName() + "\".",
+                        "/projects"));
             }
         }
     }
 
     /**
-     * Update member role (only MANAGER can do this)
+     * Update member role under canonical project -> users lock ordering.
+     * Prevents demoting the sole effective ACTIVE manager and promoting inactive accounts.
      */
     @Transactional
     public void updateMemberRole(Long projectId, Long targetUserId, MemberRole newRole, Long currentUserId) {
-        ProjectEntity project = projectSecurityService.requireProject(projectId);
+        ProjectEntity project = projectRepository.findByIdForUpdate(projectId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Project not found"));
         projectSecurityService.validateProjectNotArchived(project);
-        projectSecurityService.validateManager(projectId, currentUserId);
 
-        ProjectMemberEntity targetMember = projectMemberRepository.findByProjectIdAndUserId(projectId, targetUserId)
+        List<ProjectMemberEntity> members = projectMemberRepository.findMembers(projectId);
+        Set<Long> affectedUserIds = members.stream()
+                .map(ProjectMemberEntity::getUserId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        affectedUserIds.add(currentUserId);
+        affectedUserIds.add(targetUserId);
+        Map<Long, AccountAuthStateDto> accountStates = accountAuthStatePort.lockAndLoadByIds(affectedUserIds);
+
+        ProjectMemberEntity caller = members.stream()
+                .filter(m -> m.getUserId().equals(currentUserId))
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(HttpStatus.FORBIDDEN.value(),
+                        "You are not a member of this project"));
+        if (caller.getRole() != MemberRole.MANAGER
+                || !ProjectAccountLifecycleAdapter.isEffectiveActive(accountStates.get(currentUserId))) {
+            throw new BusinessException(HttpStatus.FORBIDDEN.value(),
+                    "Only an active Project Manager can update member roles");
+        }
+
+        ProjectMemberEntity targetMember = members.stream()
+                .filter(m -> m.getUserId().equals(targetUserId))
+                .findFirst()
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Member not found in project"));
 
         if (targetMember.getRole() == newRole) {
             return;
         }
 
-        // Prevent last manager demoting themselves
-        if (targetMember.getUserId().equals(currentUserId) && targetMember.getRole() == MemberRole.MANAGER) {
-            long pmCount = projectMemberRepository.findMembers(projectId).stream()
-                    .filter(m -> m.getRole() == MemberRole.MANAGER)
-                    .count();
-            if (pmCount <= 1) {
-                throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Project must have at least one manager");
+        if (newRole == MemberRole.MANAGER) {
+            AccountAuthStateDto targetState = accountStates.get(targetUserId);
+            if (!ProjectAccountLifecycleAdapter.isEffectiveActive(targetState)) {
+                throw new BusinessException(HttpStatus.CONFLICT.value(),
+                        "Cannot promote an inactive account to Project Manager");
             }
         }
 
+        if (targetMember.getRole() == MemberRole.MANAGER && newRole != MemberRole.MANAGER) {
+            boolean hasOtherActiveManager = members.stream()
+                    .filter(m -> m.getRole() == MemberRole.MANAGER && !m.getUserId().equals(targetUserId))
+                    .anyMatch(m -> ProjectAccountLifecycleAdapter.isEffectiveActive(accountStates.get(m.getUserId())));
+            if (!hasOtherActiveManager) {
+                throw new SoleActiveManagerException(
+                        List.of(projectId),
+                        "Project must retain at least one active manager");
+            }
+        }
+
+        boolean demotedFromManager = targetMember.getRole() == MemberRole.MANAGER && newRole != MemberRole.MANAGER;
         targetMember.setRole(newRole);
-        projectMemberRepository.save(targetMember);
+        projectMemberRepository.saveAndFlush(targetMember);
+
+        long rosterVersion = project.bumpRosterVersion();
+        if (newRole == MemberRole.MANAGER && Boolean.TRUE.equals(project.getNeedsManagerAttention())) {
+            project.setNeedsManagerAttention(Boolean.FALSE);
+            project.setManagementAttentionReason(null);
+            project.setManagementAttentionSince(null);
+            project.setManagementAttentionEventId(null);
+        }
+        projectRepository.saveAndFlush(project);
+
+        if (demotedFromManager) {
+            publishAfterCommit(new ProjectAccessRevokedEvent(
+                    UUID.randomUUID(), projectId, targetUserId, rosterVersion, Instant.now(),
+                    AccessRevocationReason.ROLE_DEMOTED));
+        }
     }
 
     /**
-     * Remove member from project (only MANAGER can do this)
+     * Remove member under canonical project -> users -> tasks lock ordering,
+     * preserving at least one effective ACTIVE manager and revoking prior invitations.
      */
     @Transactional
     public void removeMember(Long projectId, Long targetUserId, Long currentUserId) {
-        ProjectEntity project = projectSecurityService.requireProject(projectId);
+        ProjectEntity project = projectRepository.findByIdForUpdate(projectId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Project not found"));
         projectSecurityService.validateProjectNotArchived(project);
-        projectSecurityService.validateManager(projectId, currentUserId);
 
-        ProjectMemberEntity targetMember = projectMemberRepository.findByProjectIdAndUserId(projectId, targetUserId)
+        List<ProjectMemberEntity> members = projectMemberRepository.findMembers(projectId);
+        Set<Long> affectedUserIds = members.stream()
+                .map(ProjectMemberEntity::getUserId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        affectedUserIds.add(currentUserId);
+        affectedUserIds.add(targetUserId);
+        Map<Long, AccountAuthStateDto> accountStates = accountAuthStatePort.lockAndLoadByIds(affectedUserIds);
+
+        ProjectMemberEntity caller = members.stream()
+                .filter(m -> m.getUserId().equals(currentUserId))
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(HttpStatus.FORBIDDEN.value(),
+                        "You are not a member of this project"));
+        if (caller.getRole() != MemberRole.MANAGER
+                || !ProjectAccountLifecycleAdapter.isEffectiveActive(accountStates.get(currentUserId))) {
+            throw new BusinessException(HttpStatus.FORBIDDEN.value(),
+                    "Only an active Project Manager can remove members");
+        }
+
+        ProjectMemberEntity targetMember = members.stream()
+                .filter(m -> m.getUserId().equals(targetUserId))
+                .findFirst()
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Member not found in project"));
 
-        // Prevent last manager being removed
         if (targetMember.getRole() == MemberRole.MANAGER) {
-            long pmCount = projectMemberRepository.findMembers(projectId).stream()
-                    .filter(m -> m.getRole() == MemberRole.MANAGER)
-                    .count();
-            if (pmCount <= 1) {
-                throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Project must have at least one manager");
+            boolean hasOtherActiveManager = members.stream()
+                    .filter(m -> m.getRole() == MemberRole.MANAGER && !m.getUserId().equals(targetUserId))
+                    .anyMatch(m -> ProjectAccountLifecycleAdapter.isEffectiveActive(accountStates.get(m.getUserId())));
+            if (!hasOtherActiveManager) {
+                throw new SoleActiveManagerException(
+                        List.of(projectId),
+                        "Project must retain at least one active manager");
             }
         }
 
+        Instant now = Instant.now();
+        AccountAuthStateDto targetAccount = accountStates.get(targetUserId);
+        if (targetAccount != null && targetAccount.email() != null) {
+            projectInvitationRepository.revokePendingByProjectIdAndEmail(
+                    projectId,
+                    targetAccount.email().trim().toLowerCase(Locale.ROOT),
+                    now,
+                    currentUserId,
+                    "MEMBER_REMOVED");
+        }
+
+        clearOrphanTasksOnRemoval(project, targetUserId, members, accountStates, "was removed from the project");
+
         projectMemberRepository.delete(targetMember);
+        projectMemberRepository.flush();
+
+        long rosterVersion = project.bumpRosterVersion();
+        projectRepository.saveAndFlush(project);
+
+        publishAfterCommit(new ProjectAccessRevokedEvent(
+                UUID.randomUUID(), projectId, targetUserId, rosterVersion, now,
+                AccessRevocationReason.MEMBER_REMOVED));
     }
 
     // ==================== PROJECT LIFECYCLE ====================
@@ -349,9 +439,6 @@ public class ProjectServiceImpl {
         projectRepository.deleteProjectById(projectId);
     }
 
-    /**
-     * Get project summary (statistics)
-     */
     public ProjectSummaryResponse getProjectSummary(Long projectId, Long userId) {
         ProjectEntity project = projectSecurityService.requireProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
@@ -378,16 +465,12 @@ public class ProjectServiceImpl {
                 Math.round(completionRate * 10.0) / 10.0);
     }
 
-    /**
-     * Get all active members of a project
-     */
     public List<ProjectMemberResponse> getProjectMembers(Long projectId, Long userId) {
         projectSecurityService.requireProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
         List<ProjectMemberEntity> members = projectMemberRepository.findMembers(projectId);
 
-        // Batch lookup user profiles for efficiency
         Set<Long> userIds = members.stream()
                 .map(ProjectMemberEntity::getUserId)
                 .collect(Collectors.toSet());
@@ -407,19 +490,49 @@ public class ProjectServiceImpl {
                 .toList();
     }
 
-    // ==================== HELPER METHODS ====================
-    private Long parseProjectCode(String projectCode) {
-        String normalized = projectCode == null ? "" : projectCode.trim().toUpperCase();
-        if (normalized.startsWith(PROJECT_CODE_PREFIX)) {
-            normalized = normalized.substring(PROJECT_CODE_PREFIX.length());
+    private void clearOrphanTasksOnRemoval(
+            ProjectEntity project,
+            long removedUserId,
+            List<ProjectMemberEntity> members,
+            Map<Long, AccountAuthStateDto> accountStates,
+            String reasonPhrase) {
+        List<TaskEntity> activeAssigned = taskRepository.findActiveAssignedByProjectIdAndAssigneeIdForUpdate(
+                project.getId(), removedUserId);
+        if (activeAssigned.isEmpty()) {
+            return;
         }
+        for (TaskEntity task : activeAssigned) {
+            task.setAssigneeId(null);
+            if (task.getStatus() == TaskStatus.REVIEW) {
+                task.setStatus(TaskStatus.IN_PROGRESS);
+            }
+        }
+        taskRepository.saveAll(activeAssigned);
 
-        try {
-            return Long.parseLong(normalized);
-        } catch (NumberFormatException e) {
-            throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
-                    "Invalid project code. Expected format: PRJ-<id> or <id>");
+        for (ProjectMemberEntity mgr : members) {
+            if (mgr.getRole() == MemberRole.MANAGER
+                    && !mgr.getUserId().equals(removedUserId)
+                    && ProjectAccountLifecycleAdapter.isEffectiveActive(accountStates.get(mgr.getUserId()))) {
+                eventPublisher.publishEvent(new ProjectMemberEvent(
+                        mgr.getUserId(),
+                        "Orphaned tasks require reassignment",
+                        activeAssigned.size() + " active task(s) in project \"" + project.getName()
+                                + "\" were unassigned because the assignee " + reasonPhrase + ".",
+                        "/projects/" + project.getId() + "/board"));
+            }
+        }
+    }
+
+    private void publishAfterCommit(Object event) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    eventPublisher.publishEvent(event);
+                }
+            });
+        } else {
+            eventPublisher.publishEvent(event);
         }
     }
 }
-
