@@ -209,6 +209,8 @@ public class ProjectMeetingService {
     @Transactional
     public void leaveMeeting(Long projectId, Long meetingId, Long userId) {
         projectSecurityService.validateMember(projectId, userId);
+        meetingRepository.findByIdAndProjectId(meetingId, projectId)
+                .orElseThrow(() -> new BusinessException(404, "Meeting not found"));
 
         participantRepository.findFirstByMeetingIdAndUserIdAndLeftAtIsNullOrderByJoinedAtDesc(meetingId, userId)
                 .ifPresent(p -> {
@@ -282,6 +284,8 @@ public class ProjectMeetingService {
     public List<MeetingParticipantResponse> getParticipants(Long projectId, Long meetingId, Long userId) {
         projectSecurityService.requireProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
+        meetingRepository.findByIdAndProjectId(meetingId, projectId)
+                .orElseThrow(() -> new BusinessException(404, "Meeting not found"));
 
         List<ProjectMeetingParticipantEntity> participants =
                 participantRepository.findByMeetingIdOrderByJoinedAtAsc(meetingId);

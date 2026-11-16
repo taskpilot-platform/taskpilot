@@ -47,10 +47,9 @@ public class ProjectChatService {
 
         String attachedFileName = null;
         if (request.fileId() != null) {
-            Optional<ProjectFileEntity> fileOpt = projectFileRepository.findByIdAndProjectId(request.fileId(), projectId);
-            if (fileOpt.isPresent()) {
-                attachedFileName = fileOpt.get().getOriginalName();
-            }
+            attachedFileName = projectFileRepository.findByIdAndProjectId(request.fileId(), projectId)
+                    .orElseThrow(() -> new BusinessException(404, "Attachment not found in this project"))
+                    .getOriginalName();
         }
 
         ProjectChatMessageEntity entity = ProjectChatMessageEntity.builder()
@@ -101,7 +100,7 @@ public class ProjectChatService {
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
 
-        Map<Long, String> fileNames = resolveFileNames(fileIds);
+        Map<Long, String> fileNames = resolveFileNames(projectId, fileIds);
 
         return page.map(msg -> {
             UserProfileLiteDto profile = profileMap.get(msg.getSenderId());
@@ -122,12 +121,14 @@ public class ProjectChatService {
         return map;
     }
 
-    private Map<Long, String> resolveFileNames(Set<Long> fileIds) {
+    private Map<Long, String> resolveFileNames(Long projectId, Set<Long> fileIds) {
         if (fileIds.isEmpty()) return Collections.emptyMap();
         List<ProjectFileEntity> files = projectFileRepository.findAllById(fileIds);
         Map<Long, String> map = new HashMap<>();
         for (ProjectFileEntity f : files) {
-            map.put(f.getId(), f.getOriginalName());
+            if (Objects.equals(f.getProjectId(), projectId)) {
+                map.put(f.getId(), f.getOriginalName());
+            }
         }
         return map;
     }
