@@ -44,7 +44,8 @@ class OAuth2RedirectValidationHandlerTest {
                 new OAuth2UserInfo(AuthProvider.GOOGLE, "sub-1", "user@example.test", true, "User", null));
         UserEntity user = new UserEntity();
         user.setId(42L);
-        when(accountService.resolveUser(any())).thenReturn(user);
+        when(accountService.resolveLoginOrRegister(any()))
+                .thenReturn(new OAuth2AccountService.Resolution.Authenticated(user));
         when(codeStore.generateAndStore(42L)).thenReturn("one-time-code");
 
         OAuth2LoginSuccessHandler handler = new OAuth2LoginSuccessHandler(
