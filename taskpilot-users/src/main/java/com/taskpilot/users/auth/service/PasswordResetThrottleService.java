@@ -3,6 +3,7 @@ package com.taskpilot.users.auth.service;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
@@ -11,12 +12,11 @@ import org.springframework.stereotype.Service;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.Locale;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 @Slf4j
@@ -30,24 +30,39 @@ public class PasswordResetThrottleService {
     private static final String REDIS_KEY_IP_RATE_PREFIX = "pwdreset:rate:ip:";
 
     @Value("${application.security.password-reset.rate-limit.provider:${application.security.jwt.blocklist.provider:memory}}")
-    private String provider;
+    private String provider = PROVIDER_MEMORY;
 
     @Value("${application.security.password-reset.rate-limit.cooldown-seconds:60}")
-    private long cooldownSeconds;
+    private long cooldownSeconds = 60L;
 
     @Value("${application.security.password-reset.rate-limit.max-per-email-per-hour:5}")
-    private int maxPerEmailPerHour;
+    private int maxPerEmailPerHour = 5;
 
     @Value("${application.security.password-reset.rate-limit.max-per-ip-per-hour:20}")
-    private int maxPerIpPerHour;
+    private int maxPerIpPerHour = 20;
 
     private final ObjectProvider<StringRedisTemplate> redisTemplateProvider;
-    private final Map<String, Instant> emailCooldowns = new ConcurrentHashMap<>();
-    private final Map<String, FixedWindowCounter> emailCounters = new ConcurrentHashMap<>();
-    private final Map<String, FixedWindowCounter> ipCounters = new ConcurrentHashMap<>();
+    private final AuthAttemptStore attemptStore;
+    private final Clock clock;
 
     public PasswordResetThrottleService(ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
+        this(redisTemplateProvider, new InMemoryAuthAttemptStore(), Clock.systemUTC());
+    }
+
+    @Autowired
+    public PasswordResetThrottleService(
+            ObjectProvider<StringRedisTemplate> redisTemplateProvider,
+            AuthAttemptStore attemptStore) {
+        this(redisTemplateProvider, attemptStore, Clock.systemUTC());
+    }
+
+    public PasswordResetThrottleService(
+            ObjectProvider<StringRedisTemplate> redisTemplateProvider,
+            AuthAttemptStore attemptStore,
+            Clock clock) {
         this.redisTemplateProvider = redisTemplateProvider;
+        this.attemptStore = attemptStore != null ? attemptStore : new InMemoryAuthAttemptStore();
+        this.clock = clock != null ? clock : Clock.systemUTC();
     }
 
     public void checkAndConsume(String email, String clientIp) {
@@ -79,11 +94,11 @@ public class PasswordResetThrottleService {
         if (cooldownSeconds <= 0) {
             return 0;
         }
-
+        String keyHash = sha256(normalizedEmail);
         if (isRedisProviderEnabled()) {
             StringRedisTemplate redisTemplate = redisTemplateProvider.getIfAvailable();
             if (redisTemplate != null) {
-                String key = REDIS_KEY_COOLDOWN_PREFIX + sha256(normalizedEmail);
+                String key = REDIS_KEY_COOLDOWN_PREFIX + keyHash;
                 Boolean created = redisTemplate.opsForValue().setIfAbsent(key, "1",
                         Duration.ofSeconds(cooldownSeconds));
                 if (Boolean.TRUE.equals(created)) {
@@ -95,49 +110,34 @@ public class PasswordResetThrottleService {
                 }
                 return cooldownSeconds;
             }
-            log.warn(
-                    "Password reset rate-limit provider is redis, but Redis template is unavailable. Falling back to in-memory rate-limit.");
+            log.warn("Password reset rate-limit provider is redis, but Redis template is unavailable. Falling back to bounded attempt store.");
         }
-
-        return checkMemoryCooldown(normalizedEmail);
-    }
-
-    private long checkMemoryCooldown(String normalizedEmail) {
-        Instant now = Instant.now();
-        Instant expiresAt = emailCooldowns.get(normalizedEmail);
-        if (expiresAt != null && expiresAt.isAfter(now)) {
-            return Math.max(1L, Duration.between(now, expiresAt).toSeconds());
-        }
-        emailCooldowns.put(normalizedEmail, now.plusSeconds(cooldownSeconds));
-        return 0;
+        return attemptStore.tryAcquireCooldownSeconds(
+                "PWD_RESET_CD", keyHash, Duration.ofSeconds(cooldownSeconds), clock.instant());
     }
 
     private long incrementEmailCounter(String normalizedEmail) {
-        String key = sha256(normalizedEmail);
+        String keyHash = sha256(normalizedEmail);
         if (isRedisProviderEnabled()) {
             StringRedisTemplate redisTemplate = redisTemplateProvider.getIfAvailable();
             if (redisTemplate != null) {
-                return incrementRedisCounter(redisTemplate, REDIS_KEY_EMAIL_RATE_PREFIX + key);
+                return incrementRedisCounter(redisTemplate, REDIS_KEY_EMAIL_RATE_PREFIX + keyHash);
             }
-            log.warn(
-                    "Password reset rate-limit provider is redis, but Redis template is unavailable. Falling back to in-memory rate-limit.");
+            log.warn("Password reset rate-limit provider is redis, but Redis template is unavailable. Falling back to bounded attempt store.");
         }
-
-        return incrementMemoryCounter(emailCounters, key);
+        return attemptStore.incrementAndGet("PWD_RESET_EM", keyHash, WINDOW_DURATION, clock.instant());
     }
 
     private long incrementIpCounter(String normalizedIp) {
-        String key = sha256(normalizedIp);
+        String keyHash = sha256(normalizedIp);
         if (isRedisProviderEnabled()) {
             StringRedisTemplate redisTemplate = redisTemplateProvider.getIfAvailable();
             if (redisTemplate != null) {
-                return incrementRedisCounter(redisTemplate, REDIS_KEY_IP_RATE_PREFIX + key);
+                return incrementRedisCounter(redisTemplate, REDIS_KEY_IP_RATE_PREFIX + keyHash);
             }
-            log.warn(
-                    "Password reset rate-limit provider is redis, but Redis template is unavailable. Falling back to in-memory rate-limit.");
+            log.warn("Password reset rate-limit provider is redis, but Redis template is unavailable. Falling back to bounded attempt store.");
         }
-
-        return incrementMemoryCounter(ipCounters, key);
+        return attemptStore.incrementAndGet("PWD_RESET_IP", keyHash, WINDOW_DURATION, clock.instant());
     }
 
     private long incrementRedisCounter(StringRedisTemplate redisTemplate, String key) {
@@ -148,26 +148,15 @@ public class PasswordResetThrottleService {
         return count == null ? 1L : count;
     }
 
-    private long incrementMemoryCounter(Map<String, FixedWindowCounter> counters, String key) {
-        Instant now = Instant.now();
-        FixedWindowCounter updatedCounter = counters.compute(key, (k, current) -> {
-            if (current == null || current.expiresAt().isBefore(now)) {
-                return new FixedWindowCounter(1, now.plus(WINDOW_DURATION));
-            }
-            return current.increment();
-        });
-        return updatedCounter.count();
-    }
-
-    private BusinessException tooManyRequests(String message) {
+    private static BusinessException tooManyRequests(String message) {
         return new BusinessException(HttpStatus.TOO_MANY_REQUESTS.value(), message);
     }
 
-    private String normalizeEmail(String email) {
+    private static String normalizeEmail(String email) {
         return email == null ? "" : email.trim().toLowerCase(Locale.ROOT);
     }
 
-    private String normalizeIp(String ip) {
+    private static String normalizeIp(String ip) {
         String normalized = ip == null ? "" : ip.trim();
         return normalized.isBlank() ? "unknown" : normalized;
     }
@@ -176,19 +165,13 @@ public class PasswordResetThrottleService {
         return PROVIDER_REDIS.equalsIgnoreCase(provider);
     }
 
-    private String sha256(String input) {
+    private static String sha256(String input) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             byte[] hash = digest.digest(input.getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(hash);
         } catch (NoSuchAlgorithmException ex) {
             throw new IllegalStateException("SHA-256 algorithm is unavailable", ex);
-        }
-    }
-
-    private record FixedWindowCounter(long count, Instant expiresAt) {
-        private FixedWindowCounter increment() {
-            return new FixedWindowCounter(count + 1, expiresAt);
         }
     }
 }
