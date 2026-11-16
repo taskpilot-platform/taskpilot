@@ -52,9 +52,12 @@ class EntityFlywaySchemaParityAuditTest {
             ProjectChatMessageEntity.class,
             ProjectEntity.class,
             ProjectFileEntity.class,
+            ProjectInvitationEntity.class,
+            ProjectManagementAttentionAuditEntity.class,
             ProjectMeetingEntity.class,
             ProjectMeetingParticipantEntity.class,
             ProjectMemberEntity.class,
+            UserProjectReconciliationStateEntity.class,
             SprintEntity.class,
             TaskEntity.class,
             TaskLabelEntity.class,
@@ -68,6 +71,7 @@ class EntityFlywaySchemaParityAuditTest {
             SystemSettingEntity.class,
             UserEntity.class,
             UserIdentityEntity.class,
+            UserLifecycleRecoveryOutboxEntity.class,
             UserSkillEntity.class
     );
 
@@ -105,6 +109,8 @@ class EntityFlywaySchemaParityAuditTest {
                 "Reconciled baseline V41 must exist");
         assertTrue(sqlFiles.stream().anyMatch(p -> p.getFileName().toString().startsWith("V44__")),
                 "Migration V44__stable_principal_session_authority.sql must exist in db/reconciled");
+        assertTrue(sqlFiles.stream().anyMatch(p -> p.getFileName().toString().startsWith("V45__")),
+                "Migration V45__p2_account_lifecycle_credentials_invitations.sql must exist in db/reconciled");
     }
 
     @Test
