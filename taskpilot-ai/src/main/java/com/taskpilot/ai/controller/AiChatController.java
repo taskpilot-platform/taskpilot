@@ -106,6 +106,7 @@ public class AiChatController {
     public ApiResponse<Void> warmupCache(@PathVariable Long sessionId,
             Authentication authentication) {
         Long userId = resolveUserId(authentication);
+        toolCallingRegistryService.reserveWarmup(userId, sessionId);
         toolCallingRegistryService.warmupCache(userId, sessionId);
         return ApiResponse.ok("Warmup started", null);
     }
