@@ -17,4 +17,10 @@ public interface ProjectMemberPort {
     boolean isProjectMember(Long projectId, Long userId);
 
     boolean isProjectManager(Long projectId, Long userId);
+
+    default boolean isProjectArchived(Long projectId) {
+        return false;
+    }
+    /** Serialize storage metadata writes against project deletion; caller must own a transaction. */
+    void lockProjectForStorageWrite(Long projectId);
 }

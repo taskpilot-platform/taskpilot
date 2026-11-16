@@ -13,6 +13,7 @@ import com.taskpilot.contracts.assignment.dto.ProjectMemberDto;
 import com.taskpilot.contracts.assignment.port.out.ProjectMemberPort;
 import com.taskpilot.contracts.assignment.port.out.ProjectPort;
 import com.taskpilot.projects.common.enums.MemberRole;
+import com.taskpilot.projects.common.enums.ProjectStatus;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
 import com.taskpilot.projects.common.repository.ProjectRepository;
 
@@ -82,5 +83,21 @@ public class ProjectModuleAdapter implements ProjectMemberPort, ProjectPort {
                 return projectMemberRepository.findByProjectIdAndUserId(projectId, userId)
                                 .map(member -> member.getRole() == MemberRole.MANAGER)
                                 .orElse(false);
+        }
+
+        @Override
+        public boolean isProjectArchived(Long projectId) {
+                if (projectId == null) {
+                        return true;
+                }
+                return projectRepository.findById(projectId)
+                                .map(project -> project.getStatus() == ProjectStatus.ARCHIVED)
+                                .orElse(true);
+        }
+        @Override
+        @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY)
+        public void lockProjectForStorageWrite(Long projectId) {
+                projectRepository.findByIdForUpdate(projectId).orElseThrow(() ->
+                    new com.taskpilot.infrastructure.exception.BusinessException(404,"Project not found"));
         }
 }
