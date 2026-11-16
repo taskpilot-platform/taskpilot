@@ -40,6 +40,8 @@ import static org.junit.jupiter.api.Assertions.*;
 class EntityFlywaySchemaParityAuditTest {
 
     private static final List<Class<?>> ALL_JPA_ENTITIES = List.of(
+            com.taskpilot.infrastructure.storage.cleanup.StorageUploadOperationEntity.class,
+            com.taskpilot.infrastructure.storage.cleanup.StorageCleanupJobEntity.class,
             AiChatMemoryEntity.class,
             AiChatRequestEntity.class,
             AiLogEntity.class,
