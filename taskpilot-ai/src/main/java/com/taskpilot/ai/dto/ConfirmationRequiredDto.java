@@ -10,5 +10,7 @@ public record ConfirmationRequiredDto(
         String summary,
         Map<String, Object> arguments,
         Object preview,
-        Instant expiresAt) {
+        @com.fasterxml.jackson.annotation.JsonFormat(shape = com.fasterxml.jackson.annotation.JsonFormat.Shape.STRING)
+        Instant expiresAt,
+        String payloadHash) {
 }

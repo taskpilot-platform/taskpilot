@@ -45,7 +45,7 @@ class MeetingAiToolsTest {
         projectMeetingPort = Mockito.mock(ProjectMeetingPort.class);
         meetingSummarizationService = Mockito.mock(MeetingSummarizationService.class);
         taskCommandPort = Mockito.mock(TaskCommandPort.class);
-        pendingAiActionService = new PendingAiActionService();
+        pendingAiActionService = new PendingAiActionService(org.mockito.Mockito.mock(com.taskpilot.ai.service.AiToolAccessPolicy.class));
         meetingAiTools = new MeetingAiTools(
                 projectMeetingPort,
                 meetingSummarizationService,
@@ -131,7 +131,7 @@ class MeetingAiToolsTest {
         when(projectMeetingPort.scheduleMeeting(eq(10L), any(ScheduleMeetingCommand.class), eq(100L)))
                 .thenReturn(created);
 
-        Object executed = pendingAiActionService.confirm(conf.actionId(), 100L, 200L);
+        Object executed = com.taskpilot.ai.service.P3TestActions.confirm(pendingAiActionService, conf.actionId(), 100L, 200L);
         assertThat(executed).isEqualTo(created);
         verify(projectMeetingPort).scheduleMeeting(eq(10L), any(ScheduleMeetingCommand.class), eq(100L));
     }
@@ -216,7 +216,7 @@ class MeetingAiToolsTest {
                 eq(10L), eq("Fix bug #123"), anyString(), eq("HIGH"), any(), any(), any(), any(), any(), any(), eq(100L), any(), eq("2026-11-06"), eq(100L)))
                 .thenReturn(createdTask);
 
-        Object executionResult = pendingAiActionService.confirm(conf.actionId(), 100L, 200L);
+        Object executionResult = com.taskpilot.ai.service.P3TestActions.confirm(pendingAiActionService, conf.actionId(), 100L, 200L);
         assertThat(executionResult).isInstanceOf(MeetingTaskCreationResultDto.class);
         MeetingTaskCreationResultDto taskResult = (MeetingTaskCreationResultDto) executionResult;
         assertThat(taskResult.created()).hasSize(1);
@@ -243,7 +243,7 @@ class MeetingAiToolsTest {
         Object result = meetingAiTools.createTasksFromMeetingActionItems(10L, 1L, null);
         ConfirmationRequiredDto conf = (ConfirmationRequiredDto) result;
 
-        Object executionResult = pendingAiActionService.confirm(conf.actionId(), 100L, 200L);
+        Object executionResult = com.taskpilot.ai.service.P3TestActions.confirm(pendingAiActionService, conf.actionId(), 100L, 200L);
         MeetingTaskCreationResultDto taskResult = (MeetingTaskCreationResultDto) executionResult;
         assertThat(taskResult.skipped()).hasSize(1);
         assertThat(taskResult.created()).isEmpty();

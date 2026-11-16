@@ -30,7 +30,7 @@ class ChatAiToolsTest {
     @BeforeEach
     void setUp() {
         projectChatPort = Mockito.mock(ProjectChatPort.class);
-        pendingAiActionService = new PendingAiActionService();
+        pendingAiActionService = new PendingAiActionService(org.mockito.Mockito.mock(com.taskpilot.ai.service.AiToolAccessPolicy.class));
         chatAiTools = new ChatAiTools(projectChatPort, pendingAiActionService);
         ToolExecutionContext.set(new ToolExecutionContext.Context(100L, 200L, "test"));
     }
@@ -93,7 +93,7 @@ class ChatAiToolsTest {
                 99L, 100L, "Alice", "Important: Meeting at 3pm!", "ANNOUNCEMENT", null, null, Instant.now());
         when(projectChatPort.postAnnouncement(10L, "Important: Meeting at 3pm!", 100L)).thenReturn(posted);
 
-        Object executed = pendingAiActionService.confirm(conf.actionId(), 100L, 200L);
+        Object executed = com.taskpilot.ai.service.P3TestActions.confirm(pendingAiActionService, conf.actionId(), 100L, 200L);
         assertThat(executed).isEqualTo(posted);
         verify(projectChatPort).postAnnouncement(10L, "Important: Meeting at 3pm!", 100L);
     }

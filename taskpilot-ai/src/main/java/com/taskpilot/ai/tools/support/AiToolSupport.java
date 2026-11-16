@@ -152,13 +152,7 @@ public final class AiToolSupport {
     }
 
     public static boolean isConfirmationInput(String input) {
-        if (input.matches("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$") || input.startsWith("confirm_action")) {
-            return true;
-        }
-        return input.contains("confirm") || input.contains("confirmed")
-                || input.contains("xac nhan") || input.contains("dong y")
-                || input.contains("thuc hien") || input.contains("apply")
-                || input.contains("ok") || input.contains("yes") || input.contains("approve");
+        return false; // Natural language and UUIDs are not proof of consent.
     }
 
 
@@ -266,7 +260,7 @@ public final class AiToolSupport {
     public static Map<String, Object> normalizePatch(Object patchData) {
         if (patchData == null) return java.util.Collections.emptyMap();
         if (patchData instanceof Map) {
-            return (Map<String, Object>) patchData;
+            return immutableArguments((Map<String, Object>) patchData);
         }
         if (patchData instanceof String strData) {
             String trimmed = strData.trim();
@@ -291,6 +285,22 @@ public final class AiToolSupport {
             }
         }
         throw new IllegalArgumentException("Invalid patch data type: " + (patchData != null ? patchData.getClass().getSimpleName() : "null"));
+    }
+
+    public static Map<String,Object> immutableArguments(Map<String,Object> value) {
+        Map<String,Object> copy=new LinkedHashMap<>();
+        if(value!=null) value.forEach((k,v) -> copy.put(k,immutableValue(v)));
+        return Collections.unmodifiableMap(copy);
+    }
+    public static Object immutableValue(Object value) {
+        if(value instanceof Map<?,?> map) {
+            Map<String,Object> copy=new LinkedHashMap<>();
+            map.forEach((k,v)->copy.put(String.valueOf(k),immutableValue(v)));
+            return Collections.unmodifiableMap(copy);
+        }
+        if(value instanceof Collection<?> list) return list.stream().map(AiToolSupport::immutableValue).toList();
+        if(value==null || value instanceof String || value instanceof Number || value instanceof Boolean || value instanceof Enum<?>) return value;
+        return immutableValue(PATCH_OBJECT_MAPPER.convertValue(value,Object.class));
     }
 
 

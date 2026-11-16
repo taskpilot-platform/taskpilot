@@ -79,9 +79,11 @@ class TaskPilotAiToolsHumanInLoopTest {
     private SmartQueryService smartQueryService;
 
     private TaskPilotAiTools tools;
+    private PendingAiActionService pending;
 
     @BeforeEach
     void setUp() {
+        pending = new PendingAiActionService(org.mockito.Mockito.mock(com.taskpilot.ai.service.AiToolAccessPolicy.class));
         tools = new TaskPilotAiTools(
                 autoAssignmentService,
                 projectMemberPort,
@@ -92,7 +94,7 @@ class TaskPilotAiToolsHumanInLoopTest {
                 sprintQueryPort,
                 skillPort,
                 userNotificationQueryPort,
-                new PendingAiActionService(),
+                pending,
                 smartQueryService);
         ToolExecutionContext.set(new ToolExecutionContext.Context(USER_ID, SESSION_ID, "initial request"));
     }
@@ -347,7 +349,7 @@ class TaskPilotAiToolsHumanInLoopTest {
                 USER_ID,
                 SESSION_ID,
                 "CONFIRM_ACTION " + actionId + " - xac nhan thuc hien"));
-        return tools.confirmPendingAction(actionId);
+        return com.taskpilot.ai.service.P3TestActions.confirm(pending, actionId, USER_ID, SESSION_ID);
     }
 
     private TaskSummaryDto task(Long id, String status) {
