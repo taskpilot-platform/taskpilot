@@ -18,6 +18,8 @@ import com.taskpilot.users.common.enums.UserStatus;
 import com.taskpilot.users.common.repository.RefreshTokenHistoryRepository;
 import com.taskpilot.users.common.repository.RefreshTokenRepository;
 import com.taskpilot.users.common.repository.UserRepository;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.never;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -201,6 +203,17 @@ class UserSessionServiceTest {
         assertThat(dto.tokenVersion()).isEqualTo(2L);
     }
 
+    @Test
+    void issueSession_rejectsUnverifiedEmail() {
+        UserEntity unverified = activeUser(99L, 0L);
+        unverified.setEmailVerified(false);
+        when(userRepository.findByIdForUpdate(99L)).thenReturn(Optional.of(unverified));
+
+        assertThatThrownBy(() -> userSessionService.issueSession(99L))
+                .isInstanceOfSatisfying(BusinessException.class, ex -> assertThat(ex.getStatus()).isEqualTo(403));
+        verify(refreshTokenRepository, never()).saveAndFlush(any());
+    }
+
     private static UserEntity activeUser(long id, long version) {
         return UserEntity.builder()
                 .id(id)
@@ -209,7 +222,7 @@ class UserSessionServiceTest {
                 .role(UserRole.USER)
                 .status(UserStatus.AVAILABLE)
                 .accountState(AccountLifecycle.ACTIVE)
-                .emailVerified(false)
+                .emailVerified(true)
                 .tokenVersion(version)
                 .build();
     }

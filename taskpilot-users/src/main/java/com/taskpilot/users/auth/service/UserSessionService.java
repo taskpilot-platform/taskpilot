@@ -10,11 +10,13 @@ import com.taskpilot.users.auth.dto.AuthResponse;
 import com.taskpilot.users.common.entity.RefreshTokenEntity;
 import com.taskpilot.users.common.entity.RefreshTokenHistoryEntity;
 import com.taskpilot.users.common.entity.UserEntity;
+import com.taskpilot.users.common.repository.PasswordResetTokenRepository;
 import com.taskpilot.users.common.repository.RefreshTokenHistoryRepository;
 import com.taskpilot.users.common.repository.RefreshTokenRepository;
 import com.taskpilot.users.common.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
@@ -56,13 +58,16 @@ public class UserSessionService {
     private final JwtService jwtService;
     private final ApplicationEventPublisher eventPublisher;
 
+    @Autowired(required = false)
+    private PasswordResetTokenRepository passwordResetTokenRepository;
+
     @Transactional
     public AuthResponse issueSession(long userId) {
         UserEntity user = userRepository.findByIdForUpdate(userId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"));
 
-        if (!user.isActiveAccount()) {
-            throw new BusinessException(HttpStatus.FORBIDDEN.value(), "Account is not active");
+        if (!user.isActiveAccount() || !Boolean.TRUE.equals(user.getEmailVerified())) {
+            throw new BusinessException(HttpStatus.FORBIDDEN.value(), "Account is not active or email is unverified");
         }
 
         Instant now = Instant.now();
@@ -130,9 +135,9 @@ public class UserSessionService {
             revokeSessionEntity(session, now, SessionRevocationReason.LOGOUT);
             throw unauthorized("Refresh token was expired. Please make a new signin request");
         }
-        if (!user.isActiveAccount()) {
+        if (!user.isActiveAccount() || !Boolean.TRUE.equals(user.getEmailVerified())) {
             revokeSessionEntity(session, now, SessionRevocationReason.SECURITY_VERSION_INCREMENT);
-            throw new BusinessException(HttpStatus.FORBIDDEN.value(), "Account is not active");
+            throw new BusinessException(HttpStatus.FORBIDDEN.value(), "Account is not active or email is unverified");
         }
         long currentEpoch = user.effectiveTokenVersion();
         long sessionEpoch = session.getTokenVersion() != null ? session.getTokenVersion() : 0L;
@@ -233,6 +238,9 @@ public class UserSessionService {
         }
         if (!activeSessions.isEmpty()) {
             refreshTokenRepository.flush();
+        }
+        if (passwordResetTokenRepository != null) {
+            passwordResetTokenRepository.invalidateAllActiveByUserId(userId, now);
         }
 
         publishAfterCommit(new UserSecurityChangedEvent(

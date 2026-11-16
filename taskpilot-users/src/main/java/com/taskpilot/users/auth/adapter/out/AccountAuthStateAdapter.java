@@ -13,6 +13,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -34,6 +38,45 @@ public class AccountAuthStateAdapter implements AccountAuthStatePort, SessionAut
             return Optional.empty();
         }
         return userRepository.findById(userId).map(AccountAuthStateAdapter::toAccountDto);
+    }
+
+    @Override
+    @Transactional
+    public Optional<AccountAuthStateDto> findByIdForUpdate(long userId) {
+        if (userId <= 0) {
+            return Optional.empty();
+        }
+        return userRepository.findByIdForUpdate(userId).map(AccountAuthStateAdapter::toAccountDto);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Map<Long, AccountAuthStateDto> findByIds(Collection<Long> userIds) {
+        Map<Long, AccountAuthStateDto> result = new LinkedHashMap<>();
+        if (userIds == null || userIds.isEmpty()) {
+            return result;
+        }
+        List<Long> sortedIds = userIds.stream().filter(id -> id != null && id > 0).distinct().sorted().toList();
+        if (sortedIds.isEmpty()) {
+            return result;
+        }
+        userRepository.findAllById(sortedIds)
+                .forEach(user -> result.put(user.getId(), toAccountDto(user)));
+        return result;
+    }
+
+    @Override
+    @Transactional
+    public Map<Long, AccountAuthStateDto> lockAndLoadByIds(Collection<Long> userIds) {
+        Map<Long, AccountAuthStateDto> result = new LinkedHashMap<>();
+        if (userIds == null || userIds.isEmpty()) {
+            return result;
+        }
+        List<Long> sortedIds = userIds.stream().filter(id -> id != null && id > 0).distinct().sorted().toList();
+        for (Long id : sortedIds) {
+            userRepository.findByIdForUpdate(id).ifPresent(user -> result.put(user.getId(), toAccountDto(user)));
+        }
+        return result;
     }
 
     @Override
