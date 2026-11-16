@@ -203,18 +203,20 @@ public class TaskAiTools {
         }
         final Integer finalDifficultyLevel = parsedDifficultyLevel;
 
+        final List<Long> labelIdsAtPreview2 = labelIds == null ? null : List.copyOf(labelIds);
+        final List<Long> requiredSkillIdsAtPreview2 = requiredSkillIds == null ? null : List.copyOf(requiredSkillIds);
         return pendingAiActionService.create(
                 userId,
                 sessionId,
                 "updateTask",
                 "Update task " + taskId,
                 args("taskId", taskId, "title", title, "description", description, "status", status,
-                        "priority", priority, "position", position, "labelIds", labelIds,
-                        "difficultyLevel", finalDifficultyLevel, "requiredSkillIds", requiredSkillIds,
+                        "priority", priority, "position", position, "labelIds", labelIdsAtPreview2,
+                        "difficultyLevel", finalDifficultyLevel, "requiredSkillIds", requiredSkillIdsAtPreview2,
                         "assigneeId", assigneeId, "startDate", startDate, "dueDate", dueDate),
                 null,
-                () -> taskCommandPort.updateTask(taskId, title, description, status, priority, position, labelIds,
-                        finalDifficultyLevel, requiredSkillIds, assigneeId, startDate, dueDate, userId));
+                () -> taskCommandPort.updateTask(taskId, title, description, status, priority, position, labelIdsAtPreview2,
+                        finalDifficultyLevel, requiredSkillIdsAtPreview2, assigneeId, startDate, dueDate, userId));
     }
 
 
@@ -248,6 +250,8 @@ public class TaskAiTools {
         String startDate = stringPatchValue(patch, "startDate");
         String dueDate = stringPatchValue(patch, "dueDate");
 
+        final List<Long> labelIdsAtPreview3 = labelIds == null ? null : List.copyOf(labelIds);
+        final List<Long> requiredSkillIdsAtPreview3 = requiredSkillIds == null ? null : List.copyOf(requiredSkillIds);
         return pendingAiActionService.create(
                 userId,
                 sessionId,
@@ -255,8 +259,8 @@ public class TaskAiTools {
                 "Patch task " + taskId,
                 args("taskId", taskId, "patch", patch, "reason", reason),
                 args("taskId", taskId, "patch", patch, "reason", reason),
-                () -> taskCommandPort.updateTask(taskId, title, description, status, priority, position, labelIds,
-                        difficultyLevel, requiredSkillIds, assigneeId, startDate, dueDate, userId));
+                () -> taskCommandPort.updateTask(taskId, title, description, status, priority, position, labelIdsAtPreview3,
+                        difficultyLevel, requiredSkillIdsAtPreview3, assigneeId, startDate, dueDate, userId));
     }
 
 
@@ -378,18 +382,20 @@ public class TaskAiTools {
         String resolvedDueDate = cleanString(dueDate);
 
         final Long finalProjectId = resolvedProjectId;
+        final List<Long> resolvedLabelIdsAtPreview6 = resolvedLabelIds == null ? null : List.copyOf(resolvedLabelIds);
+        final List<Long> resolvedRequiredSkillIdsAtPreview6 = resolvedRequiredSkillIds == null ? null : List.copyOf(resolvedRequiredSkillIds);
         return pendingAiActionService.create(
                 userId,
                 sessionId,
                 "createTask",
                 "Create task \"" + title + "\" in project " + finalProjectId,
                 args("projectId", finalProjectId, "title", title, "priority", priority, "description", resolvedDescription,
-                        "sprintId", resolvedSprintId, "difficultyLevel", finalDifficultyLevel, "labelIds", resolvedLabelIds,
-                        "requiredSkillIds", resolvedRequiredSkillIds, "assigneeId", resolvedAssigneeId,
+                        "sprintId", resolvedSprintId, "difficultyLevel", finalDifficultyLevel, "labelIds", resolvedLabelIdsAtPreview6,
+                        "requiredSkillIds", resolvedRequiredSkillIdsAtPreview6, "assigneeId", resolvedAssigneeId,
                         "startDate", resolvedStartDate, "dueDate", resolvedDueDate, "parentId", resolvedParentId),
                 null,
                 () -> taskCommandPort.createTask(finalProjectId, title, resolvedDescription, priority, null,
-                        resolvedParentId, resolvedSprintId, finalDifficultyLevel, resolvedLabelIds, resolvedRequiredSkillIds,
+                        resolvedParentId, resolvedSprintId, finalDifficultyLevel, resolvedLabelIdsAtPreview6, resolvedRequiredSkillIdsAtPreview6,
                         resolvedAssigneeId, resolvedStartDate, resolvedDueDate, userId));
     }
 

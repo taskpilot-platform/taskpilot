@@ -258,7 +258,7 @@ public class MeetingAiTools {
         Map<String, Object> arguments = Map.of(
                 "projectId", projectId,
                 "meetingId", meetingId,
-                "actionItemCount", itemsToCreate.size()
+                "actionItemCount", itemsToCreate.size(), "actionItems", List.copyOf(itemsToCreate)
         );
 
         Map<String, Object> preview = Map.of(
@@ -279,12 +279,7 @@ public class MeetingAiTools {
                     List<Map<String, Object>> skipped = new ArrayList<>();
                     List<Map<String, Object>> failed = new ArrayList<>();
 
-                    List<TaskSummaryDto> existingTasks;
-                    try {
-                        existingTasks = taskCommandPort.getTasksByProject(projectId, userId);
-                    } catch (Exception e) {
-                        existingTasks = Collections.emptyList();
-                    }
+                    List<TaskSummaryDto> existingTasks = taskCommandPort.getTasksByProject(projectId, userId);
 
                     for (TaskActionItemDto item : itemsToCreate) {
                         String marker = "[meeting:" + meetingId + "#item:" + item.index() + "]";
@@ -296,7 +291,7 @@ public class MeetingAiTools {
                             continue;
                         }
 
-                        try {
+                        {
                             String taskDesc = (item.description() != null ? item.description() : "")
                                     + "\n\n" + marker + " (Tạo tự động từ cuộc họp #" + meetingId + ")";
                             TaskSummaryDto createdTask = taskCommandPort.createTask(
@@ -316,9 +311,6 @@ public class MeetingAiTools {
                                     userId
                             );
                             created.add(Map.of("taskId", createdTask.id(), "title", createdTask.title()));
-                        } catch (Exception e) {
-                            log.error("[AiTool] Failed to create task for action item '{}': {}", item.title(), e.getMessage());
-                            failed.add(Map.of("title", item.title(), "error", e.getMessage()));
                         }
                     }
                     return new MeetingTaskCreationResultDto(created, skipped, failed);
