@@ -1,7 +1,7 @@
 # TaskPilot Architecture Status
 
-**Last Updated:** September 2026  
-**Active Branch:** `refactor`  
+**Last Updated:** November 2026 (Phase P2 CODE_VERIFIED_FOR_REVIEW)  
+**Active Branch:** `fix/full-remediation`  
 **Monolith Status:** Modular Monolith (ADR-001 Compliant)
 
 ---
@@ -80,4 +80,16 @@ Following the September 2026 model catalog cleanup and targeted correction pass:
 - **Duplicate Reconciliation:** Reconciled duplicate `.agent` (singular) and `.agents` (plural) copies. Purged obsolete machine-local `.agent` directories.
 - **Canonical Architecture Skill:** Established single canonical copy of generic architecture maintenance workflows at `.agents/skills/taskpilot-architecture-maintenance/SKILL.md`.
 - **Context7 & Catalog Portability:** Imported `context7` library documentation skill into canonical `.agents/skills/context7/`. Created `.agents/README.md` defining discovery protocols and zero-duplicate rules.
+
+---
+
+## 8. P1 & P2 Security Remediation Status (November 2026)
+
+- **P0 (Baseline & Migration Recovery):** `CODE_VERIFIED` — PostgreSQL 17 baseline hardening (`V41`/`V42`), strict `public.` qualification, recovery tooling (`check.py`, `sql_policy.py`, `verify_integration.py`).
+- **P1 (Principal & Session Authority + OAuth2 Transport):** `CODE_VERIFIED` — Immutable `uid`-keyed JWT v2 + refresh rotation (`V44`), database-backed opaque OAuth2 authorization request store (`V43`), strict CORS/redirect origin allowlists.
+- **P2 (Account Lifecycle, Manager Lock Invariant, Verification & Private Invitations — `V45`):** `CODE_VERIFIED_FOR_REVIEW`
+  - **P2.1 Manager Invariant & Lock Ordering:** Canonical ascending `projects -> users -> tasks` lock ordering (`AccountAuthStatePort.lockAndLoadByIds`, `ProjectAccountLifecycleAdapter`), nontransactional `SelfDeactivationCoordinator` (max 3 fresh `REQUIRES_NEW` attempts + rescan), sole effective `ACTIVE` manager invariant (`409` w/ `blockingProjectIds`), immediate admin suspension commit + durable `user_lifecycle_recovery_outbox` + explicit audited manager transfer (`AdminProjectRecoveryController`).
+  - **P2.2 Lifecycle Separation:** `AccountLifecycle` (`ACTIVE | SELF_DEACTIVATED | ADMIN_SUSPENDED | PENDING_EMAIL | LEGACY_DISABLED`) decoupled from work availability (`AVAILABLE | BUSY | OOO`); identity/email/membership preservation without `_deleted_` renames; 5-minute single-use `RESTORE` ticket -> explicit `/restore/confirm` with authoritative recheck; conservative `LEGACY_DISABLED` rollout for legacy unverified / `_deleted_` rows.
+  - **P2.3 Verified Credentials & Throttling:** Mailbox-owner password selection on `/verify-email`, explicit authenticated OAuth2 provider `LINK`/`REAUTH` without automatic same-email merge, OAuth-only password setup via email proof, GitHub `/user/emails` verified check, 32-byte SHA-256 hash-only challenges (`15m` email / `5m` short proof), `PasswordPolicy` (`8` code points min, `72` UTF-8 bytes max), `DatabaseAuthAttemptStore` + `TrustedClientAddressResolver` (`forward-headers-strategy: none` in prod), `AvatarValidator` (`<= 1,000,000` bytes PNG/JPEG/WebP).
+  - **P2.4 Private Project Invitations (Intentional `PRJ-ID` Compatibility Break):** Guessable `PRJ-ID` `/api/v1/projects/join` and AI `joinProject` permanently retired (`410 GONE`); replaced by 32-byte SHA-256 hashed, verified-email-bound, 7-day single-use private invitations (`/api/v1/projects/{id}/invitations` and `/api/v1/projects/invitations/accept`).
 

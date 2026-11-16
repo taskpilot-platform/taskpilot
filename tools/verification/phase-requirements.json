@@ -143,6 +143,205 @@
           "forgedLegacyEmailSubjectJwtRejectedOnHttpAndStomp"
         ]
       }
+    },
+    "P2": {
+      "required": {
+        "com.taskpilot.app.migration.MigrationSchemaIntegrationTest": [
+          "freshPublicMigrationStartsRealBackend",
+          "upgradedPublicMigrationStartsRealBackend"
+        ],
+        "com.taskpilot.app.migration.ReconciledFlywayIntegrationTest": [
+          "normalForwardMigrationDoesNotRequireChangingJavaRecoveryPolicy",
+          "unqualifiedForwardObjectsCannotPassCompleteValidation",
+          "metadataObjectsAreRejectedEvenBeforeHistoryExists"
+        ],
+        "com.taskpilot.app.migration.EntityFlywaySchemaParityAuditTest": [
+          "testFlywayMigrationsExistAndOrdered",
+          "testAllEntityColumnsExistInFlywayMigrations"
+        ],
+        "com.taskpilot.ai.rag.RealDocumentPipelineVerificationTest": [
+          "testRealDocxParsing",
+          "testRealMarkdownParsing"
+        ],
+        "com.taskpilot.ai.rag.GoogleAiEmbeddingModelVerificationTest": [
+          "testGoogleAiEmbeddingModelConfiguration"
+        ],
+        "com.taskpilot.infrastructure.config.security.oauth2.OAuth2AuthorizationRequestRepositoryTest": [
+          "legacySerializedBenignCookieIsRejectedWithoutDeserializing",
+          "twoPendingTabsDoNotOverwriteEachOther",
+          "validCallbackLoadsNondestructivelyConsumesOnceAndAllowsHarmlessHandlerCleanup",
+          "defaultAndNonDefaultPortMismatchesAreRejectedAndOriginalRequestRemainsUsable",
+          "perBrowserPendingLimitRejectsFloodAfterPruningStaleCookies"
+        ],
+        "com.taskpilot.infrastructure.config.security.oauth2.OAuth2AuthorizationRequestStoreIntegrationTest": [
+          "nondestructiveLoadAndAtomicConsumeAcrossTwoStoreInstancesPreservePkceAndOidc",
+          "concurrentDoubleConsumeHasExactlyOneWinner",
+          "concurrentPutEnforcesCapacityLimitWithoutSilentOverflow",
+          "concurrentTwelvePutCallsSucceedWithoutExhaustingSerializationRetries",
+          "serverOnlyTableDeniesRestrictedApiRolesWhilePreservingOwnerAccess"
+        ],
+        "com.taskpilot.infrastructure.config.security.JwtPropertiesTest": [
+          "rejectsMissingBlankSampleShortAndLowEntropyKeys",
+          "rejectsDevAndTestKeysInProdOrCommonProfilesWhileAllowingInDevAndTest",
+          "defaultExpirationIsFifteenMinutesAndRejectsOutOfBoundsTtl"
+        ],
+        "com.taskpilot.infrastructure.config.security.CorsConfigurationTest": [
+          "hostileOriginIsRejectedEvenWhenFeOriginIsConfigured",
+          "wildcardOriginPatternWithCredentialsIsNeverConfigured",
+          "wildcardOrMalformedConfiguredOriginsFailStartup",
+          "oauth2RedirectOriginsAreValidatedIndependentlyFromCors"
+        ],
+        "com.taskpilot.infrastructure.util.P6SpyLogRedactionTest": [
+          "formatterDoesNotEmitBoundPasswordsTokensOrJdbcUrlCredentials",
+          "formatterDoesNotEmitOAuthCodesOrRefreshResetTickets"
+        ],
+        "com.taskpilot.projects.chat.config.WebSocketConfigTest": [
+          "registerStompEndpointsUsesExplicitAllowlistAndNeverWildcardPatterns"
+        ],
+        "com.taskpilot.users.auth.oauth2.OAuth2RedirectValidationHandlerTest": [
+          "successHandlerRedirectsToApprovedOriginAndCleansUpHarmlessly",
+          "successAndFailureHandlersFailClosedOnDisallowedRedirectOrigin"
+        ],
+        "com.taskpilot.app.security.SecurityConfigBaselineDefaultsTest": [
+          "commonApplicationYmlRemovesPublicSampleJwtFallbackAndSetsFifteenMinuteTtl",
+          "commonApplicationYmlAndSpyPropertiesDisableP6SpyByDefaultAndFixFormatterPackage",
+          "devProfileUsesExplicitLocalOriginsInsteadOfWildcardPort"
+        ],
+        "com.taskpilot.app.security.JwtStartupFailBaselineTest": [
+          "prodProfileRejectsKnownPublicSampleJwtKey",
+          "prodProfileRejectsShortJwtKey",
+          "prodProfileRejectsMissingAndDevMarkerJwtKey"
+        ],
+        "com.taskpilot.app.security.OAuth2CallbackAndStartupIntegrationTest": [
+          "realSpringSecurityOAuth2LifecycleSupportsTwoTabsCrossInstanceAndCorsEnforcement"
+        ],
+        "com.taskpilot.infrastructure.config.security.JwtServiceBaselineRedTest": [
+          "generatedAccessToken_mustCarryNumericSubjectAndJwtV2AuthorityClaims",
+          "isTokenValid_mustRejectLegacyEmailSubjectTokenWithoutV2ClaimsAndIssuerAudience"
+        ],
+        "com.taskpilot.infrastructure.config.security.JwtAndActorResolverTest": [
+          "parseAndValidate_rejectsWrongIssuerAudienceSchemaAndRevokedJti",
+          "currentActorResolver_rejectsNullAnonymousAndRawStringPrincipals"
+        ],
+        "com.taskpilot.infrastructure.config.security.JwtAuthenticationFilterBaselineRedTest": [
+          "doFilter_withValidBearerToken_mustAuthenticateTypedUidPrincipalAndUseAuthoritativeDbRole",
+          "doFilter_mustFailClosedWhenAccountInactiveOrVersionMismatchOrSessionRevoked"
+        ],
+        "com.taskpilot.users.auth.service.AuthSessionBaselineRedTest": [
+          "login_whenUserIsDeactivated_mustRejectAndNeverIssueJwtOrRefreshToken",
+          "exchangeOAuth2Code_whenUserIsDeactivated_mustRejectAndNeverIssueJwt",
+          "refreshToken_whenUserIsDeactivated_mustRejectAndNeverIssueJwt",
+          "refreshToken_whenTokenMissing_mustReturn401UnauthorizedInsteadOf404",
+          "refreshToken_mustRotateRefreshTokenRatherThanReturningConsumedToken"
+        ],
+        "com.taskpilot.users.auth.service.UserSessionServiceTest": [
+          "issueSession_storesSha256HashNotRawTokenAndRevokesPriorActiveSession",
+          "replayOfConsumedToken_revokesOnlyAffectedSessionWithoutGlobalTokenVersionBump",
+          "invalidateAll_incrementsEpochRevokesSessionsAndPublishesSecurityEvent",
+          "accountAuthStateAdapter_mapsLegacyDeactivatedSafelyAndSessionAuthority",
+          "issueSession_rejectsUnverifiedEmail"
+        ],
+        "com.taskpilot.projects.chat.config.StompPrincipalBaselineRedTest": [
+          "connect_mustBindImmutableUidPrincipalNameInsteadOfMutableEmail",
+          "subscribe_withNumericUidPrincipal_mustAuthorizeMembershipWithoutEmailLookup"
+        ],
+        "com.taskpilot.projects.chat.config.StompAuthChannelInterceptorTest": [
+          "connect_missingToken_throwsAccessDenied",
+          "connect_validToken_setsUidPrincipal",
+          "subscribe_validProjectChat_validatesMember",
+          "subscribe_wildcardTopic_throwsAccessDenied",
+          "send_directToTopic_throwsAccessDenied"
+        ],
+        "com.taskpilot.app.security.JwtDefaultsConfigBaselineRedTest": [
+          "applicationYml_mustDefaultJwtAccessTtlTo15MinutesAndSetIssuerAudienceDefaults"
+        ],
+        "com.taskpilot.app.migration.RefreshTokenPersistenceRecoveryTest": [
+          "tokenLookupLoadsUserBeforePersistenceContextClosesOnReconciledSchema"
+        ],
+        "com.taskpilot.app.security.RefreshTokenRotationIntegrationTest": [
+          "loginStoresHashOnlyRefreshTokenAndIssuesJwtV2",
+          "concurrentDoubleRefreshPreservesOneSuccessTriggersTargetedReplayAndSparesOtherSessions",
+          "logoutRevokesSessionAndRejectsSubsequentJwtAndRefresh",
+          "passwordChangeIncrementsTokenVersionAndInvalidatesExistingSessions",
+          "nonPrivilegedDbRolesCannotAccessRefreshTokenHistory"
+        ],
+        "com.taskpilot.app.security.AuthenticatedActorRegressionTest": [
+          "adminDemotionInvalidatesExistingAdminJwtAndEnforcesUpdatedUserRole",
+          "suspensionSelfDeactivationAndAdminResetInvalidateHttpAndStompImmediately",
+          "emailChangeAndReusePreserveUidIsolationAcrossProjectsNotificationsAndProfile",
+          "forgedLegacyEmailSubjectJwtRejectedOnHttpAndStomp"
+        ],
+        "com.taskpilot.infrastructure.config.security.TrustedClientAddressResolverTest": [
+          "ignoresSpoofedForwardingHeadersWhenTrustDisabled",
+          "ignoresXForwardedForFromUntrustedPeerEvenWhenEnabled",
+          "stripsTrustedProxyHopsRightToLeftAndReturnsRealClientIp",
+          "supportsIpv6CidrAndRejectsMalformedOrOversizedHeader"
+        ],
+        "com.taskpilot.users.auth.service.PasswordPolicyTest": [
+          "acceptsEightCodePointsAndExactly72Utf8Bytes",
+          "rejectsBelowEightCodePointsAndAbove72Utf8BytesWithoutTruncation"
+        ],
+        "com.taskpilot.users.auth.service.AuthAttemptThrottleServiceTest": [
+          "blocksLoginAfterBoundedAccountFailuresAndRecoversAfterWindowExpires",
+          "enforcesCooldownAndIpSprayCapsAcrossChallengeAndConsumeEndpoints"
+        ],
+        "com.taskpilot.users.profile.service.AvatarValidatorTest": [
+          "acceptsValidPngJpegAndWebpWithinLimit",
+          "rejectsOversizedSvgHtmlPolyglotAndMimeMismatch",
+          "enforcesOriginAllowlistAndPreservesPermittedProviderAvatars"
+        ],
+        "com.taskpilot.users.auth.service.SelfDeactivationCoordinatorTest": [
+          "retriesFreshAttemptsUpToThreeTimesAndExpandsLockSetOnRosterChange",
+          "failClosedOnNullSelfDeactivationRequestInCoordinatorAndAttempt",
+          "failsCleanlyWith409AfterThreeRetryableConflicts"
+        ],
+        "com.taskpilot.users.auth.oauth2.CredentialLinkServiceTest": [
+          "beginLinkRejectsWrongPasswordAlreadyLinkedOrUnverifiedAccount",
+          "beginLinkIssuesScopedChallengeOnValidPasswordOrReauthTicket",
+          "verifyIntentRejectsUnsupportedPurposeAndDelegatesLinkOrReauth",
+          "completeLinkRejectsUnverifiedEmailAndCrossUserCollisionAndCompleteReauthRejectsMismatch"
+        ],
+        "com.taskpilot.users.auth.service.RestoreTicketServiceTest": [
+          "issueRestoreTicketRejectsNonSelfDeactivatedStates",
+          "confirmRestoreRejectsAdminSuspendedAndPreservesOooAvailabilityUponValidRestore",
+          "cancelRestoreConsumesTicketWithoutReactivatingAccount"
+        ],
+        "com.taskpilot.users.auth.oauth2.OAuth2UserInfoMapperTest": [
+          "testMapGithubWithPublicEmail",
+          "testMapGithubUsesVerifiedEmailClient"
+        ],
+        "com.taskpilot.app.security.ProjectManagerConcurrencyIntegrationTest": [
+          "concurrentLastManagerDemotionsOrLeaveNeverLeaveZeroActiveManagers",
+          "soleActiveManagerSelfDeactivateReturns409AndKeepsUserActive",
+          "selfDeactivationCoordinatorRollsBackAndRetriesInFreshTxWhenNewProjectAppearsMidAttempt",
+          "unverifiedActiveManagerDoesNotCountForManagerInvariantPromotionOrAutoAssignment",
+          "concurrentMutualRoleDemotionsNeverLeaveZeroActiveManagers",
+          "concurrentRemoveManagerVsSelfDeactivatePreservesActiveManager",
+          "selfDeactivationCoordinatorExhaustsMaxThreeAttemptsWhenRosterChangesEveryAttempt"
+        ],
+        "com.taskpilot.app.security.AdminSuspensionOutboxIntegrationTest": [
+          "adminSuspensionCommitsImmediatelyReconcilesIdempotentlyAndSupportsExplicitTransfer",
+          "adminSuspensionCommitsImmediatelyWhileProjectRowIsLockedAndFailedOutboxRowRetriesCleanly"
+        ],
+        "com.taskpilot.app.security.AccountLifecycleConcurrencyIntegrationTest": [
+          "selfDeactivatePreservesUidEmailAvailabilityAndUsesSingleUseRestoreTicketWithConcurrentGuard",
+          "legacyFixtureRehearsalEnforcesConservativeLegacyDisabledAndVerificationFailClosed",
+          "restoreCancelAndDisabledAccountResetAndRefreshFailClosed",
+          "oauth2ResolveAndExplicitLinkEnforceCollisionRestoreAndNegativeProofChecks",
+          "autoAssignmentFiltersLifecycleDisabledButPreservesActiveOooSeparation"
+        ],
+        "com.taskpilot.app.security.EmailChallengeConcurrencyIntegrationTest": [
+          "preHijackPendingPasswordNeverActivatesAndConcurrentVerifyConsumeHasOneWinner",
+          "oauthOnlyAccountSetsPasswordViaEmailSetupAndRejectsDirectChangePasswordAndStaleVersion",
+          "utf8PasswordByteBoundariesEnforcedAcrossAllFivePasswordRoutes",
+          "databaseAuthAttemptStoreAtomicAcrossConcurrentInstancesAndThrottleCapsReturn429"
+        ],
+        "com.taskpilot.app.security.ProjectInvitationPostgresIntegrationTest": [
+          "retiredPrjIdJoinFailsWith410OnHttpAndAiToolPort",
+          "invitationIsHashOnlyEmailBoundSingleUseConcurrentIdempotentAndRevokedOnRemovalOrReissue",
+          "unverifiedRevokedArchivedAndLeaveRevokeEdgeCasesEnforced"
+        ]
+      }
     }
   }
 }
