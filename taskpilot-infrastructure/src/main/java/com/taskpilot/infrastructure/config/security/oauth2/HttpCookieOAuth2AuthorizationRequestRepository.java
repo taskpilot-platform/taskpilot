@@ -9,6 +9,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.oauth2.client.web.AuthorizationRequestRepository;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
 import org.springframework.stereotype.Component;
@@ -37,6 +39,9 @@ public class HttpCookieOAuth2AuthorizationRequestRepository
 
     public static final String OAUTH2_AUTHORIZATION_REQUEST_COOKIE_NAME = "tp_oauth2_auth_req";
     public static final String OAUTH2_REQUEST_COOKIE_PREFIX = "tp_oauth2_req_";
+    public static final String CONSUMED_CONTEXT_ATTR = "tp.oauth2.consumedContext";
+
+    public record ConsumedContext(Purpose purpose, Long targetUserId, String linkTokenHash) {}
 
     private static final String REQUEST_COOKIE_PATH = "/";
     private static final String LEGACY_COOKIE_PATH = "/";
@@ -48,6 +53,9 @@ public class HttpCookieOAuth2AuthorizationRequestRepository
 
     private final OAuth2AuthorizationRequestStore store;
     private final OAuth2Properties oAuth2Properties;
+
+    @Autowired(required = false)
+    private ObjectProvider<OAuth2LinkIntentVerifier> linkIntentVerifierProvider;
 
     @Override
     public OAuth2AuthorizationRequest loadAuthorizationRequest(HttpServletRequest request) {
@@ -88,18 +96,46 @@ public class HttpCookieOAuth2AuthorizationRequestRepository
 
         enforceAndPruneBrowserPendingLimit(request, response);
 
+        Purpose purpose = resolveRequestedPurpose(request);
+        Long targetUserId = null;
+        OAuth2AuthorizationRequest requestToStore = authorizationRequest;
+        if (purpose == Purpose.LINK || purpose == Purpose.REAUTH) {
+            OAuth2LinkIntentVerifier linkIntentVerifier = linkIntentVerifierProvider != null
+                    ? linkIntentVerifierProvider.getIfAvailable()
+                    : null;
+            if (linkIntentVerifier == null) {
+                throw new IllegalStateException("OAuth2LinkIntentVerifier is required for " + purpose + " requests");
+            }
+            String intentToken = request.getParameter("link_token");
+            if (intentToken == null || intentToken.isBlank()) {
+                intentToken = request.getParameter("token");
+            }
+            OAuth2LinkIntentVerifier.VerifiedIntent intent = linkIntentVerifier.verifyIntent(
+                    purpose, provider, intentToken);
+            targetUserId = intent.userId();
+            requestToStore = OAuth2AuthorizationRequest.from(authorizationRequest)
+                    .attributes(attrs -> {
+                        attrs.put("tp_purpose", purpose.name());
+                        attrs.put("tp_target_user_id", String.valueOf(intent.userId()));
+                        attrs.put("tp_link_token_hash", intent.tokenHash());
+                    })
+                    .build();
+        }
+
         String browserNonce = randomToken();
         StoredHandle stored = store.put(new SaveCommand(
-                authorizationRequest,
+                requestToStore,
                 provider,
-                Purpose.LOGIN,
-                null,
+                purpose,
+                targetUserId,
                 browserNonce,
                 authorizationRequest.getRedirectUri()
         ));
 
         String cookieName = cookieNameForState(state);
-        String cookieValue = stored.handle() + "." + browserNonce;
+        String cookieValue = purpose == Purpose.LOGIN
+                ? stored.handle() + "." + browserNonce
+                : stored.handle() + "." + browserNonce + "." + purpose.name();
         addCookie(response, cookieName, cookieValue, oAuth2Properties.getRequestTtlSeconds(), REQUEST_COOKIE_PATH);
     }
 
@@ -127,9 +163,17 @@ public class HttpCookieOAuth2AuthorizationRequestRepository
         if (loaded.isEmpty()) {
             return null;
         }
-        return store.consume(cb.lookupKey())
-                .filter(authReq -> matchesCallbackContext(request, authReq, cb.provider()))
-                .orElse(null);
+        Optional<OAuth2AuthorizationRequest> consumed = store.consume(cb.lookupKey())
+                .filter(authReq -> matchesCallbackContext(request, authReq, cb.provider()));
+        consumed.ifPresent(authReq -> {
+            Purpose consumedPurpose = cb.lookupKey().expectedPurpose();
+            Object rawTargetUserId = authReq.getAttributes().get("tp_target_user_id");
+            Long consumedTargetUserId = rawTargetUserId != null ? Long.valueOf(String.valueOf(rawTargetUserId)) : null;
+            Object rawLinkHash = authReq.getAttributes().get("tp_link_token_hash");
+            String consumedLinkHash = rawLinkHash != null ? String.valueOf(rawLinkHash) : null;
+            request.setAttribute(CONSUMED_CONTEXT_ATTR, new ConsumedContext(consumedPurpose, consumedTargetUserId, consumedLinkHash));
+        });
+        return consumed.orElse(null);
     }
 
     private void enforceAndPruneBrowserPendingLimit(HttpServletRequest request, HttpServletResponse response) {
@@ -178,7 +222,7 @@ public class HttpCookieOAuth2AuthorizationRequestRepository
         }
         return Optional.of(new ParsedCallback(
                 provider,
-                new LookupKey(tokens.handle(), tokens.browserNonce(), state, provider, Purpose.LOGIN, null)
+                new LookupKey(tokens.handle(), tokens.browserNonce(), state, provider, tokens.purpose(), null)
         ));
     }
 
@@ -247,20 +291,42 @@ public class HttpCookieOAuth2AuthorizationRequestRepository
         return Optional.empty();
     }
 
+    private static Purpose resolveRequestedPurpose(HttpServletRequest request) {
+        String raw = request.getParameter("purpose");
+        if (raw == null || raw.isBlank() || "login".equalsIgnoreCase(raw.trim())) {
+            return Purpose.LOGIN;
+        }
+        if ("link".equalsIgnoreCase(raw.trim())) {
+            return Purpose.LINK;
+        }
+        if ("reauth".equalsIgnoreCase(raw.trim())) {
+            return Purpose.REAUTH;
+        }
+        throw new IllegalArgumentException("Unsupported OAuth2 purpose: " + raw);
+    }
+
     private static CookieTokens parseCookieTokens(String value) {
         if (value == null || value.isBlank() || value.length() > MAX_COOKIE_VALUE_LENGTH) {
             return null;
         }
-        int dot = value.indexOf('.');
-        if (dot <= 0 || dot >= value.length() - 1 || value.indexOf('.', dot + 1) >= 0) {
+        String[] parts = value.split("\\.", -1);
+        if (parts.length < 2 || parts.length > 3) {
             return null;
         }
-        String handle = value.substring(0, dot);
-        String nonce = value.substring(dot + 1);
+        String handle = parts[0];
+        String nonce = parts[1];
         if (handle.isBlank() || nonce.isBlank()) {
             return null;
         }
-        return new CookieTokens(handle, nonce);
+        Purpose purpose = Purpose.LOGIN;
+        if (parts.length == 3) {
+            try {
+                purpose = Purpose.valueOf(parts[2]);
+            } catch (IllegalArgumentException ex) {
+                return null;
+            }
+        }
+        return new CookieTokens(handle, nonce, purpose);
     }
 
     static String cookieNameForState(String state) {
@@ -297,7 +363,7 @@ public class HttpCookieOAuth2AuthorizationRequestRepository
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
-    private record CookieTokens(String handle, String browserNonce) {}
+    private record CookieTokens(String handle, String browserNonce, Purpose purpose) {}
 
     private record ParsedCallback(String provider, LookupKey lookupKey) {}
 }

@@ -86,11 +86,17 @@ application:
     password-reset:
       expiration: ${PASSWORD_RESET_EXPIRATION:900000}
       frontend-reset-url: ${PASSWORD_RESET_FRONTEND_URL:http://localhost:5173/reset-password}
+      frontend-verify-url: ${EMAIL_VERIFY_FRONTEND_URL:http://localhost:5173/verify-email}
+      frontend-setup-url: ${PASSWORD_SETUP_FRONTEND_URL:http://localhost:5173/setup-password}
       rate-limit:
         provider: ${PASSWORD_RESET_RATE_LIMIT_PROVIDER:${JWT_BLOCKLIST_PROVIDER:memory}}
         cooldown-seconds: ${PASSWORD_RESET_COOLDOWN_SECONDS:60}
         max-per-email-per-hour: ${PASSWORD_RESET_MAX_PER_EMAIL_PER_HOUR:5}
         max-per-ip-per-hour: ${PASSWORD_RESET_MAX_PER_IP_PER_HOUR:20}
+    trusted-proxy:
+      trust-forwarded-headers: ${TRUST_FORWARDED_HEADERS:false}
+      max-header-length: 1024
+      max-hops: 10
     oauth2:
       success-redirect-uri: ${OAUTH2_SUCCESS_REDIRECT_URI:http://localhost:5173/auth/callback}
       allowed-redirect-origins: ${OAUTH2_ALLOWED_REDIRECT_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}

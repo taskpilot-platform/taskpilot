@@ -13,7 +13,8 @@ public interface OAuth2AuthorizationRequestStore {
 
     enum Purpose {
         LOGIN,
-        LINK
+        LINK,
+        REAUTH
     }
 
     record SaveCommand(

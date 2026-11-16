@@ -66,7 +66,10 @@ public class DatabaseOAuth2AuthorizationRequestStore implements OAuth2Authorizat
     private static final Set<String> ALLOWED_ATTRIBUTES = Set.of(
             "registration_id",
             "code_verifier",
-            "nonce"
+            "nonce",
+            "tp_purpose",
+            "tp_target_user_id",
+            "tp_link_token_hash"
     );
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
@@ -321,8 +324,9 @@ public class DatabaseOAuth2AuthorizationRequestStore implements OAuth2Authorizat
         if (command.purpose() == Purpose.LOGIN && command.targetUserId() != null) {
             throw new IllegalArgumentException("LOGIN flow must not bind targetUserId");
         }
-        if (command.purpose() == Purpose.LINK && command.targetUserId() == null) {
-            throw new IllegalArgumentException("LINK flow requires targetUserId");
+        if ((command.purpose() == Purpose.LINK || command.purpose() == Purpose.REAUTH)
+                && command.targetUserId() == null) {
+            throw new IllegalArgumentException(command.purpose().name() + " flow requires targetUserId");
         }
         if (command.browserNonce() == null || command.browserNonce().isBlank() || command.browserNonce().length() > 128) {
             throw new IllegalArgumentException("Browser nonce is invalid");
