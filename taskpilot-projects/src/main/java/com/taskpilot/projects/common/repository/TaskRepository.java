@@ -2,7 +2,9 @@ package com.taskpilot.projects.common.repository;
 
 import java.util.List;
 
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Meta;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.NativeQuery;
@@ -31,6 +33,19 @@ public interface TaskRepository extends JpaRepository<TaskEntity, Long>, TaskSea
     long countBySprintId(Long sprintId);
 
     boolean existsBySprintIdAndStatusNot(Long sprintId, TaskStatus status);
+
+    @Meta(comment = "TaskRepository.findActiveAssignedByProjectIdAndAssigneeIdForUpdate")
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT t FROM TaskEntity t WHERE t.projectId = :projectId AND t.assigneeId = :assigneeId "
+            + "AND t.status <> :doneStatus ORDER BY t.id ASC")
+    List<TaskEntity> findActiveAssignedByProjectIdAndAssigneeIdForUpdate(
+            @Param("projectId") Long projectId,
+            @Param("assigneeId") Long assigneeId,
+            @Param("doneStatus") TaskStatus doneStatus);
+
+    default List<TaskEntity> findActiveAssignedByProjectIdAndAssigneeIdForUpdate(Long projectId, Long assigneeId) {
+        return findActiveAssignedByProjectIdAndAssigneeIdForUpdate(projectId, assigneeId, TaskStatus.DONE);
+    }
 
     @Meta(comment = "TaskRepository.clearSprintId")
     @Modifying

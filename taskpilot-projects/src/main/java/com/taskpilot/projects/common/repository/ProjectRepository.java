@@ -1,9 +1,15 @@
 package com.taskpilot.projects.common.repository;
 
+import java.util.List;
 import java.util.Optional;
 
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.stereotype.Repository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Meta;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import com.taskpilot.projects.common.entity.ProjectEntity;
 
@@ -12,7 +18,14 @@ public interface ProjectRepository extends JpaRepository<ProjectEntity, Long> {
 
     Optional<ProjectEntity> findByName(String name);
 
-    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
-    @org.springframework.data.jpa.repository.Query("DELETE FROM ProjectEntity p WHERE p.id = :projectId")
-    void deleteProjectById(@org.springframework.data.repository.query.Param("projectId") Long projectId);
+    @Meta(comment = "ProjectRepository.findByIdForUpdate")
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT p FROM ProjectEntity p WHERE p.id = :id")
+    Optional<ProjectEntity> findByIdForUpdate(@Param("id") Long id);
+
+    List<ProjectEntity> findByNeedsManagerAttentionTrueOrderByManagementAttentionSinceAsc();
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("DELETE FROM ProjectEntity p WHERE p.id = :projectId")
+    void deleteProjectById(@Param("projectId") Long projectId);
 }
