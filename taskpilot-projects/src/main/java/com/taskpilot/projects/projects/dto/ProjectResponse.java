@@ -17,6 +17,8 @@ public record ProjectResponse(
         WorkflowMode workflowMode,
         LocalDate startDate,
         LocalDate endDate,
+        String timezoneId,
+        String timezoneProvenance,
         Instant createdAt) {
     public static ProjectResponse fromEntity(ProjectEntity entity) {
         return new ProjectResponse(
@@ -28,6 +30,8 @@ public record ProjectResponse(
                 entity.getWorkflowMode(),
                 entity.getStartDate(),
                 entity.getEndDate(),
+                entity.getTimezoneId(),
+                entity.getTimezoneProvenance(),
                 entity.getCreatedAt());
     }
 }

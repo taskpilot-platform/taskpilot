@@ -2,19 +2,26 @@ package com.taskpilot.projects.projects.controller;
 
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
+import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.projects.dto.CreateProjectRequest;
+import com.taskpilot.projects.projects.dto.DeleteProjectRequest;
 import com.taskpilot.projects.projects.dto.JoinProjectRequest;
 import com.taskpilot.projects.projects.dto.MyProjectResponse;
+import com.taskpilot.projects.projects.dto.ProjectDeletionAuditDto;
 import com.taskpilot.projects.projects.dto.ProjectMemberResponse;
 import com.taskpilot.projects.projects.dto.ProjectResponse;
 import com.taskpilot.projects.projects.dto.ProjectSummaryResponse;
 import com.taskpilot.projects.projects.dto.UpdateMemberRoleRequest;
 import com.taskpilot.projects.projects.dto.UpdateProjectRequest;
 import com.taskpilot.projects.projects.service.ProjectServiceImpl;
+import com.taskpilot.projects.tasks.dto.TaskWorkflowHistoryDto;
+import com.taskpilot.projects.tasks.dto.TombstonedTaskAuditDto;
+import com.taskpilot.projects.tasks.service.TaskService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
@@ -23,6 +30,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.UUID;
 
 @Tag(name = "07. Projects", description = "APIs for managing projects")
 @RestController
@@ -31,6 +39,16 @@ import java.util.List;
 public class ProjectController {
 
         private final ProjectServiceImpl projectService;
+        private com.taskpilot.projects.tasks.service.TaskService taskService;
+        private com.taskpilot.projects.tasks.service.TaskWorkflowService taskWorkflowService;
+
+        @Autowired(required = false)
+        void setAuditServices(
+                        TaskService taskService,
+                        com.taskpilot.projects.tasks.service.TaskWorkflowService taskWorkflowService) {
+                this.taskService = taskService;
+                this.taskWorkflowService = taskWorkflowService;
+        }
 
         @Operation(summary = "Get my projects", description = "Get list of projects the current user has joined")
         @GetMapping("/my")
@@ -146,12 +164,58 @@ public class ProjectController {
                 return ApiResponse.ok("Project restored successfully", null);
         }
 
-        @Operation(summary = "Delete project", description = "Permanently delete a project and all its data (Manager only)")
+        @Operation(summary = "Delete project", description = "Permanently delete a project and all its data with explicit confirmation and idempotency (Manager only)")
         @DeleteMapping("/{projectId}")
-        public ApiResponse<Void> deleteProject(
+        public ApiResponse<ProjectDeletionAuditDto> deleteProject(
+                        @PathVariable Long projectId,
+                        @RequestBody(required = false) DeleteProjectRequest request,
+                        @RequestParam(required = false) String confirmationText,
+                        @RequestParam(required = false) UUID requestId,
+                        @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+                        Authentication authentication) {
+                String resolvedConfirmation = request != null && request.confirmationText() != null
+                                ? request.confirmationText()
+                                : confirmationText;
+                UUID resolvedRequestId = request != null && request.requestId() != null
+                                ? request.requestId()
+                                : (requestId != null ? requestId : parseOptionalUuid(idempotencyKey));
+                ProjectDeletionAuditDto audit = projectService.deleteProject(
+                                projectId,
+                                CurrentActorResolver.userId(authentication),
+                                resolvedConfirmation,
+                                resolvedRequestId);
+                return ApiResponse.ok("Project deleted successfully", audit);
+        }
+
+        @Operation(summary = "List tombstoned tasks audit", description = "Restricted manager audit list of tombstoned tasks with preserved history")
+        @GetMapping("/{projectId}/audit/deleted-tasks")
+        public ApiResponse<List<TombstonedTaskAuditDto>> getDeletedTasksAudit(
                         @PathVariable Long projectId,
                         Authentication authentication) {
-                projectService.deleteProject(projectId, CurrentActorResolver.userId(authentication));
-                return ApiResponse.ok("Project deleted successfully", null);
+                return ApiResponse.ok("Deleted tasks audit retrieved",
+                                taskService.getTombstonedTasksAudit(projectId, CurrentActorResolver.userId(authentication)));
+        }
+
+        @Operation(summary = "Inspect tombstoned task workflow audit", description = "Restricted manager audit detail of preserved workflow history for a tombstoned task")
+        @GetMapping("/{projectId}/audit/deleted-tasks/{taskId}/workflow")
+        public ApiResponse<TaskWorkflowHistoryDto> getDeletedTaskWorkflowAudit(
+                        @PathVariable Long projectId,
+                        @PathVariable Long taskId,
+                        Authentication authentication) {
+                return ApiResponse.ok("Deleted task workflow audit retrieved",
+                                taskWorkflowService.getDeletedTaskWorkflowAudit(
+                                                projectId, taskId, CurrentActorResolver.userId(authentication)));
+        }
+
+        private UUID parseOptionalUuid(String raw) {
+                if (raw == null || raw.isBlank()) {
+                        return null;
+                }
+                try {
+                        return UUID.fromString(raw.trim());
+                } catch (IllegalArgumentException ex) {
+                        throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                                        "Idempotency-Key must be a valid UUID");
+                }
         }
 }

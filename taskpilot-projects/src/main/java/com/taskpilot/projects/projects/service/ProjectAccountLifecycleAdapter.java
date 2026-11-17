@@ -24,8 +24,10 @@ import com.taskpilot.projects.common.repository.ProjectMemberRepository;
 import com.taskpilot.projects.common.repository.ProjectRepository;
 import com.taskpilot.projects.common.repository.TaskRepository;
 import com.taskpilot.projects.common.repository.UserProjectReconciliationStateRepository;
+import com.taskpilot.projects.tasks.service.TaskWorkflowService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -33,17 +35,21 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.time.Clock;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 /**
- * Projects-owned lifecycle guard and asynchronous admin-suspension recovery consumer.
- * Enforces canonical lock ordering: projects (ascending) -> users (ascending) -> tasks (ascending).
+ * Projects-owned lifecycle guard and asynchronous admin-suspension recovery
+ * consumer.
+ * Enforces canonical lock ordering: projects (ascending) -> users (ascending)
+ * -> tasks (ascending).
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
-public class ProjectAccountLifecycleAdapter implements ProjectAccountLifecycleGuard, ProjectAccountLifecycleRecoveryPort {
+public class ProjectAccountLifecycleAdapter
+        implements ProjectAccountLifecycleGuard, ProjectAccountLifecycleRecoveryPort {
 
     private final ProjectRepository projectRepository;
     private final ProjectMemberRepository projectMemberRepository;
@@ -52,6 +58,45 @@ public class ProjectAccountLifecycleAdapter implements ProjectAccountLifecycleGu
     private final UserProjectReconciliationStateRepository reconciliationStateRepository;
     private final AccountAuthStatePort accountAuthStatePort;
     private final ApplicationEventPublisher eventPublisher;
+    private final Clock clock;
+    private TaskWorkflowService taskWorkflowService;
+
+    @Autowired(required = false)
+    void setTaskWorkflowService(TaskWorkflowService taskWorkflowService) {
+        this.taskWorkflowService = taskWorkflowService;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ProjectAccountLifecycleAdapter(
+            ProjectRepository projectRepository,
+            ProjectMemberRepository projectMemberRepository,
+            TaskRepository taskRepository,
+            ProjectManagementAttentionAuditRepository attentionAuditRepository,
+            UserProjectReconciliationStateRepository reconciliationStateRepository,
+            AccountAuthStatePort accountAuthStatePort,
+            ApplicationEventPublisher eventPublisher) {
+        this(projectRepository, projectMemberRepository, taskRepository, attentionAuditRepository,
+                reconciliationStateRepository, accountAuthStatePort, eventPublisher, Clock.systemUTC());
+    }
+
+    public ProjectAccountLifecycleAdapter(
+            ProjectRepository projectRepository,
+            ProjectMemberRepository projectMemberRepository,
+            TaskRepository taskRepository,
+            ProjectManagementAttentionAuditRepository attentionAuditRepository,
+            UserProjectReconciliationStateRepository reconciliationStateRepository,
+            AccountAuthStatePort accountAuthStatePort,
+            ApplicationEventPublisher eventPublisher,
+            Clock clock) {
+        this.projectRepository = projectRepository;
+        this.projectMemberRepository = projectMemberRepository;
+        this.taskRepository = taskRepository;
+        this.attentionAuditRepository = attentionAuditRepository;
+        this.reconciliationStateRepository = reconciliationStateRepository;
+        this.accountAuthStatePort = accountAuthStatePort;
+        this.eventPublisher = eventPublisher;
+        this.clock = clock != null ? clock : Clock.systemUTC();
+    }
 
     @Override
     @Transactional(readOnly = true)
@@ -148,7 +193,8 @@ public class ProjectAccountLifecycleAdapter implements ProjectAccountLifecycleGu
         List<Long> memberProjectIds = projectMemberRepository.findProjectIdsByUserId(userId);
         List<Long> sortedProjectIds = memberProjectIds.stream().distinct().sorted().toList();
 
-        // Canonical lock order: projects (ascending) -> users (ascending) -> tasks (ascending).
+        // Canonical lock order: projects (ascending) -> users (ascending) -> tasks
+        // (ascending).
         Map<Long, ProjectEntity> lockedProjects = new LinkedHashMap<>();
         for (Long projectId : sortedProjectIds) {
             projectRepository.findByIdForUpdate(projectId).ifPresent(p -> lockedProjects.put(p.getId(), p));
@@ -168,11 +214,12 @@ public class ProjectAccountLifecycleAdapter implements ProjectAccountLifecycleGu
         UserProjectReconciliationStateEntity state = reconciliationStateRepository.findById(userId).orElse(null);
         if (state != null && state.getLastReconciledTokenVersion() >= currentAccount.tokenVersion()) {
             log.debug("Skipping already-reconciled lifecycle event={} (eventVer={}, currentVer={}, reconciledVer={})",
-                    event.eventId(), event.tokenVersion(), currentAccount.tokenVersion(), state.getLastReconciledTokenVersion());
+                    event.eventId(), event.tokenVersion(), currentAccount.tokenVersion(),
+                    state.getLastReconciledTokenVersion());
             return;
         }
 
-        Instant now = Instant.now();
+        Instant now = Instant.now(clock).truncatedTo(ChronoUnit.MICROS);
         boolean isCurrentlyActive = isEffectiveActive(currentAccount);
 
         for (ProjectEntity project : lockedProjects.values()) {
@@ -186,7 +233,7 @@ public class ProjectAccountLifecycleAdapter implements ProjectAccountLifecycleGu
             }
 
             if (!isCurrentlyActive) {
-                clearOrphanActiveTasks(project, userId, members, accountStates);
+                clearOrphanActiveTasks(project, userId, members, accountStates, now);
                 long rosterVersion = project.bumpRosterVersion();
                 publishAfterCommit(new ProjectAccessRevokedEvent(
                         UUID.randomUUID(),
@@ -264,19 +311,26 @@ public class ProjectAccountLifecycleAdapter implements ProjectAccountLifecycleGu
             ProjectEntity project,
             long userId,
             List<ProjectMemberEntity> members,
-            Map<Long, AccountAuthStateDto> accountStates) {
+            Map<Long, AccountAuthStateDto> accountStates,
+            Instant txNow) {
         List<TaskEntity> activeAssigned = taskRepository.findActiveAssignedByProjectIdAndAssigneeIdForUpdate(
                 project.getId(), userId);
         if (activeAssigned.isEmpty()) {
             return;
         }
         for (TaskEntity task : activeAssigned) {
-            task.setAssigneeId(null);
             if (task.getStatus() == TaskStatus.REVIEW) {
+                if (taskWorkflowService != null) {
+                    taskWorkflowService.invalidatePendingSubmissionOnAssigneeRemoval(task, "ACCOUNT_SUSPENDED", txNow);
+                } else {
+                    task.setCurrentSubmissionId(null);
+                }
                 task.setStatus(TaskStatus.IN_PROGRESS);
             }
+            task.updateAssignee(null);
+            task.markMutated(txNow);
         }
-        taskRepository.saveAll(activeAssigned);
+        taskRepository.saveAllAndFlush(activeAssigned);
 
         List<ProjectMemberEntity> activeManagers = members.stream()
                 .filter(m -> m.getRole() == MemberRole.MANAGER

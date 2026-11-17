@@ -18,6 +18,17 @@ public record CreateProjectRequest(
 
         LocalDate startDate,
 
-        LocalDate endDate
+        LocalDate endDate,
+
+        @Size(max = 64, message = "Timezone ID must not exceed 64 characters")
+        String timezoneId
 ) {
+    public CreateProjectRequest(
+            String name,
+            String description,
+            HeuristicMode heuristicMode,
+            LocalDate startDate,
+            LocalDate endDate) {
+        this(name, description, heuristicMode, startDate, endDate, null);
+    }
 }

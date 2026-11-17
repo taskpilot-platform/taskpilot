@@ -22,6 +22,19 @@ public record UpdateProjectRequest(
 
         LocalDate startDate,
 
-        LocalDate endDate
+        LocalDate endDate,
+
+        @Size(max = 64, message = "Timezone ID must not exceed 64 characters")
+        String timezoneId
 ) {
+    public UpdateProjectRequest(
+            String name,
+            String description,
+            ProjectStatus status,
+            HeuristicMode heuristicMode,
+            WorkflowMode workflowMode,
+            LocalDate startDate,
+            LocalDate endDate) {
+        this(name, description, status, heuristicMode, workflowMode, startDate, endDate, null);
+    }
 }
