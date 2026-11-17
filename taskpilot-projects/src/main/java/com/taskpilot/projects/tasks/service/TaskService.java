@@ -231,7 +231,7 @@ public class TaskService {
                     request.assigneeId(),
                     task.getId(),
                     task.getTitle(),
-                    "/tasks?taskId=" + task.getId()));
+                    "/tasks?taskId=" + task.getId(), task.getProjectId()));
         }
         if (request.startDate() != null || request.dueDate() != null) {
             Instant nextStartDate = request.startDate() != null ? request.startDate() : task.getStartDate();

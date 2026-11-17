@@ -19,7 +19,9 @@ import com.taskpilot.contracts.assignment.port.out.UserPort;
 import com.taskpilot.contracts.assignment.port.out.UserSkillPort;
 import com.taskpilot.contracts.skill.dto.SkillDto;
 import com.taskpilot.contracts.skill.port.out.SkillPort;
-import com.taskpilot.contracts.user.port.out.NotificationPort;
+import com.taskpilot.contracts.user.dto.NotificationTypeDto;
+import com.taskpilot.contracts.user.dto.SystemNotificationCommandDto;
+import com.taskpilot.contracts.user.port.out.UserNotificationPort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.enums.HeuristicMode;
@@ -86,7 +88,7 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     private final UserPort userPort;
     private final UserSkillPort userSkillPort;
     private final SkillPort skillPort;
-    private final NotificationPort notificationPort;
+    private final UserNotificationPort notificationPort;
     private final SprintService sprintService;
     private final TaskService taskService;
     private final LabelService labelService;
@@ -165,6 +167,11 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     public TaskAssignmentResultDto assignTaskToMember(Long taskId, Long memberId, String reason, Long requesterUserId,
             boolean simulate) {
         TaskEntity task = findTask(taskId);
+        if (!simulate) {
+            // Before task writes / recipient locks, matching the scoped notification guard's project -> user order.
+            projectRepository.findByIdForUpdate(task.getProjectId())
+                    .orElseThrow(() -> new BusinessException(404, "Project not found"));
+        }
         validateProjectMember(task.getProjectId(), requesterUserId);
         validateProjectMember(task.getProjectId(), memberId);
         validateProjectNotArchived(task.getProjectId());
@@ -172,9 +179,10 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
         if (!simulate) {
             task.setAssigneeId(memberId);
             taskRepository.saveAndFlush(task);
-            notificationPort.sendSystemNotification(memberId, "Task Assigned",
-                    "You have been assigned to task: " + task.getTitle(),
-                    "/tasks?taskId=" + task.getId());
+            // Keep notification/task/history atomic; only transport is deferred until after commit.
+            notificationPort.createNotification(new SystemNotificationCommandDto(memberId, "Task Assigned",
+                    "You have been assigned to task: " + task.getTitle(), "/tasks?taskId=" + task.getId(),
+                    NotificationTypeDto.SYSTEM, task.getProjectId(), task.getId()));
         }
 
         return TaskAssignmentResultDto.success(taskId, memberId,

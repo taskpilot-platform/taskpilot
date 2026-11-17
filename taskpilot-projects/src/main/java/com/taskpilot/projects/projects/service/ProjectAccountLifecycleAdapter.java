@@ -289,7 +289,7 @@ public class ProjectAccountLifecycleAdapter implements ProjectAccountLifecycleGu
                     "Orphaned tasks require reassignment",
                     activeAssigned.size() + " active task(s) in project \"" + project.getName()
                             + "\" were unassigned because the assignee's account was suspended.",
-                    "/projects/" + project.getId() + "/board"));
+                    "/projects/" + project.getId() + "/board", project.getId()));
         }
     }
 

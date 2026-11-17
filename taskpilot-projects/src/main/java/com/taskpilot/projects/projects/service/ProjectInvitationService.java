@@ -292,7 +292,7 @@ public class ProjectInvitationService {
                         manager.getUserId(),
                         "New member joined your project",
                         joinedName + " accepted an invitation and joined project \"" + project.getName() + "\".",
-                        "/projects/" + projectId + "/settings"));
+                        "/projects/" + projectId + "/settings", projectId));
             }
         }
 

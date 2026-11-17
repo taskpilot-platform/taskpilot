@@ -265,7 +265,7 @@ public class ProjectServiceImpl {
                         mgr.getUserId(),
                         "Thành viên rời dự án",
                         leavingMemberName + " đã rời khỏi dự án \"" + project.getName() + "\".",
-                        "/projects"));
+                        "/projects", project.getId()));
             }
         }
     }
@@ -571,7 +571,7 @@ public class ProjectServiceImpl {
                         "Orphaned tasks require reassignment",
                         activeAssigned.size() + " active task(s) in project \"" + project.getName()
                                 + "\" were unassigned because the assignee " + reasonPhrase + ".",
-                        "/projects/" + project.getId() + "/board"));
+                        "/projects/" + project.getId() + "/board", project.getId()));
             }
         }
     }

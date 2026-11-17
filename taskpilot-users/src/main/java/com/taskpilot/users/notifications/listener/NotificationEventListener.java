@@ -38,19 +38,22 @@ public class NotificationEventListener {
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void handleTaskAssigned(TaskAssignedEvent event) {
+        if (event == null || event.targetUserId() == null || event.projectId() == null) {
+            return;
+        }
         log.debug("Processing TaskAssignedEvent asynchronously for userId={}", event.targetUserId());
         notificationService.createNotification(new SystemNotificationCommandDto(
                 event.targetUserId(),
                 "Task Assigned",
                 "You have been assigned to task: " + event.taskTitle(),
                 event.linkAction(),
-                NotificationTypeDto.ASSIGNED));
+                NotificationTypeDto.ASSIGNED, event.projectId(), event.taskId()));
     }
 
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void handleTaskCommented(TaskCommentedEvent event) {
-        if (event == null || event.targetUserId() == null) {
+        if (event == null || event.targetUserId() == null || event.projectId() == null) {
             return;
         }
         if (event.projectId() != null) {
@@ -79,12 +82,15 @@ public class NotificationEventListener {
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void handleProjectMember(ProjectMemberEvent event) {
+        if (event == null || event.targetUserId() == null || event.projectId() == null) {
+            return;
+        }
         log.debug("Processing ProjectMemberEvent asynchronously for userId={}", event.targetUserId());
         notificationService.createNotification(new SystemNotificationCommandDto(
                 event.targetUserId(),
                 event.title(),
                 event.message(),
                 event.linkAction(),
-                NotificationTypeDto.SYSTEM));
+                NotificationTypeDto.SYSTEM, event.projectId(), null));
     }
 }

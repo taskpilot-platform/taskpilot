@@ -294,6 +294,85 @@ class P4NotificationDispatchIntegrationTest {
     }
 
     @Test
+    void taskAssignmentEventRetainsScopeWhenRecipientRemovedBeforeListenerRuns() throws Exception {
+        UserFixture manager = createUserAndLogin();
+        UserFixture removed = createUserAndLogin();
+        UserFixture eligible = createUserAndLogin();
+        long projectId = createProject(manager.jwt());
+        addMember(projectId, removed.userId(), MemberRole.MEMBER);
+        addMember(projectId, eligible.userId(), MemberRole.MEMBER);
+        long taskId = createTask(projectId, manager.userId(), manager.userId());
+        pausableExecutor.awaitIdle(10, TimeUnit.SECONDS);
+        fakeOneSignal.clear();
+        pausableExecutor.pauseNextBatch(1);
+        updateAssignee(taskId, removed.userId(), manager.userId());
+        assertThat(pausableExecutor.awaitPaused(5, TimeUnit.SECONDS)).isTrue();
+        context.getBean(ProjectServiceImpl.class).removeMember(projectId, removed.userId(), manager.userId());
+        pausableExecutor.resumeAndAwaitCompletion(10, TimeUnit.SECONDS);
+        pausableExecutor.awaitIdle(10, TimeUnit.SECONDS);
+        assertThat(context.getBean(NotificationRepository.class).countByUserIdAndIsReadFalse(removed.userId())).isZero();
+        assertThat(fakeOneSignal.calls()).noneMatch(call -> call.userId().equals(String.valueOf(removed.userId())));
+
+        updateAssignee(taskId, eligible.userId(), manager.userId());
+        pausableExecutor.awaitIdle(10, TimeUnit.SECONDS);
+        assertThat(fakeOneSignal.calls()).anyMatch(call -> call.userId().equals(String.valueOf(eligible.userId()))
+                && call.title().equals("Task Assigned"));
+    }
+
+    private void updateAssignee(long taskId, long assigneeId, long managerId) {
+        context.getBean(com.taskpilot.projects.tasks.service.TaskService.class).updateTask(taskId,
+                new com.taskpilot.projects.tasks.dto.UpdateTaskRequest(
+                        null, null, null, null, null, null, null, null, assigneeId, null, null), managerId);
+    }
+
+    @Test
+    void projectMemberEventRetainsScopeWhenManagerRemovedBeforeListenerRuns() throws Exception {
+        UserFixture manager = createUserAndLogin();
+        UserFixture removedManager = createUserAndLogin();
+        UserFixture leaving = createUserAndLogin();
+        long projectId = createProject(manager.jwt());
+        addMember(projectId, removedManager.userId(), MemberRole.MANAGER);
+        addMember(projectId, leaving.userId(), MemberRole.MEMBER);
+        pausableExecutor.awaitIdle(10, TimeUnit.SECONDS);
+        fakeOneSignal.clear();
+        pausableExecutor.pauseNextBatch(2);
+        context.getBean(ProjectServiceImpl.class).leaveProject(projectId, leaving.userId());
+        assertThat(pausableExecutor.awaitPaused(5, TimeUnit.SECONDS)).isTrue();
+        context.getBean(ProjectServiceImpl.class).removeMember(projectId, removedManager.userId(), manager.userId());
+        pausableExecutor.resumeAndAwaitCompletion(10, TimeUnit.SECONDS);
+        pausableExecutor.awaitIdle(10, TimeUnit.SECONDS);
+        assertThat(context.getBean(NotificationRepository.class).countByUserIdAndIsReadFalse(removedManager.userId())).isZero();
+        assertThat(fakeOneSignal.calls()).noneMatch(call -> call.userId().equals(String.valueOf(removedManager.userId())));
+        assertThat(fakeOneSignal.calls()).anyMatch(call -> call.userId().equals(String.valueOf(manager.userId())));
+    }
+
+    @Test
+    void aiAssignmentRetainsScopeWhenPushRecipientRemovedAfterCommit() throws Exception {
+        UserFixture manager = createUserAndLogin();
+        UserFixture removed = createUserAndLogin();
+        UserFixture eligible = createUserAndLogin();
+        long projectId = createProject(manager.jwt());
+        addMember(projectId, removed.userId(), MemberRole.MEMBER);
+        addMember(projectId, eligible.userId(), MemberRole.MEMBER);
+        long taskId = createTask(projectId, manager.userId(), manager.userId());
+        var adapter = context.getBean(com.taskpilot.projects.aiquery.adapter.out.AiQueryModuleAdapter.class);
+        pausableExecutor.awaitIdle(10, TimeUnit.SECONDS);
+        fakeOneSignal.clear();
+        pausableExecutor.pauseNextBatch(1);
+        assertThat(adapter.assignTaskToMember(taskId, removed.userId(), "scope regression", manager.userId(), false)).isNotNull();
+        assertThat(pausableExecutor.awaitPaused(5, TimeUnit.SECONDS)).isTrue();
+        context.getBean(ProjectServiceImpl.class).removeMember(projectId, removed.userId(), manager.userId());
+        pausableExecutor.resumeAndAwaitCompletion(10, TimeUnit.SECONDS);
+        pausableExecutor.awaitIdle(10, TimeUnit.SECONDS);
+        assertThat(fakeOneSignal.calls()).noneMatch(call -> call.userId().equals(String.valueOf(removed.userId())));
+
+        adapter.assignTaskToMember(taskId, eligible.userId(), "eligible control", manager.userId(), false);
+        pausableExecutor.awaitIdle(10, TimeUnit.SECONDS);
+        assertThat(fakeOneSignal.calls()).anyMatch(call -> call.userId().equals(String.valueOf(eligible.userId()))
+                && call.title().equals("Task Assigned"));
+    }
+
+    @Test
     void personalNotificationJoinsLockedBusinessTransactionAndPreservesRollback() throws Exception {
         assertNotificationTransactionParticipation(false);
     }

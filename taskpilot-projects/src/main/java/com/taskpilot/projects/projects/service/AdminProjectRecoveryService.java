@@ -127,6 +127,6 @@ public class AdminProjectRecoveryService {
                 targetUserId,
                 "Project management assigned",
                 "An administrator assigned you as Project Manager for \"" + project.getName() + "\".",
-                "/projects/" + projectId + "/settings"));
+                "/projects/" + projectId + "/settings", projectId));
     }
 }
