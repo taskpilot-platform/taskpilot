@@ -1,6 +1,10 @@
 package com.taskpilot.projects.common.entity;
 
+import java.time.Instant;
 import java.time.LocalDate;
+
+import jakarta.persistence.PrePersist;
+import jakarta.persistence.Version;
 
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
@@ -61,4 +65,26 @@ public class SprintEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "heuristic_mode")
     private HeuristicMode heuristicMode;
+
+    @Builder.Default
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version = 0L;
+
+    @Column(name = "completed_at")
+    private Instant completedAt;
+
+    @Column(name = "completed_by_user_id")
+    private Long completedByUserId;
+
+    @PrePersist
+    void onPrePersist() {
+        if (version == null) {
+            version = 0L;
+        }
+    }
+
+    public long effectiveVersion() {
+        return version != null ? version : 0L;
+    }
 }
