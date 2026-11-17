@@ -106,7 +106,7 @@ public class ProjectRealtimeAccessAdapter implements RealtimeAccessPort, Project
         }
         if (taskId != null) {
             TaskEntity task = taskRepository.findById(taskId).orElse(null);
-            if (task == null || !Objects.equals(task.getProjectId(), projectId)) {
+            if (task == null || task.isDeleted() || !Objects.equals(task.getProjectId(), projectId)) {
                 return false;
             }
         }

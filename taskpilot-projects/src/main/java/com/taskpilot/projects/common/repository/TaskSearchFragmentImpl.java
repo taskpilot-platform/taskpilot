@@ -20,7 +20,7 @@ public class TaskSearchFragmentImpl implements TaskSearchFragment {
 
     @Override
     public List<TaskEntity> searchTasksCustom(Long projectId, String keyword, Sort sort) {
-        StringBuilder jpql = new StringBuilder("SELECT t FROM TaskEntity t WHERE t.projectId = :projectId");
+        StringBuilder jpql = new StringBuilder("SELECT t FROM TaskEntity t WHERE t.projectId = :projectId AND t.deletedAt IS NULL");
         if (keyword != null && !keyword.isBlank()) {
             jpql.append(" AND (LOWER(t.title) LIKE LOWER(:kw) OR LOWER(t.description) LIKE LOWER(:kw))");
         }

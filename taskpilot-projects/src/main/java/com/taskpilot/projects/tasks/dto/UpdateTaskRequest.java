@@ -1,12 +1,14 @@
 package com.taskpilot.projects.tasks.dto;
 
-import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 import com.taskpilot.projects.common.enums.PriorityLevel;
 import com.taskpilot.projects.common.enums.TaskStatus;
 
 public record UpdateTaskRequest(
+    Long expectedTaskVersion,
+    UUID requestId,
     String title,
     String description,
     TaskStatus status,
@@ -16,6 +18,7 @@ public record UpdateTaskRequest(
     Integer difficultyLevel,
     List<Long> requiredSkillIds,
     Long assigneeId,
-    Instant startDate,
-    Instant dueDate
+    String startDate,
+    String dueDate,
+    Long sprintId
 ) {}

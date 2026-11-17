@@ -1,58 +1,65 @@
 package com.taskpilot.projects.tasks.service;
 
-import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.taskpilot.infrastructure.exception.BusinessException;
-import com.taskpilot.projects.common.entity.TaskEntity;
-import com.taskpilot.projects.common.enums.PriorityLevel;
-import com.taskpilot.projects.common.enums.SprintStatus;
-import com.taskpilot.projects.common.enums.TaskStatus;
-import com.taskpilot.projects.common.repository.ProjectMemberRepository;
-import com.taskpilot.projects.common.service.ProjectSecurityService;
-import com.taskpilot.projects.common.repository.SprintRepository;
-import com.taskpilot.projects.common.repository.TaskRepository;
-import com.taskpilot.projects.tasks.dto.CreateTaskRequest;
-import com.taskpilot.projects.tasks.dto.KanbanMoveRequest;
-import com.taskpilot.projects.tasks.dto.TaskDto;
-import com.taskpilot.projects.tasks.dto.TaskDetailDto;
-import com.taskpilot.projects.tasks.dto.UpdateTaskSprintRequest;
-import com.taskpilot.projects.tasks.dto.UpdateTaskRequest;
-import com.taskpilot.projects.common.repository.LabelRepository;
-import com.taskpilot.projects.common.repository.TaskLabelRepository;
-import com.taskpilot.projects.common.repository.TaskRequiredSkillRepository;
-import com.taskpilot.projects.common.entity.TaskLabelEntity;
-import com.taskpilot.projects.common.entity.TaskRequiredSkillEntity;
-import com.taskpilot.projects.common.entity.SprintEntity;
+import com.taskpilot.contracts.assignment.port.out.UserPort;
 import com.taskpilot.contracts.skill.dto.SkillDto;
 import com.taskpilot.contracts.skill.port.out.SkillPort;
-import com.taskpilot.contracts.assignment.port.out.UserPort;
-import org.springframework.context.ApplicationEventPublisher;
-import com.taskpilot.contracts.user.event.TaskAssignedEvent;
-
-import lombok.RequiredArgsConstructor;
+import com.taskpilot.contracts.task.PatchTaskCommand;
+import com.taskpilot.infrastructure.exception.BusinessException;
+import com.taskpilot.projects.common.entity.TaskEntity;
+import com.taskpilot.projects.common.entity.TaskRequiredSkillEntity;
+import com.taskpilot.projects.common.enums.MemberRole;
+import com.taskpilot.projects.common.repository.TaskRepository;
+import com.taskpilot.projects.common.repository.TaskRequiredSkillRepository;
+import com.taskpilot.projects.common.service.ProjectSecurityService;
+import com.taskpilot.projects.tasks.dto.CreateSuccessorTaskRequest;
+import com.taskpilot.projects.tasks.dto.CreateTaskRequest;
+import com.taskpilot.projects.tasks.dto.KanbanMoveRequest;
+import com.taskpilot.projects.tasks.dto.TaskDetailDto;
+import com.taskpilot.projects.tasks.dto.TaskDto;
+import com.taskpilot.projects.tasks.dto.TombstonedTaskAuditDto;
+import com.taskpilot.projects.tasks.dto.UpdateTaskRequest;
+import com.taskpilot.projects.tasks.dto.UpdateTaskSprintRequest;
 
 @Service
-@RequiredArgsConstructor
 public class TaskService {
 
     private final TaskRepository taskRepository;
     private final ProjectSecurityService projectSecurityService;
-    private final ProjectMemberRepository projectMemberRepository;
     private final SkillPort skillPort;
     private final UserPort userPort;
-    private final ApplicationEventPublisher eventPublisher;
-    private final LabelRepository labelRepository;
-    private final TaskLabelRepository taskLabelRepository;
     private final TaskRequiredSkillRepository taskRequiredSkillRepository;
-    private final SprintRepository sprintRepository;
     private final TaskDtoMapper taskDtoMapper;
+    private final TaskCommandService taskCommandService;
+
+    @Autowired
+    public TaskService(
+            TaskRepository taskRepository,
+            ProjectSecurityService projectSecurityService,
+            SkillPort skillPort,
+            UserPort userPort,
+            TaskRequiredSkillRepository taskRequiredSkillRepository,
+            TaskDtoMapper taskDtoMapper,
+            TaskCommandService taskCommandService) {
+        this.taskRepository = taskRepository;
+        this.projectSecurityService = projectSecurityService;
+        this.skillPort = skillPort;
+        this.userPort = userPort;
+        this.taskRequiredSkillRepository = taskRequiredSkillRepository;
+        this.taskDtoMapper = taskDtoMapper;
+        this.taskCommandService = taskCommandService;
+    }
 
     private List<TaskDto> mapToDtoWithLabels(List<TaskEntity> tasks) {
         return taskDtoMapper.mapToDtoWithLabels(tasks);
@@ -60,28 +67,6 @@ public class TaskService {
 
     private TaskDto mapToDtoWithLabels(TaskEntity task) {
         return taskDtoMapper.mapToDtoWithLabels(task);
-    }
-
-    private void validateSprintForTask(Long projectId, Long sprintId) {
-        if (sprintId == null) {
-            return;
-        }
-        SprintEntity sprint = sprintRepository.findById(sprintId)
-                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Sprint not found"));
-        if (!sprint.getProjectId().equals(projectId)) {
-            throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
-                    "Sprint must belong to the same project");
-        }
-        if (sprint.getStatus() == SprintStatus.COMPLETED) {
-            throw new BusinessException(HttpStatus.CONFLICT.value(), "Completed sprint is readonly");
-        }
-    }
-
-    private void validateTaskDateRange(Instant startDate, Instant dueDate) {
-        if (startDate != null && dueDate != null && dueDate.isBefore(startDate)) {
-            throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
-                    "Task due date cannot be earlier than start date");
-        }
     }
 
     @Transactional(readOnly = true)
@@ -94,7 +79,7 @@ public class TaskService {
 
     @Transactional(readOnly = true)
     public TaskDetailDto getTaskById(Long taskId, Long userId) {
-        TaskEntity task = taskRepository.findById(taskId).orElseThrow(
+        TaskEntity task = taskRepository.findActiveById(taskId).orElseThrow(
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found"));
 
         projectSecurityService.validateMember(task.getProjectId(), userId);
@@ -122,7 +107,7 @@ public class TaskService {
 
     @Transactional(readOnly = true)
     public List<TaskDto> getSubtasks(Long parentId, Long userId) {
-        TaskEntity parentTask = taskRepository.findById(parentId).orElseThrow(
+        TaskEntity parentTask = taskRepository.findActiveById(parentId).orElseThrow(
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Parent task not found"));
 
         projectSecurityService.validateMember(parentTask.getProjectId(), userId);
@@ -131,231 +116,94 @@ public class TaskService {
         return mapToDtoWithLabels(subtasks);
     }
 
+    @Transactional(readOnly = true)
+    public List<TombstonedTaskAuditDto> getTombstonedTasksAudit(Long projectId, Long userId) {
+        projectSecurityService.requireProject(projectId);
+        projectSecurityService.validateManager(projectId, userId);
+        return taskRepository.findTombstonedByProjectId(projectId).stream()
+                .map(t -> new TombstonedTaskAuditDto(
+                        t.getId(),
+                        t.getProjectId(),
+                        t.getParentId(),
+                        t.getSprintId(),
+                        t.getTitle(),
+                        t.getStatus(),
+                        t.getAssigneeId(),
+                        t.getCompletionEvidenceStatus(),
+                        t.getCurrentSubmissionId(),
+                        t.getCurrentEvaluationId(),
+                        t.getDeletedAt(),
+                        t.getDeletedByUserId(),
+                        t.getDeletionReason()))
+                .toList();
+    }
+
     @Transactional
-    public TaskDto createTask(CreateTaskRequest request, Long userId) {
-        projectSecurityService.validateMember(request.projectId(), userId);
-        projectSecurityService.validateProjectNotArchived(request.projectId());
-        validateTaskDateRange(request.startDate(), request.dueDate());
+    public TaskDto createSuccessorTask(Long sourceTaskId, CreateSuccessorTaskRequest request, Long userId, UUID requestId) {
+        return taskCommandService.createSuccessorTask(sourceTaskId, request, userId, requestId);
+    }
 
-        if (request.parentId() != null) {
-            TaskEntity parentTask = taskRepository.findById(request.parentId())
-                    .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(),
-                            "Parent task not found"));
-            if (!parentTask.getProjectId().equals(request.projectId())) {
-                throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
-                        "Parent task must belong to the same project");
-            }
-        }
-        validateSprintForTask(request.projectId(), request.sprintId());
+    @Transactional
+    public TaskDto createTask(CreateTaskRequest request, Long userId, UUID requestId) {
+        return taskCommandService.createTask(request, userId, requestId);
+    }
 
-        TaskEntity task = TaskEntity.builder()
-                .projectId(request.projectId())
-                .parentId(request.parentId())
-                .sprintId(request.sprintId())
-                .title(request.title())
-                .description(request.description())
-                .priority(request.priority() != null ? request.priority() : PriorityLevel.MEDIUM)
-                .position(request.position() != null ? request.position() : 0f)
-                .difficultyLevel(request.difficultyLevel() != null ? request.difficultyLevel() : 1)
-                .assigneeId(request.assigneeId())
-                .reporterId(userId)
-                .startDate(request.startDate())
-                .dueDate(request.dueDate())
-                .status(TaskStatus.TODO).build();
-
-        taskRepository.save(task);
-
-        if (request.labelIds() != null && !request.labelIds().isEmpty()) {
-            List<Long> distinctLabelIds = request.labelIds().stream().distinct().toList();
-            long validCount = labelRepository.findAllById(distinctLabelIds).stream()
-                    .filter(l -> l.getProjectId().equals(task.getProjectId()))
-                    .count();
-            if (validCount != distinctLabelIds.size()) {
-                throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
-                        "One or more labels are invalid or do not belong to this project");
-            }
-
-            List<TaskLabelEntity> taskLabels = distinctLabelIds.stream()
-                    .map(labelId -> TaskLabelEntity.builder()
-                            .id(new TaskLabelEntity.TaskLabelId(task.getId(), labelId))
-                            .taskId(task.getId())
-                            .labelId(labelId).build())
-                    .toList();
-            taskLabelRepository.saveAll(taskLabels);
-        }
-
-        if (request.requiredSkillIds() != null && !request.requiredSkillIds().isEmpty()) {
-            List<Long> distinctSkillIds = request.requiredSkillIds().stream().distinct().toList();
-            List<SkillDto> validSkills = skillPort.findByIds(new java.util.HashSet<>(distinctSkillIds));
-            if (validSkills.size() != distinctSkillIds.size()) {
-                throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
-                        "One or more required skills are invalid or inactive");
-            }
-
-            List<TaskRequiredSkillEntity> taskSkills = distinctSkillIds.stream()
-                    .map(skillId -> TaskRequiredSkillEntity.builder()
-                            .id(new TaskRequiredSkillEntity.TaskRequiredSkillId(task.getId(), skillId))
-                            .taskId(task.getId())
-                            .skillId(skillId).build())
-                    .toList();
-            taskRequiredSkillRepository.saveAll(taskSkills);
-        }
-
-        return mapToDtoWithLabels(task);
+    @Transactional
+    public TaskDto patchTask(PatchTaskCommand command, Long userId) {
+        return taskCommandService.patchTask(command, userId);
     }
 
     @Transactional
     public TaskDto updateTask(Long taskId, UpdateTaskRequest request, Long userId) {
-        TaskEntity task = taskRepository.findById(taskId).orElseThrow(
-                () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found"));
-
-        projectSecurityService.validateMember(task.getProjectId(), userId);
-        projectSecurityService.validateProjectNotArchived(task.getProjectId());
-
+        if (request == null) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Request body is required");
+        }
+        Map<String, Object> values = new LinkedHashMap<>();
         if (request.title() != null)
-            task.setTitle(request.title());
+            values.put("title", request.title());
         if (request.description() != null)
-            task.setDescription(request.description());
+            values.put("description", request.description());
         if (request.status() != null)
-            task.setStatus(request.status());
+            values.put("status", request.status());
         if (request.priority() != null)
-            task.setPriority(request.priority());
+            values.put("priority", request.priority());
         if (request.position() != null)
-            task.setPosition(request.position());
+            values.put("position", request.position());
+        if (request.labelIds() != null)
+            values.put("labelIds", request.labelIds());
         if (request.difficultyLevel() != null)
-            task.setDifficultyLevel(request.difficultyLevel());
-
-        if (request.assigneeId() != null && !request.assigneeId().equals(task.getAssigneeId())) {
-            task.setAssigneeId(request.assigneeId());
-            eventPublisher.publishEvent(new TaskAssignedEvent(
-                    request.assigneeId(),
-                    task.getId(),
-                    task.getTitle(),
-                    "/tasks?taskId=" + task.getId(), task.getProjectId()));
-        }
-        if (request.startDate() != null || request.dueDate() != null) {
-            Instant nextStartDate = request.startDate() != null ? request.startDate() : task.getStartDate();
-            Instant nextDueDate = request.dueDate() != null ? request.dueDate() : task.getDueDate();
-            validateTaskDateRange(nextStartDate, nextDueDate);
-        }
+            values.put("difficultyLevel", request.difficultyLevel());
+        if (request.requiredSkillIds() != null)
+            values.put("requiredSkillIds", request.requiredSkillIds());
+        if (request.assigneeId() != null)
+            values.put("assigneeId", request.assigneeId());
         if (request.startDate() != null)
-            task.setStartDate(request.startDate());
+            values.put("startDate", request.startDate());
         if (request.dueDate() != null)
-            task.setDueDate(request.dueDate());
+            values.put("dueDate", request.dueDate());
+        if (request.sprintId() != null)
+            values.put("sprintId", request.sprintId());
 
-        taskRepository.save(task);
-
-        if (request.labelIds() != null) {
-            List<Long> distinctLabelIds = request.labelIds().stream().distinct().toList();
-            if (!distinctLabelIds.isEmpty()) {
-                long validCount = labelRepository.findAllById(distinctLabelIds).stream()
-                        .filter(l -> l.getProjectId().equals(task.getProjectId()))
-                        .count();
-                if (validCount != distinctLabelIds.size()) {
-                    throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
-                            "One or more labels are invalid or do not belong to this project");
-                }
-            }
-            taskLabelRepository.deleteByTaskId(task.getId());
-            if (!distinctLabelIds.isEmpty()) {
-                List<TaskLabelEntity> taskLabels = distinctLabelIds.stream()
-                        .map(labelId -> TaskLabelEntity.builder()
-                                .id(new TaskLabelEntity.TaskLabelId(task.getId(), labelId))
-                                .taskId(task.getId())
-                                .labelId(labelId).build())
-                        .toList();
-                taskLabelRepository.saveAll(taskLabels);
-            }
-        }
-
-        if (request.requiredSkillIds() != null) {
-            List<Long> distinctSkillIds = request.requiredSkillIds().stream().distinct().toList();
-            if (!distinctSkillIds.isEmpty()) {
-                List<SkillDto> validSkills = skillPort.findByIds(new java.util.HashSet<>(distinctSkillIds));
-                if (validSkills.size() != distinctSkillIds.size()) {
-                    throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
-                            "One or more required skills are invalid or inactive");
-                }
-            }
-            taskRequiredSkillRepository.deleteByTaskId(task.getId());
-            if (!distinctSkillIds.isEmpty()) {
-                List<TaskRequiredSkillEntity> taskSkills = distinctSkillIds.stream()
-                        .map(skillId -> TaskRequiredSkillEntity.builder()
-                                .id(new TaskRequiredSkillEntity.TaskRequiredSkillId(task.getId(), skillId))
-                                .taskId(task.getId())
-                                .skillId(skillId).build())
-                        .toList();
-                taskRequiredSkillRepository.saveAll(taskSkills);
-            }
-        }
-
-        return mapToDtoWithLabels(task);
+        PatchTaskCommand command = PatchTaskCommand.fromValues(
+                taskId,
+                request.expectedTaskVersion(),
+                request.requestId(),
+                values);
+        return taskCommandService.patchTask(command, userId);
     }
 
     @Transactional
-    public void deleteTask(Long taskId, Long userId) {
-        TaskEntity task = taskRepository.findById(taskId).orElseThrow(
-                () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found"));
-
-        projectSecurityService.validateMember(task.getProjectId(), userId);
-        projectSecurityService.validateProjectNotArchived(task.getProjectId());
-
-        boolean canDelete = task.getReporterId().equals(userId);
-        if (!canDelete) {
-            String role = projectMemberRepository.findByProjectIdAndUserId(task.getProjectId(), userId)
-                    .map(pm -> pm.getRole().name()).orElse("MEMBER");
-            if ("MANAGER".equals(role)) {
-                canDelete = true;
-            }
-        }
-        if (!canDelete) {
-            throw new BusinessException(HttpStatus.FORBIDDEN.value(),
-                    "You do not have permission to delete this task");
-        }
-
-        List<TaskEntity> subtasks = taskRepository.findByParentId(taskId);
-        taskRepository.deleteAll(subtasks);
-
-        taskLabelRepository.deleteByTaskId(task.getId());
-        taskRequiredSkillRepository.deleteByTaskId(task.getId());
-        taskRepository.delete(task);
+    public void deleteTask(Long taskId, Long expectedTaskVersion, UUID requestId, Long userId) {
+        taskCommandService.deleteTask(taskId, expectedTaskVersion, requestId, userId);
     }
 
     @Transactional
     public TaskDto moveTaskKanban(Long taskId, KanbanMoveRequest request, Long userId) {
-        TaskEntity task = taskRepository.findById(taskId).orElseThrow(
-                () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found"));
-
-        projectSecurityService.validateMember(task.getProjectId(), userId);
-        projectSecurityService.validateProjectNotArchived(task.getProjectId());
-
-        task.setStatus(request.status());
-        task.setPosition(request.position());
-
-        taskRepository.save(task);
-        return mapToDtoWithLabels(task);
+        return taskCommandService.moveTaskKanban(taskId, request, userId);
     }
 
     @Transactional
     public TaskDto updateTaskSprint(Long taskId, UpdateTaskSprintRequest request, Long userId) {
-        TaskEntity task = taskRepository.findById(taskId).orElseThrow(
-                () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found"));
-
-        projectSecurityService.validateMember(task.getProjectId(), userId);
-        projectSecurityService.validateProjectNotArchived(task.getProjectId());
-
-        if (task.getSprintId() != null) {
-            SprintEntity currentSprint = sprintRepository.findById(task.getSprintId())
-                    .orElse(null);
-            if (currentSprint != null && currentSprint.getStatus() == SprintStatus.COMPLETED) {
-                throw new BusinessException(HttpStatus.CONFLICT.value(),
-                        "Cannot move a task out of a completed sprint");
-            }
-        }
-
-        validateSprintForTask(task.getProjectId(), request.sprintId());
-        task.setSprintId(request.sprintId());
-        taskRepository.save(task);
-        return mapToDtoWithLabels(task);
+        return taskCommandService.updateTaskSprint(taskId, request, userId);
     }
 }

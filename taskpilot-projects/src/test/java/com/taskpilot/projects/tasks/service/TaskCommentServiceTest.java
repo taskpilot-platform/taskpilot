@@ -98,7 +98,7 @@ class TaskCommentServiceTest {
 
     @Test
     void getCommentsRejectsNonProjectMember() {
-        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task()));
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task()));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(false);
 
         BusinessException ex = assertThrows(BusinessException.class,
@@ -113,7 +113,7 @@ class TaskCommentServiceTest {
         task.setAssigneeId(2L);
         task.setReporterId(3L);
 
-        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task));
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
         when(projectMemberRepository.findMembers(PROJECT_ID)).thenReturn(members(1L, 2L, 3L, 4L, 5L));
@@ -150,7 +150,7 @@ class TaskCommentServiceTest {
         TaskEntity task = task();
         CommentEntity parent = comment(2L, PARENT_COMMENT_ID, TASK_ID);
 
-        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task));
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
         when(projectMemberRepository.findMembers(PROJECT_ID)).thenReturn(members(1L, 2L));
@@ -191,7 +191,7 @@ class TaskCommentServiceTest {
         task.setReporterId(99L); // former reporter removed from project
         CommentEntity parent = comment(98L, PARENT_COMMENT_ID, TASK_ID); // former commenter removed
 
-        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task));
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
         when(projectMemberRepository.findMembers(PROJECT_ID)).thenReturn(members(1L, 2L));
@@ -225,7 +225,7 @@ class TaskCommentServiceTest {
         TaskEntity task = task();
         CommentEntity parent = comment(2L, PARENT_COMMENT_ID, TASK_ID);
 
-        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task));
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
         when(projectMemberRepository.findMembers(PROJECT_ID)).thenReturn(members(1L, 2L));
@@ -255,7 +255,7 @@ class TaskCommentServiceTest {
 
     @Test
     void createReplyToCommentInDifferentTaskIsRejected() {
-        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task()));
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task()));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
         when(commentRepository.findByIdAndTaskId(PARENT_COMMENT_ID, TASK_ID)).thenReturn(Optional.empty());
@@ -272,7 +272,7 @@ class TaskCommentServiceTest {
         CommentEntity parent = comment(2L, PARENT_COMMENT_ID, TASK_ID);
         parent.setDeletedAt(Instant.parse("2026-05-13T01:00:00Z"));
 
-        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task()));
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task()));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
         when(commentRepository.findByIdAndTaskId(PARENT_COMMENT_ID, TASK_ID)).thenReturn(Optional.of(parent));
@@ -288,7 +288,7 @@ class TaskCommentServiceTest {
     void updateCommentOnlyNotifiesNewMentions() {
         CommentEntity comment = comment(ACTOR_ID);
 
-        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task()));
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task()));
         when(commentRepository.findByIdAndTaskId(COMMENT_ID, TASK_ID)).thenReturn(Optional.of(comment));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
@@ -316,7 +316,7 @@ class TaskCommentServiceTest {
         CommentEntity comment = comment(2L);
         comment.setParentCommentId(PARENT_COMMENT_ID);
 
-        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task()));
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task()));
         when(commentRepository.findByIdAndTaskId(COMMENT_ID, TASK_ID)).thenReturn(Optional.of(comment));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
@@ -333,7 +333,7 @@ class TaskCommentServiceTest {
         CommentEntity comment = comment(2L);
         comment.setParentCommentId(PARENT_COMMENT_ID);
 
-        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task()));
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task()));
         when(commentRepository.findByIdAndTaskId(COMMENT_ID, TASK_ID)).thenReturn(Optional.of(comment));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));

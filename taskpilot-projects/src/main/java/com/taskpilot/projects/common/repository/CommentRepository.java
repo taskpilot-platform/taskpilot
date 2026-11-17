@@ -30,7 +30,8 @@ public interface CommentRepository extends JpaRepository<CommentEntity, Long> {
       JOIN TaskEntity t ON t.id = c.taskId
       JOIN ProjectEntity p ON p.id = t.projectId
       JOIN ProjectMemberEntity pm ON pm.projectId = p.id AND pm.userId = :requesterUserId
-      WHERE (:projectId IS NULL OR p.id = :projectId)
+      WHERE t.deletedAt IS NULL
+        AND (:projectId IS NULL OR p.id = :projectId)
         AND (:taskId IS NULL OR t.id = :taskId)
         AND (:authorId IS NULL OR c.userId = :authorId)
         AND (:mentionedMe = false OR EXISTS (
@@ -48,7 +49,8 @@ public interface CommentRepository extends JpaRepository<CommentEntity, Long> {
       JOIN TaskEntity t ON t.id = c.taskId
       JOIN ProjectEntity p ON p.id = t.projectId
       JOIN ProjectMemberEntity pm ON pm.projectId = p.id AND pm.userId = :requesterUserId
-      WHERE (:projectId IS NULL OR p.id = :projectId)
+      WHERE t.deletedAt IS NULL
+        AND (:projectId IS NULL OR p.id = :projectId)
         AND (:taskId IS NULL OR t.id = :taskId)
         AND (:authorId IS NULL OR c.userId = :authorId)
         AND (:mentionedMe = false OR EXISTS (

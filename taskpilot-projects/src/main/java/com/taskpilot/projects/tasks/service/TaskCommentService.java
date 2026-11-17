@@ -370,7 +370,7 @@ public class TaskCommentService implements TaskCommentQueryPort {
     }
 
     private TaskEntity findTask(Long taskId) {
-        return taskRepository.findById(taskId)
+        return taskRepository.findActiveById(taskId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found"));
     }
 
