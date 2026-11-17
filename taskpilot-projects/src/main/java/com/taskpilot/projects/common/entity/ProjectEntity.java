@@ -68,6 +68,14 @@ public class ProjectEntity {
     @Column(name = "end_date")
     private LocalDate endDate;
 
+    @Builder.Default
+    @Column(name = "timezone_id", nullable = false, length = 64)
+    private String timezoneId = "Asia/Ho_Chi_Minh";
+
+    @Builder.Default
+    @Column(name = "timezone_provenance", nullable = false, length = 64)
+    private String timezoneProvenance = "PROJECT_DEFAULT";
+
     @Column(name = "created_at", insertable = false, updatable = false)
     private Instant createdAt;
 
