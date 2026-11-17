@@ -34,6 +34,7 @@ import com.taskpilot.projects.common.service.ProjectSecurityService;
 import com.taskpilot.projects.files.dto.FileDownloadResource;
 import com.taskpilot.projects.files.dto.ProjectFileDownloadResult;
 import com.taskpilot.projects.files.dto.ProjectFileResponse;
+import com.taskpilot.projects.tasks.service.TaskWorkflowService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
@@ -66,6 +67,12 @@ public class ProjectFileService {
     private final ProjectFileAttachmentService projectFileAttachmentService;
     private final StorageUploadOperationPort uploadOperationPort;
     private final StorageCleanupPort storageCleanupPort;
+    private TaskWorkflowService taskWorkflowService;
+
+    @Autowired(required = false)
+    void setTaskWorkflowService(TaskWorkflowService taskWorkflowService) {
+        this.taskWorkflowService = taskWorkflowService;
+    }
 
     public ProjectFileService(
             ProjectFileRepository projectFileRepository,
@@ -491,6 +498,10 @@ public class ProjectFileService {
 
         StorageObjectLocator locator = StorageObjectLocator.of(entity.getStorageBucket(), entity.getStorageKey());
         String deletedId = entity.getId() != null ? String.valueOf(entity.getId()) : null;
+
+        if (taskWorkflowService != null) {
+            taskWorkflowService.recordEvidenceFilesUnavailable(projectId, fileId, userId, Instant.now());
+        }
 
         projectFileRepository.delete(entity);
 
