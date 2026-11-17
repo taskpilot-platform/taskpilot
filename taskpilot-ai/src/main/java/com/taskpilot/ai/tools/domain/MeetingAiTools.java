@@ -267,6 +267,7 @@ public class MeetingAiTools {
                 "tasks", itemsToCreate
         );
 
+        final java.util.UUID actionSeed = java.util.UUID.randomUUID();
         return pendingAiActionService.create(
                 userId,
                 sessionId,
@@ -292,6 +293,9 @@ public class MeetingAiTools {
                         }
 
                         {
+                            java.util.UUID itemRequestId = java.util.UUID.nameUUIDFromBytes(
+                                    ("meeting:" + meetingId + ":seed:" + actionSeed + ":item:" + item.index())
+                                            .getBytes(java.nio.charset.StandardCharsets.UTF_8));
                             String taskDesc = (item.description() != null ? item.description() : "")
                                     + "\n\n" + marker + " (Tạo tự động từ cuộc họp #" + meetingId + ")";
                             TaskSummaryDto createdTask = taskCommandPort.createTask(
@@ -308,6 +312,7 @@ public class MeetingAiTools {
                                     item.assigneeId(),
                                     null,
                                     item.dueDate(),
+                                    itemRequestId,
                                     userId
                             );
                             created.add(Map.of("taskId", createdTask.id(), "title", createdTask.title()));

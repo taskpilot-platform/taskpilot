@@ -5,6 +5,7 @@ import com.taskpilot.ai.service.PendingAiActionService;
 import com.taskpilot.ai.tools.ToolExecutionContext;
 import com.taskpilot.contracts.aiquery.dto.SprintSummaryDto;
 import com.taskpilot.contracts.aiquery.port.out.SprintQueryPort;
+import com.taskpilot.infrastructure.exception.BusinessException;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
@@ -248,42 +249,72 @@ public class SprintAiTools {
     }
 
 
-    @Tool("Mark an active sprint as completed in a project. Requires confirmation.")
+    @Tool("Mark an active sprint as completed and carry over unfinished TODO/IN_PROGRESS/REVIEW tasks to BACKLOG or a writable target sprint. Requires expectedSprintVersion, carryoverDestination (BACKLOG or SPRINT), and confirmation.")
     public Object completeSprint(
             @P("The project ID") Long projectId,
-            @P("The ID of the sprint to complete") Long sprintId) {
-        log.info("[AiTool] completeSprint called for sprint {}", sprintId);
+            @P("The ID of the sprint to complete") Long sprintId,
+            @P("The sprint version observed by caller (required)") Long expectedSprintVersion,
+            @P("Explicit carryover destination for unfinished tasks: BACKLOG or SPRINT") String carryoverDestination,
+            @P("Target sprint ID when carryoverDestination is SPRINT (null for BACKLOG)") Long targetSprintId) {
+        log.info("[AiTool] completeSprint called for sprint {} (v={}) dest={} target={}",
+                sprintId, expectedSprintVersion, carryoverDestination, targetSprintId);
+        if (expectedSprintVersion == null) {
+            throw new BusinessException(428,
+                    "expectedSprintVersion is required; call getSprintsByProject first to obtain the current sprint version");
+        }
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
+        UUID requestId = UUID.randomUUID();
+        Map<String, Object> arguments = new LinkedHashMap<>();
+        arguments.put("projectId", projectId);
+        arguments.put("sprintId", sprintId);
+        arguments.put("expectedSprintVersion", expectedSprintVersion);
+        arguments.put("carryoverDestination", carryoverDestination);
+        arguments.put("targetSprintId", targetSprintId);
+        arguments.put("requestId", requestId.toString());
 
         return pendingAiActionService.create(
                 userId,
                 sessionId,
                 "completeSprint",
-                "Complete active sprint " + sprintId + " in project " + projectId,
-                args("projectId", projectId, "sprintId", sprintId),
+                "Complete active sprint " + sprintId + " in project " + projectId
+                        + " (carryover: " + carryoverDestination + ")",
+                arguments,
                 null,
-                () -> sprintQueryPort.completeSprint(projectId, sprintId, userId));
+                () -> sprintQueryPort.completeSprint(
+                        projectId, sprintId, expectedSprintVersion, carryoverDestination, targetSprintId, requestId, userId));
     }
 
 
-    @Tool("Move or assign a task to a sprint (or set sprintId=null to move to backlog). Requires confirmation.")
+    @Tool("Move or assign a task to a sprint (or set sprintId=null to move to backlog). Requires expectedTaskVersion and confirmation.")
     public Object assignTaskToSprint(
             @P("The ID of the task") Long taskId,
-            @P("The ID of the target sprint, or null to move it to the backlog") Long sprintId) {
-        log.info("[AiTool] assignTaskToSprint called for task {} -> sprint {}", taskId, sprintId);
+            @P("The ID of the target sprint, or null to move it to the backlog") Long sprintId,
+            @P("The task version observed by caller (required)") Long expectedTaskVersion) {
+        log.info("[AiTool] assignTaskToSprint called for task {} (v={}) -> sprint {}",
+                taskId, expectedTaskVersion, sprintId);
+        if (expectedTaskVersion == null) {
+            throw new BusinessException(428,
+                    "expectedTaskVersion is required; call getTaskDetails first to obtain the current task version");
+        }
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
+        UUID requestId = UUID.randomUUID();
 
         String desc = sprintId == null ? "Move task " + taskId + " to the backlog" : "Move task " + taskId + " to sprint " + sprintId;
+        Map<String, Object> arguments = new LinkedHashMap<>();
+        arguments.put("taskId", taskId);
+        arguments.put("sprintId", sprintId);
+        arguments.put("expectedTaskVersion", expectedTaskVersion);
+        arguments.put("requestId", requestId.toString());
         return pendingAiActionService.create(
                 userId,
                 sessionId,
                 "assignTaskToSprint",
                 desc,
-                args("taskId", taskId, "sprintId", sprintId),
+                arguments,
                 null,
-                () -> sprintQueryPort.assignTaskToSprint(taskId, sprintId, userId));
+                () -> sprintQueryPort.assignTaskToSprint(taskId, sprintId, expectedTaskVersion, requestId, userId));
     }
 
 

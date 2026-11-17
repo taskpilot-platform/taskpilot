@@ -275,9 +275,11 @@ public final class AiToolSupport {
                 }
                 Object parsed = PATCH_OBJECT_MAPPER.readValue(trimmed, Object.class);
                 if (parsed instanceof Map) {
-                    return (Map<String, Object>) parsed;
+                    return immutableArguments((Map<String, Object>) parsed);
                 } else if (parsed instanceof String innerStr) {
-                    return PATCH_OBJECT_MAPPER.readValue(innerStr, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+                    Map<String, Object> innerMap = PATCH_OBJECT_MAPPER.readValue(
+                            innerStr, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+                    return immutableArguments(innerMap);
                 }
             } catch (Exception e) {
                 log.warn("Failed to parse patch string: {}", patchData, e);

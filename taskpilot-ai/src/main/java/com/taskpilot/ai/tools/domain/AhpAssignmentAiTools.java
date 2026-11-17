@@ -12,6 +12,7 @@ import com.taskpilot.contracts.aiquery.dto.*;
 import com.taskpilot.contracts.aiquery.port.out.MemberAnalyticsPort;
 import com.taskpilot.contracts.aiquery.port.out.ProjectInsightsPort;
 import com.taskpilot.contracts.aiquery.port.out.TaskCommandPort;
+import com.taskpilot.infrastructure.exception.BusinessException;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
@@ -102,35 +103,50 @@ public class AhpAssignmentAiTools {
     }
 
 
-    @Tool("Assign a task to a project member by task ID and member ID. Requires confirmation.")
+    @Tool("Assign a task to a project member by task ID and member ID. Requires expectedTaskVersion and confirmation.")
     public Object assignTaskToMember(
             @P("The ID of the task") String taskId,
             @P("The ID of the member") String memberId,
-            @P("Reason for the assignment") String reason) {
-        log.info("[AiTool] assignTaskToMember called for task {} -> member {}", taskId, memberId);
+            @P("Reason for the assignment") String reason,
+            @P("The task version observed by caller (required)") Long expectedTaskVersion) {
+        log.info("[AiTool] assignTaskToMember called for task {} (v={}) -> member {}",
+                taskId, expectedTaskVersion, memberId);
+        if (expectedTaskVersion == null) {
+            throw new BusinessException(428,
+                    "expectedTaskVersion is required; call getTaskDetails first to obtain the current task version");
+        }
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
         String safeReason = hasText(reason) ? reason : "Task assigned by AI tool";
 
         Long resolvedTaskId = toLong(taskId);
         Long resolvedMemberId = toLong(memberId);
+        UUID requestId = UUID.randomUUID();
         return pendingAiActionService.create(
                 userId,
                 sessionId,
                 "assignTaskToMember",
                 "Assign task " + taskId + " to member " + memberId,
-                args("taskId", resolvedTaskId, "memberId", resolvedMemberId, "reason", safeReason),
+                args("taskId", resolvedTaskId, "memberId", resolvedMemberId, "reason", safeReason,
+                        "expectedTaskVersion", expectedTaskVersion, "requestId", requestId.toString()),
                 null,
-                () -> taskCommandPort.assignTaskToMember(resolvedTaskId, resolvedMemberId, safeReason, userId, false));
+                () -> taskCommandPort.assignTaskToMember(
+                        resolvedTaskId, resolvedMemberId, safeReason, expectedTaskVersion, requestId, userId, false));
     }
 
 
-    @Tool("Assign a task to a project member by task ID and member name. Resolves project and member. Requires confirmation.")
+    @Tool("Assign a task to a project member by task ID and member name. Resolves project and member. Requires expectedTaskVersion and confirmation.")
     public Object assignTaskToMemberByName(
             @P("The ID of the task") String taskId,
             @P("Full or partial member name, e.g. Julia Design") String memberName,
-            @P("Reason for the assignment") String reason) {
-        log.info("[AiTool] assignTaskToMemberByName called for task {} -> {}", taskId, memberName);
+            @P("Reason for the assignment") String reason,
+            @P("The task version observed by caller (required)") Long expectedTaskVersion) {
+        log.info("[AiTool] assignTaskToMemberByName called for task {} (v={}) -> {}",
+                taskId, expectedTaskVersion, memberName);
+        if (expectedTaskVersion == null) {
+            throw new BusinessException(428,
+                    "expectedTaskVersion is required; call getTaskDetails first to obtain the current task version");
+        }
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
 
@@ -140,6 +156,7 @@ public class AhpAssignmentAiTools {
         String safeReason = hasText(reason)
                 ? reason
                 : "User explicitly requested assignment to " + member.fullName() + ".";
+        UUID requestId = UUID.randomUUID();
 
         return pendingAiActionService.create(
                 userId,
@@ -147,21 +164,29 @@ public class AhpAssignmentAiTools {
                 "assignTaskToMember",
                 "Assign task " + taskId + " to " + member.fullName() + " (user specified)",
                 args("taskId", resolvedTaskId, "memberId", member.memberId(), "memberName", member.fullName(),
-                        "reason", safeReason, "source", "user_specified_assignee"),
+                        "reason", safeReason, "source", "user_specified_assignee",
+                        "expectedTaskVersion", expectedTaskVersion, "requestId", requestId.toString()),
                 Map.of("taskId", resolvedTaskId, "memberId", member.memberId(), "memberName", member.fullName(),
-                        "projectId", task.projectId(), "reason", safeReason),
-                () -> taskCommandPort.assignTaskToMember(resolvedTaskId, member.memberId(), safeReason, userId, false));
+                        "projectId", task.projectId(), "reason", safeReason,
+                        "expectedTaskVersion", expectedTaskVersion),
+                () -> taskCommandPort.assignTaskToMember(
+                        resolvedTaskId, member.memberId(), safeReason, expectedTaskVersion, requestId, userId, false));
     }
 
 
-    @Tool("Recommend the top candidate and assign the task to them in a single write operation. Requires confirmation.")
+    @Tool("Recommend the top candidate and assign the task to them in a single write operation. Requires expectedTaskVersion and confirmation.")
     public Object recommendAndAssignTask(
             @P("The ID of the task to assign") String taskId,
             @P("Optional project ID. If omitted, it is read from task details") String projectId,
             @P("Optional comma-separated required skill names. If omitted, task required skills are used") String skills,
             @P("Optional task difficulty 1-10. If omitted, task difficulty is used. Note: send as string like '5'") String difficulty,
-            @P("Reason to store with the assignment") String reason) {
-        log.info("[AiTool] recommendAndAssignTask called for task {}", taskId);
+            @P("Reason to store with the assignment") String reason,
+            @P("The task version observed by caller (required)") Long expectedTaskVersion) {
+        log.info("[AiTool] recommendAndAssignTask called for task {} (v={})", taskId, expectedTaskVersion);
+        if (expectedTaskVersion == null) {
+            throw new BusinessException(428,
+                    "expectedTaskVersion is required; call getTaskDetails first to obtain the current task version");
+        }
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
 
@@ -204,6 +229,8 @@ public class AhpAssignmentAiTools {
         RecommendAndAssignResult preview = new RecommendAndAssignResult(false, resolvedTaskId, resolvedProjectId,
                 selectedUserId, selectedName, safeReason, recommendation, null,
                 "Ready to assign task " + taskId + " to " + selectedName + " after confirmation.");
+        UUID skillsRequestId = UUID.randomUUID();
+        UUID assignRequestId = UUID.randomUUID();
 
         return pendingAiActionService.create(
                 userId,
@@ -213,16 +240,24 @@ public class AhpAssignmentAiTools {
                         + taskId + " to " + selectedName + " (top recommended candidate)",
                 args("taskId", resolvedTaskId, "projectId", resolvedProjectId, "skills", resolvedSkills,
                         "difficulty", resolvedDifficulty, "memberId", selectedUserId, "reason", safeReason,
-                        "persistSkills", shouldPersistProvidedSkills),
+                        "persistSkills", shouldPersistProvidedSkills,
+                        "expectedTaskVersion", expectedTaskVersion, "requestId", assignRequestId.toString()),
                 preview,
                 () -> {
+                    Long versionForAssign = expectedTaskVersion;
                     if (shouldPersistProvidedSkills) {
-                        taskCommandPort.updateTaskRequiredSkills(resolvedTaskId, resolvedSkills, userId);
+                        TaskSummaryDto updated = taskCommandPort.updateTaskRequiredSkills(
+                                resolvedTaskId, resolvedSkills, expectedTaskVersion, skillsRequestId, userId);
+                        if (updated != null && updated.version() != null) {
+                            versionForAssign = updated.version();
+                        }
                     }
                     TaskAssignmentResultDto assignment = taskCommandPort.assignTaskToMember(
                             resolvedTaskId,
                             selectedUserId,
                             safeReason,
+                            versionForAssign,
+                            assignRequestId,
                             userId,
                             false);
                     return new RecommendAndAssignResult(true, resolvedTaskId, resolvedProjectId, selectedUserId,

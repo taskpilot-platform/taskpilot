@@ -302,37 +302,41 @@ public class TaskPilotAiTools {
         return notificationAiTools.markAllNotificationsRead();
     }
 
-    @Tool("Assign a task to a project member by task ID and member ID. Requires confirmation.")
+    @Tool("Assign a task to a project member by task ID and member ID. Requires expectedTaskVersion and confirmation.")
     public Object assignTaskToMember(
             @P("The ID of the task") String taskId,
             @P("The ID of the member") String memberId,
-            @P("Reason for the assignment") String reason) {
-        return ahpAssignmentAiTools.assignTaskToMember(taskId, memberId, reason);
+            @P("Reason for the assignment") String reason,
+            @P("The task version observed by caller (required)") Long expectedTaskVersion) {
+        return ahpAssignmentAiTools.assignTaskToMember(taskId, memberId, reason, expectedTaskVersion);
     }
 
-    @Tool("Assign a task to a project member by task ID and member name. Resolves project and member. Requires confirmation.")
+    @Tool("Assign a task to a project member by task ID and member name. Resolves project and member. Requires expectedTaskVersion and confirmation.")
     public Object assignTaskToMemberByName(
             @P("The ID of the task") String taskId,
             @P("Full or partial member name, e.g. Julia Design") String memberName,
-            @P("Reason for the assignment") String reason) {
-        return ahpAssignmentAiTools.assignTaskToMemberByName(taskId, memberName, reason);
+            @P("Reason for the assignment") String reason,
+            @P("The task version observed by caller (required)") Long expectedTaskVersion) {
+        return ahpAssignmentAiTools.assignTaskToMemberByName(taskId, memberName, reason, expectedTaskVersion);
     }
 
-    @Tool("Recommend the top candidate and assign the task to them in a single write operation. Requires confirmation.")
+    @Tool("Recommend the top candidate and assign the task to them in a single write operation. Requires expectedTaskVersion and confirmation.")
     public Object recommendAndAssignTask(
             @P("The ID of the task to assign") String taskId,
             @P("Optional project ID. If omitted, it is read from task details") String projectId,
             @P("Optional comma-separated required skill names. If omitted, task required skills are used") String skills,
             @P("Optional task difficulty 1-10. If omitted, task difficulty is used. Note: send as string like '5'") String difficulty,
-            @P("Reason to store with the assignment") String reason) {
-        return ahpAssignmentAiTools.recommendAndAssignTask(taskId, projectId, skills, difficulty, reason);
+            @P("Reason to store with the assignment") String reason,
+            @P("The task version observed by caller (required)") Long expectedTaskVersion) {
+        return ahpAssignmentAiTools.recommendAndAssignTask(taskId, projectId, skills, difficulty, reason, expectedTaskVersion);
     }
 
-    @Tool("Update required skills for a task (comma-separated skill names). Requires confirmation.")
+    @Tool("Update required skills for a task (comma-separated skill names). Requires expectedTaskVersion and confirmation.")
     public Object updateTaskRequiredSkills(
             @P("The ID of the task") Long taskId,
-            @P("Comma-separated active skill names from the system skill directory") String skills) {
-        return taskAiTools.updateTaskRequiredSkills(taskId, skills);
+            @P("Comma-separated active skill names from the system skill directory") String skills,
+            @P("The task version observed by caller (required)") Long expectedTaskVersion) {
+        return taskAiTools.updateTaskRequiredSkills(taskId, skills, expectedTaskVersion);
     }
 
     @Tool("Confirm and execute a pending write action by its unique action ID.")
@@ -453,19 +457,20 @@ public class TaskPilotAiTools {
         return commentAiTools.deleteTaskComment(taskId, commentId);
     }
 
-    @Tool("Update the status of a task (TODO, IN_PROGRESS, REVIEW, DONE). Requires confirmation.")
+    @Tool("Update the status of a task (TODO, IN_PROGRESS). Requires expectedTaskVersion and confirmation.")
     public Object updateTaskStatus(
             @P("The ID of the task") Long taskId,
-            @P("The new status (TODO, IN_PROGRESS, REVIEW, DONE)") String status) {
-        return taskAiTools.updateTaskStatus(taskId, status);
+            @P("The new status (TODO, IN_PROGRESS)") String status,
+            @P("The task version observed by caller (required)") Long expectedTaskVersion) {
+        return taskAiTools.updateTaskStatus(taskId, status, expectedTaskVersion);
     }
 
-    @Tool("Update multiple fields of a task. Omit unchanged parameters. Requires confirmation.")
+    @Tool("Update multiple fields of a task. Omit unchanged parameters. Requires expectedTaskVersion and confirmation.")
     public Object updateTask(
             @P("The ID of the task") Long taskId,
             @P("Optional title") String title,
             @P("Optional description") String description,
-            @P("Optional status (TODO, IN_PROGRESS, REVIEW, DONE)") String status,
+            @P("Optional status (TODO, IN_PROGRESS)") String status,
             @P("Optional priority (LOW, MEDIUM, HIGH, URGENT)") String priority,
             @P("Optional kanban position") Float position,
             @P("Optional full replacement label ID list") List<Long> labelIds,
@@ -473,29 +478,103 @@ public class TaskPilotAiTools {
             @P("Optional full replacement required skill ID list") List<Long> requiredSkillIds,
             @P("Optional assignee user ID") Long assigneeId,
             @P("Optional start date as ISO-8601 instant or YYYY-MM-DD") String startDate,
-            @P("Optional due date as ISO-8601 instant or YYYY-MM-DD") String dueDate) {
-        return taskAiTools.updateTask(taskId, title, description, status, priority, position, labelIds, difficultyLevel, requiredSkillIds, assigneeId, startDate, dueDate);
+            @P("Optional due date as ISO-8601 instant or YYYY-MM-DD") String dueDate,
+            @P("The task version observed by caller (required)") Long expectedTaskVersion) {
+        return taskAiTools.updateTask(taskId, title, description, status, priority, position, labelIds,
+                difficultyLevel, requiredSkillIds, assigneeId, startDate, dueDate, expectedTaskVersion);
     }
 
-    @Tool("Partially update a task. Send patchData map containing changed fields (title, status, assigneeId, dueDate, etc). Requires confirmation.")
+    @Tool("Partially update a task. Send patchData map containing changed fields (title, description, status, priority, position, labelIds, difficultyLevel, requiredSkillIds, assigneeId, startDate, dueDate, sprintId). Use null for nullable fields to clear them. Requires expectedTaskVersion and confirmation.")
     public Object patchTask(
             @P("The ID of the task") Long taskId,
-            @P("Map containing only changed fields") Object patchData,
+            @P("Map containing only changed fields; explicit null clears nullable fields") Object patchData,
+            @P("The task version observed by caller (required)") Long expectedTaskVersion,
             @P("Optional reason for the change") String reason) {
-        return taskAiTools.patchTask(taskId, patchData, reason);
+        return taskAiTools.patchTask(taskId, patchData, expectedTaskVersion, reason);
     }
 
-    @Tool("Delete a task by task ID. Requires confirmation.")
-    public Object deleteTask(@P("The ID of the task to delete") Long taskId) {
-        return taskAiTools.deleteTask(taskId);
+    @Tool("Delete a task by task ID. Requires expectedTaskVersion and confirmation.")
+    public Object deleteTask(
+            @P("The ID of the task to delete") Long taskId,
+            @P("The task version observed by caller (required)") Long expectedTaskVersion) {
+        return taskAiTools.deleteTask(taskId, expectedTaskVersion);
     }
 
-    @Tool("Move a task on the kanban board by updating status and position. Requires confirmation.")
+    @Tool("Move a task on the kanban board by updating status and position. Requires expectedTaskVersion and confirmation.")
     public Object moveTaskKanban(
             @P("The ID of the task") String taskId,
-            @P("Target status (TODO, IN_PROGRESS, REVIEW, DONE)") String status,
-            @P("Target kanban position") Float position) {
-        return taskAiTools.moveTaskKanban(taskId, status, position);
+            @P("Target status (TODO, IN_PROGRESS)") String status,
+            @P("Target kanban position") Float position,
+            @P("The task version observed by caller (required)") Long expectedTaskVersion) {
+        return taskAiTools.moveTaskKanban(taskId, status, position, expectedTaskVersion);
+    }
+
+    @Tool("Submit an IN_PROGRESS task for review with summary and optional evidence project file IDs. Requires expectedTaskVersion and confirmation.")
+    public Object submitTaskWork(
+            @P("The ID of the task") Long taskId,
+            @P("The task version observed by caller (required)") Long expectedTaskVersion,
+            @P("Summary of completed work and verification") String summary,
+            @P("Optional list of same-project file IDs as evidence") Object evidenceProjectFileIds) {
+        return taskAiTools.submitTaskWork(taskId, expectedTaskVersion, summary, evidenceProjectFileIds);
+    }
+
+    @Tool("Withdraw a pending submission on a REVIEW task before it is reviewed. Requires submissionId, expectedTaskVersion, and confirmation.")
+    public Object withdrawTaskSubmission(
+            @P("The ID of the task") Long taskId,
+            @P("The ID of the current pending submission") Long submissionId,
+            @P("The task version observed by caller (required)") Long expectedTaskVersion,
+            @P("Optional reason for withdrawal") String reason) {
+        return taskAiTools.withdrawTaskSubmission(taskId, submissionId, expectedTaskVersion, reason);
+    }
+
+    @Tool("Review a submitted task (ACCEPT with quality-v1 rating 1-5, RETURN for revision, or SELF_ATTEST when sole active manager). Requires submissionId, expectedTaskVersion, and confirmation.")
+    public Object reviewTaskSubmission(
+            @P("The ID of the task") Long taskId,
+            @P("The ID of the current pending submission") Long submissionId,
+            @P("The task version observed by caller (required)") Long expectedTaskVersion,
+            @P("Review decision: ACCEPT, RETURN, or SELF_ATTEST") String decision,
+            @P("Quality rating 1-5 (required for ACCEPT, forbidden for RETURN and SELF_ATTEST)") Integer qualityRating,
+            @P("Feedback / rationale / reason (required)") String feedback,
+            @P("Anchor and evidence summary (required for ACCEPT)") String evidenceSummary) {
+        return taskAiTools.reviewTaskSubmission(taskId, submissionId, expectedTaskVersion, decision,
+                qualityRating, feedback, evidenceSummary);
+    }
+
+    @Tool("Reopen a DONE task back to IN_PROGRESS with an audited reason. Requires expectedTaskVersion and confirmation.")
+    public Object reopenTask(
+            @P("The ID of the task") Long taskId,
+            @P("The task version observed by caller (required)") Long expectedTaskVersion,
+            @P("Reason for reopening the task (required)") String reason) {
+        return taskAiTools.reopenTask(taskId, expectedTaskVersion, reason);
+    }
+
+    @Tool("Supersede a current task evaluation on a DONE task with a new independent quality-v1 rating (1-5). Requires exact submission, evaluation ID/version, task version, and confirmation.")
+    public Object supersedeTaskEvaluation(
+            @P("The ID of the task") Long taskId,
+            @P("The ID of the accepted submission") Long submissionId,
+            @P("The current evaluation ID to supersede") Long expectedEvaluationId,
+            @P("The current evaluation version to supersede") Long expectedEvaluationVersion,
+            @P("The task version observed by caller (required)") Long expectedTaskVersion,
+            @P("New quality-v1 rating 1-5") Integer qualityRating,
+            @P("Reason for supersession/correction (required)") String reason,
+            @P("Anchor and evidence summary (required)") String evidenceSummary) {
+        return taskAiTools.supersedeTaskEvaluation(taskId, submissionId, expectedEvaluationId,
+                expectedEvaluationVersion, expectedTaskVersion, qualityRating, reason, evidenceSummary);
+    }
+
+    @Tool("Create a linked follow-up/successor task for a completed or closed-sprint task without mutating historical records. Requires confirmation.")
+    public Object createSuccessorTask(
+            @P("The source task ID to create a follow-up successor for") Long sourceTaskId,
+            @P("Optional title for the follow-up task") String title,
+            @P("Optional description for the follow-up task") String description,
+            @P("Optional priority (LOW, MEDIUM, HIGH, URGENT)") String priority,
+            @P("Optional writable target sprint ID (null for backlog)") Long sprintId,
+            @P("Optional difficulty 1-10") Integer difficultyLevel,
+            @P("Optional assignee user ID") Long assigneeId,
+            @P("Optional start date (YYYY-MM-DD or ISO-8601)") String startDate,
+            @P("Optional due date (YYYY-MM-DD or ISO-8601)") String dueDate) {
+        return taskAiTools.createSuccessorTask(sourceTaskId, title, description, priority, sprintId,
+                difficultyLevel, assigneeId, startDate, dueDate);
     }
 
     @Tool("Fetch all sprints belonging to a project. Supports optional status filter.")
@@ -670,18 +749,22 @@ public class TaskPilotAiTools {
         return sprintAiTools.startSprint(projectId, sprintId);
     }
 
-    @Tool("Mark an active sprint as completed in a project. Requires confirmation.")
+    @Tool("Mark an active sprint as completed and carry over unfinished TODO/IN_PROGRESS/REVIEW tasks to BACKLOG or a writable target sprint. Requires expectedSprintVersion, carryoverDestination (BACKLOG or SPRINT), and confirmation.")
     public Object completeSprint(
             @P("The project ID") Long projectId,
-            @P("The ID of the sprint to complete") Long sprintId) {
-        return sprintAiTools.completeSprint(projectId, sprintId);
+            @P("The ID of the sprint to complete") Long sprintId,
+            @P("The sprint version observed by caller (required)") Long expectedSprintVersion,
+            @P("Explicit carryover destination for unfinished tasks: BACKLOG or SPRINT") String carryoverDestination,
+            @P("Target sprint ID when carryoverDestination is SPRINT (null for BACKLOG)") Long targetSprintId) {
+        return sprintAiTools.completeSprint(projectId, sprintId, expectedSprintVersion, carryoverDestination, targetSprintId);
     }
 
-    @Tool("Move or assign a task to a sprint (or set sprintId=null to move to backlog). Requires confirmation.")
+    @Tool("Move or assign a task to a sprint (or set sprintId=null to move to backlog). Requires expectedTaskVersion and confirmation.")
     public Object assignTaskToSprint(
             @P("The ID of the task") Long taskId,
-            @P("The ID of the target sprint, or null to move it to the backlog") Long sprintId) {
-        return sprintAiTools.assignTaskToSprint(taskId, sprintId);
+            @P("The ID of the target sprint, or null to move it to the backlog") Long sprintId,
+            @P("The task version observed by caller (required)") Long expectedTaskVersion) {
+        return sprintAiTools.assignTaskToSprint(taskId, sprintId, expectedTaskVersion);
     }
 
     @Tool("Execute multiple query chains in parallel. Each chain is a sequence of dependent queries. " +

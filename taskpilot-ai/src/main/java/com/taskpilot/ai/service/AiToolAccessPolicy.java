@@ -32,6 +32,9 @@ public class AiToolAccessPolicy {
         if(args.get("labelIds") instanceof Collection<?> ids) for(Object value:ids) {
             Long id=AiToolSupport.toLong(value); if(id!=null) refs.add(new AiResourceRef("LABEL",id));
         }
+        if(args.get("evidenceProjectFileIds") instanceof Collection<?> fileIds) for(Object value:fileIds) {
+            Long id=AiToolSupport.toLong(value); if(id!=null) refs.add(new AiResourceRef("FILE",id));
+        }
     }
     public void authorizeSession(Long userId,Long sessionId) {
         if (userId==null || sessionId==null) throw new BusinessException(401,"Authenticated chat session required");

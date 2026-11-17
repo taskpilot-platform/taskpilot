@@ -97,6 +97,7 @@ public class ToolCallingRegistryService {
         register("queryTasks", Set.of(ToolScope.TASK, ToolScope.PROJECT, ToolScope.ASSIGNMENT), List.of("list task", "danh sach task", "cac cong viec", "cv", "nv", "unassigned", "not assigned", "chua gan", "chua phan cong", "chua duoc phan cong", "trong", "ch"), 60, true);
         register("getSubtasks", Set.of(ToolScope.TASK), List.of("subtask", "task con"), 20, false);
         register("createTask", Set.of(ToolScope.TASK), List.of("create task", "new task", "tao task", "tạo task", "tao cong viec", "tạo công việc", "them task", "them cong viec"), 60, false);
+        register("createSuccessorTask", Set.of(ToolScope.TASK), List.of("successor", "follow up", "follow-up", "bug tiep theo", "task ke tiep"), 35, false);
         register("updateTask", Set.of(ToolScope.TASK), List.of("update task", "cap nhat cong viec", "sua task"), 30, false);
         register("patchTask", Set.of(ToolScope.TASK, ToolScope.ASSIGNMENT), List.of("update task", "cap nhat cong viec", "sua task", "deadline", "due date", "han chot", "hạn chót", "doi han", "đổi hạn", "reassign", "phan cong lai", "phân công lại", "assign", "giao task", "gan cho", "giao cho", "gán task", "phân công"), 65, false);
         register("updateTaskStatus", Set.of(ToolScope.TASK), List.of("status", "trang thai", "hoan thanh", "done", "todo", "chuyen", "chuyen trang thai", "chuyen sang"), 40, false);

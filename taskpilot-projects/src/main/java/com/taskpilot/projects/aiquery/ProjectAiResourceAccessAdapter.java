@@ -70,12 +70,14 @@ public class ProjectAiResourceAccessAdapter implements AiResourceAccessPort {
                 revision.append(rows("select to_jsonb(p)::text || to_jsonb(m)::text from public.projects p "
                         + "join public.project_members m on m.project_id=p.id where m.user_id=:id order by p.id",userId));
             } else if (COLLECTIONS.containsKey(r.kind())) {
+                String extraFilter = r.kind().equals("TASKS") ? " and deleted_at is null" : "";
                 revision.append(rows("select to_jsonb(r)::text from public."+COLLECTIONS.get(r.kind())
-                        + " r where project_id=:id order by " + (r.kind().equals("MEMBERS")?"user_id":"id"),r.id()));
+                        + " r where project_id=:id"+extraFilter+" order by " + (r.kind().equals("MEMBERS")?"user_id":"id"),r.id()));
             } else {
                 String table = table(r.kind());
-                if (lock) rows("select id from public."+table+" where id=:id for update",r.id());
-                List<?> row = rows("select to_jsonb(r)::text from public."+table+" r where id=:id",r.id());
+                String activeFilter = r.kind().equals("TASK") ? " and deleted_at is null" : "";
+                if (lock) rows("select id from public."+table+" where id=:id"+activeFilter+" for update",r.id());
+                List<?> row = rows("select to_jsonb(r)::text from public."+table+" r where id=:id"+activeFilter,r.id());
                 if (row.isEmpty()) throw new BusinessException(404,"Resource no longer exists");
                 // Resolve the relationship again after acquiring locks, not from a stale entity cache.
                 if (!projectIds.contains(projectId(r))) throw new BusinessException(409,"Resource scope changed");
@@ -94,8 +96,10 @@ public class ProjectAiResourceAccessAdapter implements AiResourceAccessPort {
     private long projectId(AiResourceRef r) {
         if (r.kind().equals("PROJECT") || COLLECTIONS.containsKey(r.kind())) return r.id();
         String sql = r.kind().equals("COMMENT")
-                ? "select t.project_id from public.comments r join public.tasks t on t.id=r.task_id where r.id=:id"
-                : "select project_id from public."+table(r.kind())+" where id=:id";
+                ? "select t.project_id from public.comments r join public.tasks t on t.id=r.task_id where r.id=:id and t.deleted_at is null"
+                : ("TASK".equals(r.kind())
+                        ? "select project_id from public.tasks where id=:id and deleted_at is null"
+                        : "select project_id from public."+table(r.kind())+" where id=:id");
         List<?> ids = rows(sql,r.id());
         if (ids.isEmpty()) throw new BusinessException(404,"Resource not found");
         return ((Number)ids.getFirst()).longValue();

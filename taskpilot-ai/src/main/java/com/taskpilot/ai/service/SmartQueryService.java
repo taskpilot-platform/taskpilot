@@ -6,20 +6,23 @@ import com.taskpilot.contracts.aiquery.dto.*;
 import com.taskpilot.contracts.aiquery.port.out.*;
 import com.taskpilot.contracts.skill.port.out.SkillPort;
 import com.taskpilot.contracts.skill.dto.SkillDto;
+import com.taskpilot.contracts.task.TaskDateField;
+import com.taskpilot.contracts.task.TaskDatePolicy;
 import com.taskpilot.contracts.user.port.out.UserNotificationQueryPort;
 import jakarta.annotation.PreDestroy;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.lang.reflect.Method;
+import java.time.Clock;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class SmartQueryService {
 
     private final ProjectInsightsPort projectInsightsPort;
@@ -29,6 +32,39 @@ public class SmartQueryService {
     private final TaskCommentQueryPort taskCommentQueryPort;
     private final SkillPort skillPort;
     private final UserNotificationQueryPort userNotificationQueryPort;
+    private final Clock clock;
+
+    @Autowired
+    public SmartQueryService(
+            ProjectInsightsPort projectInsightsPort,
+            TaskCommandPort taskCommandPort,
+            MemberAnalyticsPort memberAnalyticsPort,
+            SprintQueryPort sprintQueryPort,
+            TaskCommentQueryPort taskCommentQueryPort,
+            SkillPort skillPort,
+            UserNotificationQueryPort userNotificationQueryPort) {
+        this(projectInsightsPort, taskCommandPort, memberAnalyticsPort, sprintQueryPort,
+                taskCommentQueryPort, skillPort, userNotificationQueryPort, Clock.systemUTC());
+    }
+
+    public SmartQueryService(
+            ProjectInsightsPort projectInsightsPort,
+            TaskCommandPort taskCommandPort,
+            MemberAnalyticsPort memberAnalyticsPort,
+            SprintQueryPort sprintQueryPort,
+            TaskCommentQueryPort taskCommentQueryPort,
+            SkillPort skillPort,
+            UserNotificationQueryPort userNotificationQueryPort,
+            Clock clock) {
+        this.projectInsightsPort = projectInsightsPort;
+        this.taskCommandPort = taskCommandPort;
+        this.memberAnalyticsPort = memberAnalyticsPort;
+        this.sprintQueryPort = sprintQueryPort;
+        this.taskCommentQueryPort = taskCommentQueryPort;
+        this.skillPort = skillPort;
+        this.userNotificationQueryPort = userNotificationQueryPort;
+        this.clock = clock != null ? clock : Clock.systemUTC();
+    }
 
     private static final ExecutorService CHAIN_EXECUTOR = Executors.newFixedThreadPool(4);
     private static final ObjectMapper OBJECT_MAPPER = com.fasterxml.jackson.databind.json.JsonMapper.builder()
@@ -320,14 +356,31 @@ public class SmartQueryService {
             }
 
             if ("true".equalsIgnoreCase(dueToday)) {
-                String todayStr = java.time.LocalDate.now().toString();
-                stream = stream.filter(t -> t.dueDate() != null && t.dueDate().startsWith(todayStr));
+                stream = stream.filter(t -> {
+                    if (t.dueDate() == null || t.dueDate().isBlank()) return false;
+                    try {
+                        String zone = t.projectTimezoneId() != null ? t.projectTimezoneId()
+                                : TaskDatePolicy.DEFAULT_PROJECT_TIMEZONE_ID;
+                        Instant dueAt = TaskDatePolicy.parseTaskDate(t.dueDate(), zone, TaskDateField.DUE);
+                        return TaskDatePolicy.isDueToday(dueAt, zone, clock);
+                    } catch (IllegalArgumentException ex) {
+                        return false;
+                    }
+                });
             }
 
             if ("true".equalsIgnoreCase(isOverdue)) {
-                String todayStr = java.time.LocalDate.now().toString();
-                stream = stream.filter(t -> t.dueDate() != null && t.dueDate().compareTo(todayStr) < 0 
-                        && !"COMPLETED".equalsIgnoreCase(t.status()) && !"DONE".equalsIgnoreCase(t.status()));
+                stream = stream.filter(t -> {
+                    if (t.dueDate() == null || t.dueDate().isBlank()) return false;
+                    try {
+                        String zone = t.projectTimezoneId() != null ? t.projectTimezoneId()
+                                : TaskDatePolicy.DEFAULT_PROJECT_TIMEZONE_ID;
+                        Instant dueAt = TaskDatePolicy.parseTaskDate(t.dueDate(), zone, TaskDateField.DUE);
+                        return TaskDatePolicy.isOverdue(dueAt, t.status(), clock);
+                    } catch (IllegalArgumentException ex) {
+                        return false;
+                    }
+                });
             }
 
             if (searchTerm != null && !searchTerm.isBlank()) {

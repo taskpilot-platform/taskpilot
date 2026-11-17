@@ -79,7 +79,7 @@ public class PendingAiActionService {
         try {
             String current=policy.fingerprint(action.dto.toolName(),action.dto.arguments(),actor.userId(),sessionId,true);
             if(!Objects.equals(current,action.revision)) throw new BusinessException(409,"Resource or permissions changed; request a new preview");
-            Object result=com.taskpilot.ai.tools.ToolExecutionContext.callWith(new com.taskpilot.ai.tools.ToolExecutionContext.Context(actor.userId(),sessionId,"explicit HTTP confirmation"),action.executor::get);
+            Object result=com.taskpilot.ai.tools.ToolExecutionContext.callWith(new com.taskpilot.ai.tools.ToolExecutionContext.Context(actor.userId(),sessionId,"explicit HTTP confirmation",java.util.Collections.emptySet(),actor),action.executor::get);
             if(messages!=null) messages.save(ChatMessageEntity.builder().sessionId(sessionId)
                     .sender(ChatMessageEntity.SenderType.ASSISTANT)
                     .clientMessageId("ai-action:"+id)

@@ -4,98 +4,128 @@ import com.taskpilot.contracts.aiquery.dto.TaskAssignmentResultDto;
 import com.taskpilot.contracts.aiquery.dto.TaskDetailDto;
 import com.taskpilot.contracts.aiquery.dto.TaskSummaryDto;
 import com.taskpilot.contracts.aiquery.port.out.TaskCommandPort;
+import com.taskpilot.contracts.task.PatchTaskCommand;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.UUID;
 
 @Slf4j
 @Component
 @Profile("ai-dev")
 public class FakeTaskCommandAdapter implements TaskCommandPort {
 
-    @Override
-    public List<TaskSummaryDto> getTasksByProject(Long projectId, Long requesterUserId) {
-        log.info("[FakeAdapter] getTasksByProject called for projectId={}", projectId);
-        return List.of();
-    }
-
-    @Override
-    public List<TaskDetailDto> getUnassignedTasksByProject(Long projectId, Long requesterUserId) {
-        log.info("[FakeAdapter] getUnassignedTasksByProject called for projectId={}", projectId);
-        return List.of(
-                new TaskDetailDto(75L, projectId, "Sample unassigned task", null, "TODO", "MEDIUM",
-                        5, "", null, null, null),
-                new TaskDetailDto(76L, projectId, "Another unassigned task", null, "TODO", "HIGH",
-                        6, "React, Spring Boot", null, null, null));
-    }
-
-    @Override
-    public List<TaskSummaryDto> getSubtasks(Long parentTaskId, Long requesterUserId) {
-        log.info("[FakeAdapter] getSubtasks called for parentTaskId={}", parentTaskId);
-        return List.of();
-    }
-
-    @Override
-    public TaskDetailDto getTaskDetails(Long taskId, Long requesterUserId) {
-        log.info("[FakeAdapter] getTaskDetails called for taskId={}", taskId);
-        return ScenarioFixtures.getTaskDetails(taskId);
-    }
-
-    @Override
-    public TaskSummaryDto updateTaskRequiredSkills(Long taskId, String skills, Long requesterUserId) {
-        log.info("[FakeAdapter] updateTaskRequiredSkills called for taskId={} skills={}", taskId, skills);
-        return new TaskSummaryDto(taskId, 1L, null, null, "Sample task", null, "TODO", "MEDIUM",
-                3, null, null, null, null, null);
-    }
-
-    @Override
-    public TaskAssignmentResultDto assignTaskToMember(Long taskId, Long memberId, String reason, Long requesterUserId,
-            boolean simulate) {
-        log.info("[FakeAdapter] assignTaskToMember called. taskId={}, memberId={}, simulate={}", taskId, memberId, simulate);
-        if (simulate) {
-            log.info("[FakeAdapter] Simulation mode: Task assignment would succeed.");
-            return TaskAssignmentResultDto.success(taskId, memberId, "[SIMULATED] " + reason);
+        @Override
+        public List<TaskSummaryDto> getTasksByProject(Long projectId, Long requesterUserId) {
+                log.info("[FakeAdapter] getTasksByProject called for projectId={}", projectId);
+                return List.of();
         }
-        return TaskAssignmentResultDto.success(taskId, memberId, reason);
-    }
 
-    @Override
-    public TaskSummaryDto updateTaskStatus(Long taskId, String status, Long requesterUserId) {
-        log.info("[FakeAdapter] updateTaskStatus called for taskId={} status={}", taskId, status);
-        return new TaskSummaryDto(taskId, 1L, null, null, "Sample task", null, status, "MEDIUM",
-                3, null, null, null, null, null);
-    }
+        @Override
+        public List<TaskDetailDto> getUnassignedTasksByProject(Long projectId, Long requesterUserId) {
+                log.info("[FakeAdapter] getUnassignedTasksByProject called for projectId={}", projectId);
+                return List.of(
+                                new TaskDetailDto(75L, projectId, "Sample unassigned task", null, "TODO", "MEDIUM",
+                                                5, "", null, null, null),
+                                new TaskDetailDto(76L, projectId, "Another unassigned task", null, "TODO", "HIGH",
+                                                6, "React, Spring Boot", null, null, null));
+        }
 
-    @Override
-    public TaskSummaryDto updateTask(Long taskId, String title, String description, String status, String priority,
-            Float position, List<Long> labelIds, Integer difficultyLevel, List<Long> requiredSkillIds,
-            Long assigneeId, String startDate, String dueDate, Long requesterUserId) {
-        log.info("[FakeAdapter] updateTask called for taskId={}", taskId);
-        return new TaskSummaryDto(taskId, 1L, null, null, title != null ? title : "Sample task",
-                description, status != null ? status : "TODO", priority != null ? priority : "MEDIUM",
-                difficultyLevel, assigneeId, null, dueDate, null, null);
-    }
+        @Override
+        public List<TaskSummaryDto> getSubtasks(Long parentTaskId, Long requesterUserId) {
+                log.info("[FakeAdapter] getSubtasks called for parentTaskId={}", parentTaskId);
+                return List.of();
+        }
 
-    @Override
-    public TaskSummaryDto createTask(Long projectId, String title, String description, String priority, Float position,
-            Long parentTaskId, Long sprintId, Integer difficultyLevel, List<Long> labelIds,
-            List<Long> requiredSkillIds, Long assigneeId, String startDate, String dueDate, Long requesterUserId) {
-        log.info("[FakeAdapter] createTask called for projectId={} title={}", projectId, title);
-        return new TaskSummaryDto(999L, projectId, parentTaskId, sprintId, title, description, "TODO",
-                priority != null ? priority : "MEDIUM", difficultyLevel, assigneeId, null, dueDate, null, null);
-    }
+        @Override
+        public TaskDetailDto getTaskDetails(Long taskId, Long requesterUserId) {
+                log.info("[FakeAdapter] getTaskDetails called for taskId={}", taskId);
+                return ScenarioFixtures.getTaskDetails(taskId);
+        }
 
-    @Override
-    public void deleteTask(Long taskId, Long requesterUserId) {
-        log.info("[FakeAdapter] deleteTask called for taskId={}", taskId);
-    }
+        @Override
+        public TaskSummaryDto patchTask(PatchTaskCommand command, Long requesterUserId) {
+                log.info("[FakeAdapter] patchTask called for taskId={} present={}", command.taskId(),
+                                command.presentFields());
+                return new TaskSummaryDto(command.taskId(), 1L, null, null,
+                                command.isPresent("title") && command.valueOf("title") != null
+                                                ? command.valueOf("title").toString()
+                                                : "Sample task",
+                                command.isPresent("description") && command.valueOf("description") != null
+                                                ? command.valueOf("description").toString()
+                                                : null,
+                                command.isPresent("status") && command.valueOf("status") != null
+                                                ? command.valueOf("status").toString()
+                                                : "TODO",
+                                "MEDIUM", 3, null, null, null, null, null, null,
+                                (command.expectedTaskVersion() != null ? command.expectedTaskVersion() : 0L) + 1L,
+                                "Asia/Ho_Chi_Minh");
+        }
 
-    @Override
-    public TaskSummaryDto moveTaskKanban(Long taskId, String status, Float position, Long requesterUserId) {
-        log.info("[FakeAdapter] moveTaskKanban called for taskId={} status={} position={}", taskId, status, position);
-        return new TaskSummaryDto(taskId, 1L, null, null, "Sample task", null, status, "MEDIUM",
-                3, null, null, null, null, null);
-    }
+        @Override
+        public TaskSummaryDto updateTaskRequiredSkills(Long taskId, String skills, Long expectedTaskVersion,
+                        UUID requestId, Long requesterUserId) {
+                log.info("[FakeAdapter] updateTaskRequiredSkills called for taskId={} skills={}", taskId, skills);
+                return new TaskSummaryDto(taskId, 1L, null, null, "Sample task", null, "TODO", "MEDIUM",
+                                3, null, null, null, null, null);
+        }
+
+        @Override
+        public TaskAssignmentResultDto assignTaskToMember(Long taskId, Long memberId, String reason,
+                        Long expectedTaskVersion, UUID requestId, Long requesterUserId, boolean simulate) {
+                log.info("[FakeAdapter] assignTaskToMember called. taskId={}, memberId={}, simulate={}",
+                                taskId, memberId, simulate);
+                if (simulate) {
+                        log.info("[FakeAdapter] Simulation mode: Task assignment would succeed.");
+                        return TaskAssignmentResultDto.success(taskId, memberId, "[SIMULATED] " + reason);
+                }
+                return TaskAssignmentResultDto.success(taskId, memberId, reason);
+        }
+
+        @Override
+        public TaskSummaryDto updateTaskStatus(Long taskId, String status, Long expectedTaskVersion,
+                        UUID requestId, Long requesterUserId) {
+                log.info("[FakeAdapter] updateTaskStatus called for taskId={} status={}", taskId, status);
+                return new TaskSummaryDto(taskId, 1L, null, null, "Sample task", null, status, "MEDIUM",
+                                3, null, null, null, null, null);
+        }
+
+        @Override
+        public TaskSummaryDto updateTask(Long taskId, String title, String description, String status, String priority,
+                        Float position, List<Long> labelIds, Integer difficultyLevel, List<Long> requiredSkillIds,
+                        Long assigneeId, String startDate, String dueDate, Long expectedTaskVersion,
+                        UUID requestId, Long requesterUserId) {
+                log.info("[FakeAdapter] updateTask called for taskId={}", taskId);
+                return new TaskSummaryDto(taskId, 1L, null, null, title != null ? title : "Sample task",
+                                description, status != null ? status : "TODO", priority != null ? priority : "MEDIUM",
+                                difficultyLevel, assigneeId, null, dueDate, null, null);
+        }
+
+        @Override
+        public TaskSummaryDto createTask(Long projectId, String title, String description, String priority,
+                        Float position,
+                        Long parentTaskId, Long sprintId, Integer difficultyLevel, List<Long> labelIds,
+                        List<Long> requiredSkillIds, Long assigneeId, String startDate, String dueDate, UUID requestId,
+                        Long requesterUserId) {
+                log.info("[FakeAdapter] createTask called for projectId={} title={}", projectId, title);
+                return new TaskSummaryDto(999L, projectId, parentTaskId, sprintId, title, description, "TODO",
+                                priority != null ? priority : "MEDIUM", difficultyLevel, assigneeId, null, dueDate,
+                                null, null);
+        }
+
+        @Override
+        public void deleteTask(Long taskId, Long expectedTaskVersion, UUID requestId, Long requesterUserId) {
+                log.info("[FakeAdapter] deleteTask called for taskId={}", taskId);
+        }
+
+        @Override
+        public TaskSummaryDto moveTaskKanban(Long taskId, String status, Float position, Long expectedTaskVersion,
+                        UUID requestId, Long requesterUserId) {
+                log.info("[FakeAdapter] moveTaskKanban called for taskId={} status={} position={}", taskId, status,
+                                position);
+                return new TaskSummaryDto(taskId, 1L, null, null, "Sample task", null, status, "MEDIUM",
+                                3, null, null, null, null, null);
+        }
 }
