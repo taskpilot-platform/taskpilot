@@ -1,6 +1,5 @@
 package com.taskpilot.users.notifications.service;
 
-import com.taskpilot.infrastructure.notification.OneSignalService;
 import com.taskpilot.users.common.repository.NotificationRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,7 +25,7 @@ class NotificationIdentityBaselineRedTest {
     @Mock
     private NotificationRepository notificationRepository;
     @Mock
-    private OneSignalService oneSignalService;
+    private NotificationPushDispatcher pushDispatcher;
     @Mock
     private NotificationRealtimeService notificationRealtimeService;
 
@@ -35,7 +34,7 @@ class NotificationIdentityBaselineRedTest {
     @BeforeEach
     void setUp() {
         notificationService = new NotificationService(
-                notificationRepository, oneSignalService, notificationRealtimeService);
+                notificationRepository, pushDispatcher, notificationRealtimeService);
     }
 
     @Test

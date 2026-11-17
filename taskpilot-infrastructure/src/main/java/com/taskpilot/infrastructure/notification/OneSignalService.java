@@ -15,7 +15,6 @@ import org.springframework.web.client.RestTemplate;
 
 import lombok.extern.slf4j.Slf4j;
 
-import org.springframework.scheduling.annotation.Async;
 
 @Service
 @Slf4j
@@ -35,7 +34,7 @@ public class OneSignalService {
         sendNotificationToUser(targetUserId, title, message, null);
     }
 
-    @Async
+    // Synchronous transport: scoped authorization belongs to the queued dispatcher immediately above it.
     public void sendNotificationToUser(String targetUserId, String title, String message, String linkAction) {
         if (appId == null || appId.isBlank() || apiKey == null || apiKey.isBlank()) {
             log.warn("OneSignal config missing. Skip push send for userId={}", targetUserId);

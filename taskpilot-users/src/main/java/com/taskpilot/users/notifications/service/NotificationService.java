@@ -9,7 +9,6 @@ import com.taskpilot.contracts.user.dto.SystemNotificationCommandDto;
 import com.taskpilot.contracts.user.port.out.AccountAuthStatePort;
 import com.taskpilot.contracts.user.port.out.RealtimeSessionAuthorityPort;
 import com.taskpilot.infrastructure.exception.BusinessException;
-import com.taskpilot.infrastructure.notification.OneSignalService;
 import com.taskpilot.infrastructure.realtime.RealtimeAfterCommitDispatcher;
 import com.taskpilot.users.common.entity.NotificationEntity;
 import com.taskpilot.users.common.enums.NotificationType;
@@ -34,7 +33,7 @@ public class NotificationService {
     private static final String ACTIVE_LIFECYCLE = "ACTIVE";
 
     private final NotificationRepository notificationRepository;
-    private final OneSignalService oneSignalService;
+    private final NotificationPushDispatcher pushDispatcher;
     private final NotificationRealtimeService notificationRealtimeService;
     private final AccountAuthStatePort accountAuthStatePort;
     private final RealtimeSessionAuthorityPort realtimeSessionAuthorityPort;
@@ -43,14 +42,14 @@ public class NotificationService {
     @Autowired
     public NotificationService(
             NotificationRepository notificationRepository,
-            OneSignalService oneSignalService,
+            NotificationPushDispatcher pushDispatcher,
             NotificationRealtimeService notificationRealtimeService,
             AccountAuthStatePort accountAuthStatePort,
             RealtimeSessionAuthorityPort realtimeSessionAuthorityPort,
             ObjectProvider<ProjectDeliveryAuthorizationPort> projectDeliveryAuthProvider
     ) {
         this.notificationRepository = notificationRepository;
-        this.oneSignalService = oneSignalService;
+        this.pushDispatcher = pushDispatcher;
         this.notificationRealtimeService = notificationRealtimeService;
         this.accountAuthStatePort = accountAuthStatePort;
         this.realtimeSessionAuthorityPort = realtimeSessionAuthorityPort;
@@ -59,10 +58,10 @@ public class NotificationService {
 
     public NotificationService(
             NotificationRepository notificationRepository,
-            OneSignalService oneSignalService,
+            NotificationPushDispatcher pushDispatcher,
             NotificationRealtimeService notificationRealtimeService
     ) {
-        this(notificationRepository, oneSignalService, notificationRealtimeService, null, null, null);
+        this(notificationRepository, pushDispatcher, notificationRealtimeService, null, null, null);
     }
 
     @Transactional(readOnly = true)
@@ -160,12 +159,7 @@ public class NotificationService {
                 return;
             }
             notificationRealtimeService.publishCreated(response, unreadCount, command.projectId());
-            oneSignalService.sendNotificationToUser(
-                    String.valueOf(command.targetUserId()),
-                    command.title(),
-                    command.message(),
-                    command.linkAction()
-            );
+            pushDispatcher.dispatch(command);
         });
         return response;
     }

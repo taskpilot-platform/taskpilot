@@ -116,8 +116,9 @@ class P4NotificationDispatchIntegrationTest {
     }
 
     @BeforeEach
-    void reset() {
+    void reset() throws InterruptedException {
         pausableExecutor.reset();
+        pausableExecutor.awaitIdle(10, TimeUnit.SECONDS);
         fakeOneSignal.clear();
     }
 
@@ -241,9 +242,9 @@ class P4NotificationDispatchIntegrationTest {
             // Removed member B and historical former commenter D receive NOTHING
             assertThat(notifRepo.countByUserIdAndIsReadFalse(memberB.userId())).isEqualTo(initialNotifCountB);
             assertThat(notifRepo.countByUserIdAndIsReadFalse(formerCommenterD.userId())).isEqualTo(initialNotifCountD);
-            assertThat(fakeOneSignal.calls().stream().anyMatch(
-                    c -> String.valueOf(memberB.userId()).equals(c.userId())
-                            || String.valueOf(formerCommenterD.userId()).equals(c.userId()))).isFalse();
+            assertThat(fakeOneSignal.calls()).as("provider calls after revocation and complete queue drain")
+                    .noneMatch(c -> String.valueOf(memberB.userId()).equals(c.userId())
+                            || String.valueOf(formerCommenterD.userId()).equals(c.userId()));
             assertThat(sseB.events().stream()
                     .filter(e -> "notification.created".equals(e.event()))
                     .toList()).isEmpty();
@@ -258,6 +259,38 @@ class P4NotificationDispatchIntegrationTest {
             assertThat(ssePersonalB.event()).isEqualTo("notification.created");
             assertThat(ssePersonalB.data()).contains("Personal notice");
         }
+    }
+
+    @Test
+    void queuedPushRechecksScopeAfterMembershipRevoked() throws Exception {
+        UserFixture manager = createUserAndLogin();
+        UserFixture removed = createUserAndLogin();
+        UserFixture eligible = createUserAndLogin();
+        long projectId = createProject(manager.jwt());
+        addMember(projectId, removed.userId(), MemberRole.MEMBER);
+        addMember(projectId, eligible.userId(), MemberRole.MEMBER);
+        pausableExecutor.awaitIdle(10, TimeUnit.SECONDS);
+        fakeOneSignal.clear();
+        pausableExecutor.pauseNextBatch(1);
+        context.getBean(NotificationService.class).createNotification(
+                new com.taskpilot.contracts.user.dto.SystemNotificationCommandDto(
+                        removed.userId(), "Private", "queued confidential payload", "/projects/" + projectId,
+                        com.taskpilot.contracts.user.dto.NotificationTypeDto.SYSTEM, projectId, null));
+        assertThat(pausableExecutor.awaitPaused(5, TimeUnit.SECONDS)).isTrue();
+        context.getBean(ProjectServiceImpl.class).removeMember(projectId, removed.userId(), manager.userId());
+        pausableExecutor.resumeAndAwaitCompletion(10, TimeUnit.SECONDS);
+        pausableExecutor.awaitIdle(10, TimeUnit.SECONDS);
+        assertThat(fakeOneSignal.calls()).as("queued payload must be dropped after committed revocation").isEmpty();
+
+        context.getBean(NotificationService.class).createNotification(
+                new com.taskpilot.contracts.user.dto.SystemNotificationCommandDto(
+                        eligible.userId(), "Private", "eligible control", "/projects/" + projectId,
+                        com.taskpilot.contracts.user.dto.NotificationTypeDto.SYSTEM, projectId, null));
+        pausableExecutor.awaitIdle(10, TimeUnit.SECONDS);
+        assertThat(fakeOneSignal.calls()).singleElement().satisfies(call -> {
+            assertThat(call.userId()).isEqualTo(String.valueOf(eligible.userId()));
+            assertThat(call.message()).isEqualTo("eligible control");
+        });
     }
 
     @Test
@@ -292,6 +325,8 @@ class P4NotificationDispatchIntegrationTest {
                 assertThat(fakeOneSignal.calls()).isEmpty();
                 if (rollback) status.setRollbackOnly();
             });
+            // The scoped dispatcher now owns the async boundary (the fake transport is synchronous).
+            pausableExecutor.awaitIdle(10, TimeUnit.SECONDS);
             assertThat(jdbc.queryForObject("select count(*) from notifications where user_id=?", Long.class, user.userId()))
                     .isEqualTo(rollback ? 0 : 1);
             assertThat(fakeOneSignal.calls()).hasSize(rollback ? 0 : 1);
@@ -377,6 +412,8 @@ class P4NotificationDispatchIntegrationTest {
     }
 
     static class PausableTaskExecutor implements TaskExecutor {
+        private final java.util.concurrent.atomic.AtomicInteger outstanding = new java.util.concurrent.atomic.AtomicInteger();
+        private final java.util.concurrent.atomic.AtomicReference<Throwable> taskFailure = new java.util.concurrent.atomic.AtomicReference<>();
         private final ThreadPoolTaskExecutor delegate;
         private final AtomicBoolean pauseEnabled = new AtomicBoolean(false);
         private final AtomicReference<CountDownLatch> pausedLatch = new AtomicReference<>(new CountDownLatch(0));
@@ -410,14 +447,21 @@ class P4NotificationDispatchIntegrationTest {
         void resumeAndAwaitCompletion(long timeout, TimeUnit unit) throws InterruptedException {
             pauseEnabled.set(false);
             releaseLatch.get().countDown();
-            completedLatch.get().await(timeout, unit);
+            assertThat(completedLatch.get().await(timeout, unit)).as("paused tasks completed").isTrue();
         }
 
         void awaitIdle(long timeout, TimeUnit unit) throws InterruptedException {
             long deadline = System.nanoTime() + unit.toNanos(timeout);
-            while (delegate.getActiveCount() > 0 && System.nanoTime() < deadline) {
+            while (outstanding.get() > 0 && System.nanoTime() < deadline) {
                 Thread.sleep(25);
             }
+            assertThat(outstanding.get()).as("outstanding tasks, including nested submissions").isZero();
+            assertThat(taskFailure.get()).as("async executor failure").isNull();
+        }
+
+        @jakarta.annotation.PreDestroy
+        void shutdown() {
+            delegate.shutdown();
         }
 
         @Override
@@ -427,33 +471,47 @@ class P4NotificationDispatchIntegrationTest {
             CountDownLatch releaseGate = releaseLatch.get();
             CountDownLatch doneGate = completedLatch.get();
 
-            delegate.execute(() -> {
-                try {
-                    if (shouldPause) {
-                        pauseGate.countDown();
-                        releaseGate.await(15, TimeUnit.SECONDS);
+            outstanding.incrementAndGet();
+            try {
+                delegate.execute(() -> {
+                    try {
+                        if (shouldPause) {
+                            pauseGate.countDown();
+                            if (!releaseGate.await(30, TimeUnit.SECONDS)) {
+                                throw new IllegalStateException("Timed out waiting for explicit test release");
+                            }
+                        }
+                        task.run();
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                        taskFailure.compareAndSet(null, ex);
+                    } catch (Throwable ex) {
+                        taskFailure.compareAndSet(null, ex);
+                    } finally {
+                        if (shouldPause) {
+                            doneGate.countDown();
+                        }
+                        outstanding.decrementAndGet();
                     }
-                    task.run();
-                } catch (InterruptedException ex) {
-                    Thread.currentThread().interrupt();
-                } finally {
-                    if (shouldPause) {
-                        doneGate.countDown();
-                    }
-                }
-            });
+                });
+            } catch (RuntimeException ex) {
+                outstanding.decrementAndGet();
+                throw ex;
+            }
         }
     }
 
     static class RecordingOneSignalService extends OneSignalService {
-        record PushCall(String userId, String title, String message, String linkAction) {
+        record PushCall(String userId, String title, String message, String linkAction,
+                        java.time.Instant sentAt, String thread) {
         }
 
         private final List<PushCall> recordedCalls = new CopyOnWriteArrayList<>();
 
         @Override
         public void sendNotificationToUser(String targetUserId, String title, String message, String linkAction) {
-            recordedCalls.add(new PushCall(targetUserId, title, message, linkAction));
+            recordedCalls.add(new PushCall(targetUserId, title, message, linkAction,
+                    java.time.Instant.now(), Thread.currentThread().getName()));
         }
 
         List<PushCall> calls() {
