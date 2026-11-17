@@ -359,7 +359,10 @@ public class ProjectFileService {
         Optional<Instant> effectiveLastModified = stat.flatMap(StorageObjectStat::lastModified)
                 .or(() -> Optional.ofNullable(entity.getUpdatedAt()).or(() -> Optional.ofNullable(entity.getCreatedAt())));
 
-        RangeParseResult parsedRange = RangeParser.parse(rangeHeader, totalBytes);
+        // If-Range is a precondition on applying Range at all, including unsatisfiable ranges.
+        boolean ignoreRange = hasRange && ifRangeHeader != null && !ifRangeHeader.isBlank()
+                && !RangeParser.matchesIfRange(ifRangeHeader, effectiveEtag, effectiveLastModified);
+        RangeParseResult parsedRange = RangeParser.parse(ignoreRange ? null : rangeHeader, totalBytes);
         if (parsedRange.status() == RangeParseResult.Status.UNSATISFIABLE) {
             return new ProjectFileDownloadResult(
                     ProjectFileDownloadResult.Status.RANGE_NOT_SATISFIABLE_416,
@@ -377,12 +380,6 @@ public class ProjectFileService {
         Optional<ByteRange> requestedRange = parsedRange.status() == RangeParseResult.Status.SATISFIABLE
                 ? parsedRange.range()
                 : Optional.empty();
-
-        if (requestedRange.isPresent() && ifRangeHeader != null && !ifRangeHeader.isBlank()) {
-            if (!RangeParser.matchesIfRange(ifRangeHeader, effectiveEtag, effectiveLastModified)) {
-                requestedRange = Optional.empty();
-            }
-        }
 
         try {
             if (requestedRange.isPresent()) {

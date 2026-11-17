@@ -250,6 +250,28 @@ class P4ProjectFileControllerRangeTest {
     }
 
     @Test
+    void download_staleIfRangeIgnoresUnsatisfiableRangeButMatchingValidatorReturns416() throws Exception {
+        when(projectFileRepository.findByIdAndProjectId(FILE_ID, PROJECT_ID)).thenReturn(Optional.of(storedEntity));
+        when(storageService.statObject("documents", "projects/10/files/clip.webm")).thenReturn(Optional.of(
+                new StorageObjectStat(16L, "video/webm", Optional.of("\"current\""), Optional.of(storedEntity.getUpdatedAt()))));
+        lenient().when(storageService.readObject(new StorageReadRequest("documents", "projects/10/files/clip.webm", Optional.empty())))
+                .thenAnswer(invocation -> new StorageReadResult(new ByteArrayInputStream(PAYLOAD), 16, 16,
+                        "video/webm", Optional.empty(), Optional.of("\"current\"")));
+
+        for (String stale : new String[]{"\"old\"", "W/\"current\"", "Sun, 15 Nov 2026 00:00:00 GMT"}) {
+            mockMvc.perform(get("/api/v1/projects/{p}/files/{f}/download", PROJECT_ID, FILE_ID)
+                            .header(HttpHeaders.RANGE, "bytes=99-120").header(HttpHeaders.IF_RANGE, stale).principal(auth))
+                    .andExpect(status().isOk()).andExpect(content().bytes(PAYLOAD))
+                    .andExpect(header().doesNotExist(HttpHeaders.CONTENT_RANGE));
+        }
+        mockMvc.perform(get("/api/v1/projects/{p}/files/{f}/download", PROJECT_ID, FILE_ID)
+                        .header(HttpHeaders.RANGE, "bytes=99-120").header(HttpHeaders.IF_RANGE, "\"current\"").principal(auth))
+                .andExpect(status().isRequestedRangeNotSatisfiable())
+                .andExpect(header().string(HttpHeaders.CONTENT_RANGE, "bytes */16"));
+        verify(storageService, times(3)).readObject(new StorageReadRequest("documents", "projects/10/files/clip.webm", Optional.empty()));
+    }
+
+    @Test
     void download_multiRangeAndIfRangePolicy() throws Exception {
         when(projectFileRepository.findByIdAndProjectId(FILE_ID, PROJECT_ID)).thenReturn(Optional.of(storedEntity));
         Instant lastMod = storedEntity.getUpdatedAt();
