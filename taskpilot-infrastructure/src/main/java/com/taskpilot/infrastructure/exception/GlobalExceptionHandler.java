@@ -2,7 +2,9 @@ package com.taskpilot.infrastructure.exception;
 
 import com.taskpilot.contracts.project.exception.RetryableRosterChangeException;
 import com.taskpilot.contracts.project.exception.SoleActiveManagerException;
+import com.taskpilot.contracts.task.TaskWorkflowRequiredException;
 import com.taskpilot.infrastructure.dto.ApiResponse;
+import jakarta.persistence.OptimisticLockException;
 import lombok.extern.slf4j.Slf4j;
 import java.io.IOException;
 import java.sql.SQLException;
@@ -15,6 +17,7 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -79,6 +82,26 @@ public class GlobalExceptionHandler {
             RetryableRosterChangeException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ApiResponse.error(HttpStatus.CONFLICT.value(), ex.getMessage()));
+    }
+
+    @ExceptionHandler(TaskWorkflowRequiredException.class)
+    public ResponseEntity<ApiResponse<java.util.Map<String, Object>>> handleTaskWorkflowRequiredException(
+            TaskWorkflowRequiredException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.error(
+                        HttpStatus.CONFLICT.value(),
+                        ex.getMessage(),
+                        java.util.Map.of(
+                                "requiredAction", ex.getRequiredAction(),
+                                "allowedActions", ex.getAllowedActions())));
+    }
+
+    @ExceptionHandler({ObjectOptimisticLockingFailureException.class, OptimisticLockException.class})
+    public ResponseEntity<ApiResponse<Void>> handleOptimisticLockException(Exception ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.error(
+                        HttpStatus.CONFLICT.value(),
+                        "Task was modified concurrently; refresh and retry with the latest version."));
     }
 
     @ExceptionHandler(BusinessException.class)

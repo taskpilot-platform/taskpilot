@@ -65,4 +65,17 @@ class CorsConfigurationTest {
         oauth2.validate();
         assertThat(oauth2.getAllowedRedirectOriginList()).containsExactly("https://app.taskpilot.test");
     }
+
+    @Test
+    void idempotencyKeyHeaderIsAllowedInCorsPreflight() {
+        CorsOriginProperties corsProps = new CorsOriginProperties("", "http://127.0.0.1:4173");
+        SecurityConfig securityConfig = new SecurityConfig(corsProps, Mockito.mock(JwtAuthenticationFilter.class));
+
+        CorsConfiguration cors = securityConfig.corsConfigurationSource()
+                .getCorsConfiguration(new MockHttpServletRequest("OPTIONS", "/api/v1/tasks/1/workflow/submit"));
+
+        assertThat(cors).isNotNull();
+        assertThat(cors.checkHeaders(java.util.List.of("Authorization", "Content-Type", "Idempotency-Key")))
+                .containsExactly("Authorization", "Content-Type", "Idempotency-Key");
+    }
 }

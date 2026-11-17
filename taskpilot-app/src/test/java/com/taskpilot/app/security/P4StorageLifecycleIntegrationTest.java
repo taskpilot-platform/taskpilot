@@ -197,7 +197,7 @@ class P4StorageLifecycleIntegrationTest {
 
         Flyway toLatest = MigrationDatabaseConfiguration.configure(
                 Flyway.configure().dataSource(upgradeUrl, "test", "test")
-        ).load();
+        ).target("46").load();
         assertThat(toLatest.migrate().migrationsExecuted).isEqualTo(1);
         assertThat(toLatest.validateWithResult().validationSuccessful).isTrue();
 

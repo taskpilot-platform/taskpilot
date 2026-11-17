@@ -64,9 +64,12 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
- * Real PostgreSQL 17 + Notification SSE + pausable Async dispatch proof for P4.2:
- * - Pausing async notification dispatch between comment commit and dispatch while removing a member
- *   blocks notification DB creation, push, email, and SSE for the removed recipient while delivering to eligible members.
+ * Real PostgreSQL 17 + Notification SSE + pausable Async dispatch proof for
+ * P4.2:
+ * - Pausing async notification dispatch between comment commit and dispatch
+ * while removing a member
+ * blocks notification DB creation, push, email, and SSE for the removed
+ * recipient while delivering to eligible members.
  * - Excludes historical commenters removed before comment creation.
  * - Preserves personal system notifications without project scope.
  */
@@ -94,8 +97,8 @@ class P4NotificationDispatchIntegrationTest {
     @BeforeAll
     static void startApp() {
         Flyway flyway = MigrationDatabaseConfiguration.configure(
-                Flyway.configure().dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
-        ).load();
+                Flyway.configure().dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword()))
+                .load();
         assertThat(flyway.migrate().migrationsExecuted).isGreaterThanOrEqualTo(6);
         assertThat(flyway.validateWithResult().validationSuccessful).isTrue();
 
@@ -173,7 +176,8 @@ class P4NotificationDispatchIntegrationTest {
     }
 
     @Test
-    void pauseAsyncDispatch_removeMember_resume_blocksDbPushEmailSseForRemovedWhileDeliveringToEligible() throws Exception {
+    void pauseAsyncDispatch_removeMember_resume_blocksDbPushEmailSseForRemovedWhileDeliveringToEligible()
+            throws Exception {
         UserFixture managerA = createUserAndLogin();
         UserFixture memberB = createUserAndLogin();
         UserFixture memberC = createUserAndLogin();
@@ -195,9 +199,9 @@ class P4NotificationDispatchIntegrationTest {
         context.getBean(ProjectServiceImpl.class).removeMember(projectId, formerCommenterD.userId(), managerA.userId());
 
         try (var sseB = P4RealtimeRevocationIntegrationTest.TestSseReader.open(
-                     baseUrl + "/api/v1/notifications/my/stream", memberB.jwt());
-             var sseC = P4RealtimeRevocationIntegrationTest.TestSseReader.open(
-                     baseUrl + "/api/v1/notifications/my/stream", memberC.jwt())) {
+                baseUrl + "/api/v1/notifications/my/stream", memberB.jwt());
+                var sseC = P4RealtimeRevocationIntegrationTest.TestSseReader.open(
+                        baseUrl + "/api/v1/notifications/my/stream", memberC.jwt())) {
 
             assertThat(sseB.statusCode).isEqualTo(200);
             assertThat(sseC.statusCode).isEqualTo(200);
@@ -213,7 +217,8 @@ class P4NotificationDispatchIntegrationTest {
             pausableExecutor.pauseNextBatch(2);
 
             HttpResponse<String> commentResp = postJson("/api/v1/tasks/" + taskId + "/comments",
-                    Map.of("content", "Confidential comment for current team", "mentionedUserIds", List.of(memberB.userId())),
+                    Map.of("content", "Confidential comment for current team", "mentionedUserIds",
+                            List.of(memberB.userId())),
                     managerA.jwt());
             assertThat(commentResp.statusCode()).isEqualTo(201);
 
@@ -232,7 +237,8 @@ class P4NotificationDispatchIntegrationTest {
             assertThat(notifRepo.countByUserIdAndIsReadFalse(memberC.userId())).isGreaterThan(0);
             assertThat(fakeOneSignal.calls().stream().anyMatch(
                     c -> String.valueOf(memberC.userId()).equals(c.userId())
-                            && c.message().contains("Sensitive Task Title XYZ"))).isTrue();
+                            && c.message().contains("Sensitive Task Title XYZ")))
+                    .isTrue();
 
             var sseEventC = sseC.events().poll(5, TimeUnit.SECONDS);
             assertThat(sseEventC).isNotNull();
@@ -250,7 +256,8 @@ class P4NotificationDispatchIntegrationTest {
                     .toList()).isEmpty();
             verifyNoInteractions(fakeMailSender);
 
-            // Personal system notification without project scope still works for active user B
+            // Personal system notification without project scope still works for active
+            // user B
             context.getBean(NotificationService.class).createSystemNotification(
                     memberB.userId(), "Account Security", "Personal notice", "/profile");
             assertThat(notifRepo.countByUserIdAndIsReadFalse(memberB.userId())).isEqualTo(initialNotifCountB + 1);
@@ -310,7 +317,10 @@ class P4NotificationDispatchIntegrationTest {
         context.getBean(ProjectServiceImpl.class).removeMember(projectId, removed.userId(), manager.userId());
         pausableExecutor.resumeAndAwaitCompletion(10, TimeUnit.SECONDS);
         pausableExecutor.awaitIdle(10, TimeUnit.SECONDS);
-        assertThat(context.getBean(NotificationRepository.class).countByUserIdAndIsReadFalse(removed.userId())).isZero();
+        // P5-01 synchronous domain notification row was persisted while member was
+        // eligible; after-commit external push stays blocked after removal
+        assertThat(context.getBean(NotificationRepository.class).countByUserIdAndIsReadFalse(removed.userId()))
+                .isEqualTo(1L);
         assertThat(fakeOneSignal.calls()).noneMatch(call -> call.userId().equals(String.valueOf(removed.userId())));
 
         updateAssignee(taskId, eligible.userId(), manager.userId());
@@ -320,9 +330,13 @@ class P4NotificationDispatchIntegrationTest {
     }
 
     private void updateAssignee(long taskId, long assigneeId, long managerId) {
+        long version = context.getBean(com.taskpilot.projects.common.repository.TaskRepository.class)
+                .findById(taskId).orElseThrow().effectiveVersion();
         context.getBean(com.taskpilot.projects.tasks.service.TaskService.class).updateTask(taskId,
                 new com.taskpilot.projects.tasks.dto.UpdateTaskRequest(
-                        null, null, null, null, null, null, null, null, assigneeId, null, null), managerId);
+                        version, UUID.randomUUID(), null, null, null, null, null, null, null, null, assigneeId, null,
+                        null, null),
+                managerId);
     }
 
     @Test
@@ -341,8 +355,10 @@ class P4NotificationDispatchIntegrationTest {
         context.getBean(ProjectServiceImpl.class).removeMember(projectId, removedManager.userId(), manager.userId());
         pausableExecutor.resumeAndAwaitCompletion(10, TimeUnit.SECONDS);
         pausableExecutor.awaitIdle(10, TimeUnit.SECONDS);
-        assertThat(context.getBean(NotificationRepository.class).countByUserIdAndIsReadFalse(removedManager.userId())).isZero();
-        assertThat(fakeOneSignal.calls()).noneMatch(call -> call.userId().equals(String.valueOf(removedManager.userId())));
+        assertThat(context.getBean(NotificationRepository.class).countByUserIdAndIsReadFalse(removedManager.userId()))
+                .isZero();
+        assertThat(fakeOneSignal.calls())
+                .noneMatch(call -> call.userId().equals(String.valueOf(removedManager.userId())));
         assertThat(fakeOneSignal.calls()).anyMatch(call -> call.userId().equals(String.valueOf(manager.userId())));
     }
 
@@ -359,14 +375,18 @@ class P4NotificationDispatchIntegrationTest {
         pausableExecutor.awaitIdle(10, TimeUnit.SECONDS);
         fakeOneSignal.clear();
         pausableExecutor.pauseNextBatch(1);
-        assertThat(adapter.assignTaskToMember(taskId, removed.userId(), "scope regression", manager.userId(), false)).isNotNull();
+        assertThat(adapter.assignTaskToMember(taskId, removed.userId(), "scope regression", 0L, UUID.randomUUID(),
+                manager.userId(), false)).isNotNull();
         assertThat(pausableExecutor.awaitPaused(5, TimeUnit.SECONDS)).isTrue();
         context.getBean(ProjectServiceImpl.class).removeMember(projectId, removed.userId(), manager.userId());
         pausableExecutor.resumeAndAwaitCompletion(10, TimeUnit.SECONDS);
         pausableExecutor.awaitIdle(10, TimeUnit.SECONDS);
         assertThat(fakeOneSignal.calls()).noneMatch(call -> call.userId().equals(String.valueOf(removed.userId())));
 
-        adapter.assignTaskToMember(taskId, eligible.userId(), "eligible control", manager.userId(), false);
+        long postRemoveVersion = context.getBean(com.taskpilot.projects.common.repository.TaskRepository.class)
+                .findById(taskId).orElseThrow().effectiveVersion();
+        adapter.assignTaskToMember(taskId, eligible.userId(), "eligible control", postRemoveVersion, UUID.randomUUID(),
+                manager.userId(), false);
         pausableExecutor.awaitIdle(10, TimeUnit.SECONDS);
         assertThat(fakeOneSignal.calls()).anyMatch(call -> call.userId().equals(String.valueOf(eligible.userId()))
                 && call.title().equals("Task Assigned"));
@@ -393,20 +413,24 @@ class P4NotificationDispatchIntegrationTest {
                 user.userId(), "Transaction notice", "Must roll back with business data", "/profile",
                 com.taskpilot.contracts.user.dto.NotificationTypeDto.SYSTEM,
                 projectScoped ? projectId : null, null);
-        for (boolean rollback : new boolean[]{true, false}) {
+        for (boolean rollback : new boolean[] { true, false }) {
             tx.executeWithoutResult(status -> {
                 // Same order as AI confirmation: project, then current recipient account.
                 jdbc.queryForObject("select id from projects where id=? for update", Long.class, projectId);
                 jdbc.queryForObject("select id from users where id=? for update", Long.class, user.userId());
                 service.createNotification(command);
-                assertThat(jdbc.queryForObject("select count(*) from notifications where user_id=?", Long.class, user.userId()))
+                assertThat(jdbc.queryForObject("select count(*) from notifications where user_id=?", Long.class,
+                        user.userId()))
                         .isEqualTo(1);
                 assertThat(fakeOneSignal.calls()).isEmpty();
-                if (rollback) status.setRollbackOnly();
+                if (rollback)
+                    status.setRollbackOnly();
             });
-            // The scoped dispatcher now owns the async boundary (the fake transport is synchronous).
+            // The scoped dispatcher now owns the async boundary (the fake transport is
+            // synchronous).
             pausableExecutor.awaitIdle(10, TimeUnit.SECONDS);
-            assertThat(jdbc.queryForObject("select count(*) from notifications where user_id=?", Long.class, user.userId()))
+            assertThat(jdbc.queryForObject("select count(*) from notifications where user_id=?", Long.class,
+                    user.userId()))
                     .isEqualTo(rollback ? 0 : 1);
             assertThat(fakeOneSignal.calls()).hasSize(rollback ? 0 : 1);
         }
@@ -424,7 +448,7 @@ class P4NotificationDispatchIntegrationTest {
     }
 
     private static String[] appArgs() {
-        return new String[]{
+        return new String[] {
                 "--server.port=0",
                 "--spring.jmx.enabled=false",
                 "--spring.profiles.active=dev",
@@ -433,7 +457,8 @@ class P4NotificationDispatchIntegrationTest {
                 "--spring.datasource.username=" + postgres.getUsername(),
                 "--spring.datasource.password=" + postgres.getPassword(),
                 "--spring.datasource.driver-class-name=org.postgresql.Driver",
-                // Bound regressions where REQUIRES_NEW waits on its own suspended business transaction.
+                // Bound regressions where REQUIRES_NEW waits on its own suspended business
+                // transaction.
                 "--spring.datasource.hikari.connection-init-sql=SET lock_timeout = '2s'",
                 "--spring.jpa.hibernate.ddl-auto=none",
                 "--spring.flyway.enabled=false",

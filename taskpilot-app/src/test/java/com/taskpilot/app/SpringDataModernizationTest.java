@@ -34,6 +34,11 @@ class SpringDataModernizationTest {
             CommentRepository.class,
             ProjectMemberRepository.class,
             TaskRepository.class,
+            SprintRepository.class,
+            TaskDeadlineRevisionRepository.class,
+            TaskEvaluationRepository.class,
+            TaskSubmissionRepository.class,
+            TaskWorkflowJournalRepository.class,
             TaskLabelRepository.class,
             TaskRequiredSkillRepository.class,
             UserSkillRepository.class,
@@ -124,7 +129,9 @@ class SpringDataModernizationTest {
         assertNotNull(taskNativeMethod);
         assertTrue(taskNativeMethod.isAnnotationPresent(NativeQuery.class));
         NativeQuery taskNQ = taskNativeMethod.getAnnotation(NativeQuery.class);
-        assertTrue(taskNQ.value().contains("FROM tasks WHERE project_id = :projectId"));
+        assertTrue(taskNQ.value().contains("FROM public.tasks WHERE project_id = :projectId"));
+        assertTrue(taskNQ.value().contains("deleted_at IS NULL"),
+                "Live task counts must exclude tombstones");
 
         // AiLogRepository native query
         Method aiNativeMethod = AiLogRepository.class.getMethod("countLogsByEndpointNative", java.time.Instant.class);
