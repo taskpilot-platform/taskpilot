@@ -458,6 +458,30 @@ class P4RealtimeRevocationIntegrationTest {
     }
 
     @Test
+    void verificationRevokedAfterStompConnect_cannotPersistChat() throws Exception {
+        UserSessionFixture member = createUserAndLogin(UserRole.USER);
+        long projectId = createProject(member.jwt());
+        try (var stomp = connectStomp(wsUrl, member.jwt())) {
+            String destination = "/app/projects/" + projectId + "/chat.sendMessage";
+            stomp.session.send(destination,
+                    "{\"content\":\"verified control\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (jdbc.queryForObject("SELECT COUNT(*) FROM public.project_chat_messages WHERE project_id = ?",
+                    Long.class, projectId) == 0 && System.nanoTime() < deadline) {
+                Thread.sleep(25);
+            }
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM public.project_chat_messages WHERE project_id = ?",
+                    Long.class, projectId)).isEqualTo(1);
+            jdbc.update("UPDATE public.users SET email_verified = false WHERE id = ?", member.userId());
+            stomp.session.send(destination,
+                    "{\"content\":\"must not persist\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            assertThat(stomp.sharedErrors().poll(5, TimeUnit.SECONDS)).isNotNull();
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM public.project_chat_messages WHERE project_id = ?",
+                    Long.class, projectId)).isEqualTo(1);
+        }
+    }
+
+    @Test
     void validMembersExchangeOrderedPersistedChatAndComments_outsiderForeignAndDirectTopicDenied() throws Exception {
         UserSessionFixture memberA = createUserAndLogin(UserRole.USER);
         UserSessionFixture memberB = createUserAndLogin(UserRole.USER);

@@ -64,6 +64,44 @@ class StompAuthChannelInterceptorTest {
     }
 
     @Test
+    void connect_unverifiedAccount_rejectsOtherwiseValidToken() {
+        UUID sid = UUID.randomUUID();
+        when(jwtService.parseAndValidate("good-token")).thenReturn(Optional.of(new JwtService.JwtClaims(
+                42L, 3L, sid, "jti-1", "USER", Instant.now(), Instant.now().plusSeconds(300), JwtService.TOKEN_SCHEMA_V2)));
+        when(accountAuthStatePort.findById(42L)).thenReturn(Optional.of(
+                new AccountAuthStateDto(42L, "alice@taskpilot.io", "USER", "ACTIVE", false, 3L)));
+        lenient().when(sessionAuthStatePort.findById(sid)).thenReturn(Optional.of(
+                new SessionAuthStateDto(sid, 42L, 3L, Instant.now().plusSeconds(3600), false)));
+        StompHeaderAccessor acc = StompHeaderAccessor.create(StompCommand.CONNECT);
+        acc.setNativeHeader(HttpHeaders.AUTHORIZATION, "Bearer good-token");
+        assertThrows(AccessDeniedException.class, () -> interceptor.preSend(frame(acc), channel));
+    }
+
+    @Test
+    void send_verificationRevokedAfterConnect_rejectsWrite() {
+        UUID sid = UUID.randomUUID();
+        when(accountAuthStatePort.findById(42L)).thenReturn(Optional.of(
+                new AccountAuthStateDto(42L, "alice@taskpilot.io", "USER", "ACTIVE", false, 3L)));
+        lenient().when(sessionAuthStatePort.findById(sid)).thenReturn(Optional.of(
+                new SessionAuthStateDto(sid, 42L, 3L, Instant.now().plusSeconds(3600), false)));
+        StompHeaderAccessor acc = StompHeaderAccessor.create(StompCommand.SEND);
+        acc.setUser(actorPrincipal(42L, 3L, sid));
+        acc.setDestination("/app/projects/15/chat");
+        assertThrows(AccessDeniedException.class, () -> interceptor.preSend(frame(acc), channel));
+        verifyNoInteractions(projectSecurityService);
+    }
+
+    @Test
+    void send_principalWithoutDurableSessionContext_isDenied() {
+        StompHeaderAccessor acc = StompHeaderAccessor.create(StompCommand.SEND);
+        acc.setUser(new UsernamePasswordAuthenticationToken(
+                new TaskPilotPrincipal(new CurrentActor(42L, "alice@taskpilot.io", "USER", 3L)), null, List.of()));
+        acc.setDestination("/app/projects/15/chat.sendMessage");
+        assertThrows(AccessDeniedException.class, () -> interceptor.preSend(frame(acc), channel));
+        verifyNoInteractions(accountAuthStatePort, sessionAuthStatePort, projectSecurityService);
+    }
+
+    @Test
     void connect_missingToken_throwsAccessDenied() {
         StompHeaderAccessor acc = StompHeaderAccessor.create(StompCommand.CONNECT);
         assertThrows(AccessDeniedException.class, () -> interceptor.preSend(frame(acc), channel));
@@ -76,7 +114,7 @@ class StompAuthChannelInterceptorTest {
                 42L, 3L, sid, "jti-1", "USER", Instant.now(), Instant.now().plusSeconds(300), JwtService.TOKEN_SCHEMA_V2);
         when(jwtService.parseAndValidate("good-token")).thenReturn(Optional.of(claims));
         when(accountAuthStatePort.findById(42L))
-                .thenReturn(Optional.of(new AccountAuthStateDto(42L, "alice@taskpilot.io", "USER", "ACTIVE", false, 3L)));
+                .thenReturn(Optional.of(new AccountAuthStateDto(42L, "alice@taskpilot.io", "USER", "ACTIVE", true, 3L)));
         when(sessionAuthStatePort.findById(sid))
                 .thenReturn(Optional.of(new SessionAuthStateDto(sid, 42L, 3L, Instant.now().plusSeconds(3600), false)));
 
@@ -93,7 +131,7 @@ class StompAuthChannelInterceptorTest {
     void subscribe_validProjectChat_validatesMember() {
         UUID sid = UUID.randomUUID();
         when(accountAuthStatePort.findById(42L))
-                .thenReturn(Optional.of(new AccountAuthStateDto(42L, "alice@taskpilot.io", "USER", "ACTIVE", false, 3L)));
+                .thenReturn(Optional.of(new AccountAuthStateDto(42L, "alice@taskpilot.io", "USER", "ACTIVE", true, 3L)));
         when(sessionAuthStatePort.findById(sid))
                 .thenReturn(Optional.of(new SessionAuthStateDto(sid, 42L, 3L, Instant.now().plusSeconds(3600), false)));
 
@@ -110,7 +148,7 @@ class StompAuthChannelInterceptorTest {
     void subscribe_wildcardTopic_throwsAccessDenied() {
         UUID sid = UUID.randomUUID();
         when(accountAuthStatePort.findById(42L))
-                .thenReturn(Optional.of(new AccountAuthStateDto(42L, "alice@taskpilot.io", "USER", "ACTIVE", false, 3L)));
+                .thenReturn(Optional.of(new AccountAuthStateDto(42L, "alice@taskpilot.io", "USER", "ACTIVE", true, 3L)));
         when(sessionAuthStatePort.findById(sid))
                 .thenReturn(Optional.of(new SessionAuthStateDto(sid, 42L, 3L, Instant.now().plusSeconds(3600), false)));
 
@@ -126,7 +164,7 @@ class StompAuthChannelInterceptorTest {
     void send_directToTopic_throwsAccessDenied() {
         UUID sid = UUID.randomUUID();
         when(accountAuthStatePort.findById(42L))
-                .thenReturn(Optional.of(new AccountAuthStateDto(42L, "alice@taskpilot.io", "USER", "ACTIVE", false, 3L)));
+                .thenReturn(Optional.of(new AccountAuthStateDto(42L, "alice@taskpilot.io", "USER", "ACTIVE", true, 3L)));
         when(sessionAuthStatePort.findById(sid))
                 .thenReturn(Optional.of(new SessionAuthStateDto(sid, 42L, 3L, Instant.now().plusSeconds(3600), false)));
 

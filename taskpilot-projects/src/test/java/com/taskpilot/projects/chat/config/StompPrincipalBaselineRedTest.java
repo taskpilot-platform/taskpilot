@@ -75,7 +75,7 @@ class StompPrincipalBaselineRedTest {
         UUID sid = UUID.randomUUID();
         String token = jwtService.generateToken(42L, 3L, sid, "USER");
         when(accountAuthStatePort.findById(42L))
-                .thenReturn(Optional.of(new AccountAuthStateDto(42L, "alice@taskpilot.io", "USER", "ACTIVE", false, 3L)));
+                .thenReturn(Optional.of(new AccountAuthStateDto(42L, "alice@taskpilot.io", "USER", "ACTIVE", true, 3L)));
         when(sessionAuthStatePort.findById(sid))
                 .thenReturn(Optional.of(new SessionAuthStateDto(sid, 42L, 3L, Instant.now().plusSeconds(3600), false)));
 
@@ -96,7 +96,7 @@ class StompPrincipalBaselineRedTest {
     void subscribe_withNumericUidPrincipal_mustAuthorizeMembershipWithoutEmailLookup() {
         UUID sid = UUID.randomUUID();
         when(accountAuthStatePort.findById(42L))
-                .thenReturn(Optional.of(new AccountAuthStateDto(42L, "alice@taskpilot.io", "USER", "ACTIVE", false, 3L)));
+                .thenReturn(Optional.of(new AccountAuthStateDto(42L, "alice@taskpilot.io", "USER", "ACTIVE", true, 3L)));
         when(sessionAuthStatePort.findById(sid))
                 .thenReturn(Optional.of(new SessionAuthStateDto(sid, 42L, 3L, Instant.now().plusSeconds(3600), false)));
 

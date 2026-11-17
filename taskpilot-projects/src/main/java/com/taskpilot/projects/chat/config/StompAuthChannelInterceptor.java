@@ -140,6 +140,7 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
         AccountAuthStateDto account = accountAuthStatePort.findById(claims.userId())
                 .orElseThrow(() -> new AccessDeniedException("SESSION_REVOKED: Account unavailable"));
         if (!ACTIVE_LIFECYCLE.equals(account.lifecycle())
+                || !account.emailVerified()
                 || account.tokenVersion() != claims.tokenVersion()
                 || account.role() == null
                 || account.role().isBlank()) {
@@ -203,6 +204,9 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
             throw new AccessDeniedException("SESSION_REVOKED: Unauthenticated STOMP session");
         }
         Optional<RealtimeAccessContext> rtOpt = CurrentActorResolver.extractRealtimeContext(user);
+        if (rtOpt.isEmpty()) {
+            throw new AccessDeniedException("SESSION_REVOKED: Missing realtime session context");
+        }
         if (rtOpt.isPresent()) {
             RealtimeAccessContext rt = rtOpt.get();
             Instant now = Instant.now();
@@ -211,7 +215,8 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
             }
             AccountAuthStateDto account = accountAuthStatePort.findById(rt.userId())
                     .orElseThrow(() -> new AccessDeniedException("SESSION_REVOKED: Account unavailable"));
-            if (!ACTIVE_LIFECYCLE.equals(account.lifecycle()) || account.tokenVersion() != rt.authVersion()) {
+            if (!ACTIVE_LIFECYCLE.equals(account.lifecycle()) || !account.emailVerified()
+                    || account.tokenVersion() != rt.authVersion()) {
                 throw new AccessDeniedException("SESSION_REVOKED: Session invalidated");
             }
             SessionAuthStateDto session = sessionAuthStatePort.findById(rt.sessionId())
