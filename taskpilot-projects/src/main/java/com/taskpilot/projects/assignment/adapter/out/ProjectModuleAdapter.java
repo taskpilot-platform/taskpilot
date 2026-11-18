@@ -42,12 +42,6 @@ public class ProjectModuleAdapter implements ProjectMemberPort, ProjectPort {
         }
 
         @Override
-        public List<Double> findRecentPerformanceScores(Long userId, int limit) {
-                return projectMemberRepository.findRecentPerformanceScores(userId,
-                                PageRequest.of(0, limit));
-        }
-
-        @Override
         public List<ProjectDueDto> findUpcomingProjects(Long userId, LocalDate fromDate, LocalDate toDate, int limit) {
                 return projectMemberRepository.findUpcomingProjects(userId, fromDate, toDate,
                                 PageRequest.of(0, limit))
