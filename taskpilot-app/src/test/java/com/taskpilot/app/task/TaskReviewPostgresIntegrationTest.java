@@ -1,5 +1,9 @@
 package com.taskpilot.app.task;
 
+import com.taskpilot.contracts.assignment.dto.TaskAssignmentMetrics;
+import com.taskpilot.contracts.assignment.dto.TaskAssignmentMetrics.DataStatus;
+import com.taskpilot.contracts.assignment.port.out.TaskPerformanceReadPort;
+import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
@@ -1466,6 +1470,157 @@ class TaskReviewPostgresIntegrationTest {
         assertThat(preservedHist.getCompletionEvidenceStatus()).isEqualTo(EvidenceStatus.INDEPENDENT_ACCEPTED);
         assertThat(jdbc.queryForObject(
                 "SELECT invalidated FROM public.task_evaluations WHERE id = ?", Boolean.class, histEvalId)).isFalse();
+    }
+
+    @Test
+    void performanceAndWorkloadFollowCurrentReviewWithoutProjectionDelay() throws Exception {
+        UserFixture manager = createUser(true, AccountLifecycle.ACTIVE);
+        UserFixture worker = createUser(true, AccountLifecycle.ACTIVE);
+        UserFixture outsider = createUser(true, AccountLifecycle.ACTIVE);
+        long projectId = createProject(manager.jwt(), "UTC");
+        addMember(projectId, worker.id(), MemberRole.MEMBER);
+        var port = context.getBean(TaskPerformanceReadPort.class);
+        assertThat(port.readProjectMetrics(projectId, Set.of(outsider.id()))).isEmpty();
+        var empty = metrics(projectId, worker.id());
+        assertThat(empty.performance().status()).isEqualTo(DataStatus.DEFAULT);
+        assertThat(empty.performance().score()).isEqualTo(0.5);
+        assertThat(empty.performance().observedQualityMean()).isNull();
+        assertThat(empty.performance().evidenceWeight()).isZero();
+        assertThat(empty.asOf()).isEqualTo(testClock.instant());
+        assertThat(empty.workload().activeTaskCount()).isZero();
+
+        JsonNode started = createAndStartTask(manager.jwt(), projectId, worker.id(), "2026-11-20");
+        long taskId = started.path("id").asLong();
+        assertThat(metrics(projectId, worker.id()).workload().activeTaskCount()).isEqualTo(1);
+        JsonNode submission = submitForPerformance(started, worker.jwt());
+        var pending = metrics(projectId, worker.id());
+        assertThat(pending.workload().activeTaskCount()).isEqualTo(1);
+        assertThat(pending.performance().eligibleTaskCount()).isZero();
+        assertThat(pending.workload().revision()).isNotEqualTo(empty.workload().revision());
+
+        controllableConsumer.setFailNext(true);
+        JsonNode accepted = reviewForPerformance(taskId, submission, manager.jwt(), "ACCEPT", 5);
+        var measured = metrics(projectId, worker.id());
+        assertThat(measured.performance().score()).isEqualTo(3.5 / 6);
+        assertThat(measured.performance().status()).isEqualTo(DataStatus.MEASURED);
+        assertThat(measured.performance().onTimeRate()).isEqualTo(1.0);
+        assertThat(measured.workload().activeTaskCount()).isZero();
+        assertThat(jdbc.queryForObject("select status from public.task_workflow_journal where task_id = ?",
+                String.class, taskId)).isEqualTo("RETRY_PENDING");
+
+        JsonNode corrected = workflowRequest(taskId, "supersede", manager.jwt(), Map.of(
+                "expectedTaskVersion", accepted.path("taskVersion").asLong(),
+                "submissionId", submission.path("submissionId").asLong(),
+                "expectedEvaluationId", accepted.path("evaluationId").asLong(),
+                "expectedEvaluationVersion", accepted.path("evaluationVersion").asLong(),
+                "qualityRating", 1, "reason", "Correct rating", "evidenceSummary", "Rechecked"));
+        var replaced = metrics(projectId, worker.id()).performance();
+        assertThat(replaced.score()).isEqualTo(2.5 / 6);
+        assertThat(replaced.eligibleTaskCount()).isEqualTo(1);
+        assertThat(replaced.evidenceRevision()).isNotEqualTo(measured.performance().evidenceRevision());
+
+        JsonNode reopened = workflowRequest(taskId, "reopen", manager.jwt(), Map.of(
+                "expectedTaskVersion", corrected.path("taskVersion").asLong(), "reason", "Follow-up needed"));
+        assertThat(metrics(projectId, worker.id()).performance().eligibleTaskCount()).isZero();
+        assertThat(metrics(projectId, worker.id()).workload().activeTaskCount()).isEqualTo(1);
+        JsonNode resubmitted = submitForPerformance(MAPPER.createObjectNode().put("id", taskId)
+                .put("version", reopened.path("taskVersion").asLong()), worker.jwt());
+        JsonNode reaccepted = reviewForPerformance(taskId, resubmitted, manager.jwt(), "ACCEPT", 3);
+        assertThat(metrics(projectId, worker.id()).performance().eligibleTaskCount()).isEqualTo(1);
+        assertThat(metrics(projectId, worker.id()).performance().observedQualityMean()).isEqualTo(0.5);
+
+        String deletePath = "/api/v1/tasks/" + taskId + "?expectedTaskVersion=" + reaccepted.path("taskVersion").asLong();
+        assertThat(send("DELETE", deletePath, null, manager.jwt(),
+                Map.of("Idempotency-Key", UUID.randomUUID().toString())).statusCode()).isEqualTo(200);
+        assertThat(metrics(projectId, worker.id()).performance().eligibleTaskCount()).isZero();
+        assertThat(metrics(projectId, worker.id()).workload().activeTaskCount()).isZero();
+
+        var session = chatSessionService.createSession(manager.id(), "P6 recommendation");
+        String raw = ToolExecutionContext.callWith(
+                new ToolExecutionContext.Context(manager.id(), session.getId(), "Recommend project members"),
+                () -> toolCallingRegistryService.execute(ToolExecutionRequest.builder().id("p6-view")
+                        .name("recommendAssignmentCandidates")
+                        .arguments(MAPPER.writeValueAsString(Map.of("projectId", String.valueOf(projectId))))
+                        .build()));
+        JsonNode view = MAPPER.readTree(raw);
+        assertThat(view.path("presentationContractVersion").asText()).isEqualTo("allowlisted-view-v3");
+        JsonNode candidate = view.path("candidates").get(0);
+        assertThat(candidate.path("fitStatus").asText()).isEqualTo("MISSING_REQUIREMENTS");
+        assertThat(candidate.path("workloadUnit").asText()).isEqualTo("ACTIVE_TASK_COUNT");
+        assertThat(candidate.path("performanceStatus").asText()).isEqualTo("DEFAULT");
+        assertThat(candidate.has("totalScore") || candidate.has("email") || candidate.has("confidenceScore")).isFalse();
+
+        assertThat(send("DELETE", "/api/v1/projects/" + projectId + "/members/" + worker.id(),
+                null, manager.jwt(), Map.of()).statusCode()).isEqualTo(200);
+        assertThat(port.readProjectMetrics(projectId, Set.of(worker.id()))).isEmpty();
+    }
+
+    @Test
+    void performanceWindowUsesTwentyDistinctLatestTasksAndKeepsTimelinessSeparate() throws Exception {
+        UserFixture manager = createUser(true, AccountLifecycle.ACTIVE);
+        UserFixture worker = createUser(true, AccountLifecycle.ACTIVE);
+        long projectId = createProject(manager.jwt(), "UTC");
+        addMember(projectId, worker.id(), MemberRole.MEMBER);
+        long otherProject = createProject(manager.jwt(), "UTC");
+        addMember(otherProject, worker.id(), MemberRole.MEMBER);
+        JsonNode foreign = createAndStartTask(manager.jwt(), otherProject, worker.id(), "2026-11-20");
+        reviewForPerformance(foreign.path("id").asLong(), submitForPerformance(foreign, worker.jwt()),
+                manager.jwt(), "ACCEPT", 1);
+        assertThat(metrics(projectId, worker.id()).performance().eligibleTaskCount()).isZero();
+
+        for (int i = 0; i <= 20; i++) {
+            JsonNode task = createAndStartTask(manager.jwt(), projectId, worker.id(),
+                    i == 0 || i == 20 ? null : "2026-11-20");
+            int grade = i == 0 ? 1 : (i - 1) % 5 + 1;
+            reviewForPerformance(task.path("id").asLong(), submitForPerformance(task, worker.jwt()),
+                    manager.jwt(), "ACCEPT", grade);
+        }
+        // All submissions share the test Clock instant. Descending task ID breaks the tie.
+        var window = metrics(projectId, worker.id()).performance();
+        assertThat(window.eligibleTaskCount()).isEqualTo(20);
+        assertThat(window.observedQualityMean()).isEqualTo(0.5);
+        assertThat(window.score()).isEqualTo(0.5);
+        assertThat(window.evidenceWeight()).isEqualTo(0.8);
+        assertThat(window.datedTaskCount()).isEqualTo(19);
+        assertThat(window.noDueDateTaskCount()).isEqualTo(1);
+        assertThat(window.onTimeRate()).isEqualTo(1.0);
+
+        JsonNode own = createAndStartTask(manager.jwt(), projectId, manager.id(), null);
+        reviewForPerformance(own.path("id").asLong(), submitForPerformance(own, manager.jwt()),
+                manager.jwt(), "SELF_ATTEST", null);
+        assertThat(metrics(projectId, manager.id()).performance().eligibleTaskCount()).isZero();
+    }
+
+    private static TaskAssignmentMetrics metrics(long projectId, long userId) {
+        return context.getBean(TaskPerformanceReadPort.class)
+                .readProjectMetrics(projectId, Set.of(userId)).get(userId);
+    }
+
+    private JsonNode submitForPerformance(JsonNode task, String jwt) throws Exception {
+        return workflowRequest(task.path("id").asLong(), "submit", jwt,
+                Map.of("expectedTaskVersion", task.path("version").asLong(), "summary", "Work delivered"));
+    }
+
+    private JsonNode reviewForPerformance(long id, JsonNode submission, String jwt, String decision, Integer rating)
+            throws Exception {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("submissionId", submission.path("submissionId").asLong());
+        body.put("expectedTaskVersion", submission.path("taskVersion").asLong());
+        body.put("decision", decision);
+        body.put("feedback", "Evidence reviewed");
+        body.put("evidenceSummary", "Verified the acceptance criteria");
+        if (rating != null) {
+            body.put("qualityRating", rating);
+        }
+        return workflowRequest(id, "review", jwt, body);
+    }
+
+    private JsonNode workflowRequest(long id, String action, String jwt, Map<String, Object> fields) throws Exception {
+        Map<String, Object> body = new LinkedHashMap<>(fields);
+        body.put("requestId", UUID.randomUUID().toString());
+        HttpResponse<String> response = send("POST", "/api/v1/tasks/" + id + "/workflow/" + action, body, jwt, Map.of());
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        return MAPPER.readTree(response.body()).path("data");
     }
 
     private Instant txNowInstant() {
