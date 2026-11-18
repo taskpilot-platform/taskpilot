@@ -19,6 +19,11 @@ public interface ProjectMemberPort {
     default boolean isProjectArchived(Long projectId) {
         return false;
     }
+
+    default String computeProjectRosterRevision(Long projectId) {
+        return "untracked";
+    }
+
     /** Serialize storage metadata writes against project deletion; caller must own a transaction. */
     void lockProjectForStorageWrite(Long projectId);
 }

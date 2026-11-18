@@ -3,9 +3,16 @@ package com.taskpilot.ai.service;
 import com.taskpilot.ai.assignment.port.out.AiAuditPort;
 import com.taskpilot.ai.dto.AutoAssignmentResponse;
 import com.taskpilot.ai.dto.CandidateScore;
+import com.taskpilot.ai.dto.InternalCandidateRanking;
+import com.taskpilot.ai.dto.MetricDataStatus;
+import com.taskpilot.ai.dto.RecommendationDifferentiationStatus;
+import com.taskpilot.ai.dto.RecommendationRequestSource;
 import com.taskpilot.ai.entity.AiLogEntity;
+import com.taskpilot.ai.entity.RecommendationSnapshotEntity;
 import com.taskpilot.ai.heuristic.HeuristicStrategy;
 import com.taskpilot.ai.heuristic.HeuristicNormalization;
+import com.taskpilot.contracts.aiquery.port.out.TaskCommandPort;
+import com.taskpilot.contracts.assignment.dto.TaskAssignmentContextDto;
 import com.taskpilot.contracts.assignment.dto.TaskAssignmentMetrics;
 import com.taskpilot.contracts.assignment.port.out.TaskPerformanceReadPort;
 import com.taskpilot.ai.heuristic.HeuristicStrategyFactory;
@@ -55,6 +62,23 @@ public class AutoAssignmentService {
     private final StreamingChatModel explanationModel;
     private final long explanationTimeoutMs;
     private final String explanationModelName;
+    private RecommendationSnapshotService recommendationSnapshotService;
+    private TaskCommandPort taskCommandPort;
+    private boolean telemetryEnabled = true;
+
+    @Autowired(required = false)
+    void setAdaptiveTelemetryDependencies(
+            @Autowired(required = false) RecommendationSnapshotService recommendationSnapshotService,
+            @Autowired(required = false) TaskCommandPort taskCommandPort,
+            @Value("${ai.adaptive.telemetry-enabled:true}") boolean telemetryEnabled) {
+        this.recommendationSnapshotService = recommendationSnapshotService;
+        this.taskCommandPort = taskCommandPort;
+        this.telemetryEnabled = telemetryEnabled;
+    }
+
+    public void setTelemetryEnabled(boolean telemetryEnabled) {
+        this.telemetryEnabled = telemetryEnabled;
+    }
 
     @Autowired
     public AutoAssignmentService(
@@ -110,7 +134,14 @@ public class AutoAssignmentService {
 
     public AutoAssignmentResponse recommend(Long projectId, List<String> requiredSkills,
             int taskDifficulty, Long requestingUserId) {
-        AutoAssignmentResponse base = recommendCandidates(projectId, requiredSkills, taskDifficulty, requestingUserId);
+        return recommend(projectId, null, requiredSkills, taskDifficulty, requestingUserId);
+    }
+
+    public AutoAssignmentResponse recommend(Long projectId, Long taskId, List<String> requiredSkills,
+            int taskDifficulty, Long requestingUserId) {
+        AutoAssignmentResponse base = recommendCandidates(
+                projectId, taskId, requiredSkills, taskDifficulty, requestingUserId,
+                Set.of(), Set.of(), RecommendationRequestSource.REST_AUTO_ASSIGN);
         if (base.candidates().isEmpty()) {
             return base;
         }
@@ -127,8 +158,36 @@ public class AutoAssignmentService {
 
     public AutoAssignmentResponse recommendCandidates(Long projectId, List<String> requiredSkills,
             int taskDifficulty, Long requestingUserId, Set<Long> includeUserIds, Set<Long> excludeUserIds) {
+        return recommendCandidates(projectId, null, requiredSkills, taskDifficulty, requestingUserId,
+                includeUserIds, excludeUserIds, RecommendationRequestSource.AI_TOOL_RECOMMEND);
+    }
+
+    public AutoAssignmentResponse recommendCandidates(
+            Long projectId,
+            Long taskId,
+            List<String> requiredSkills,
+            int taskDifficulty,
+            Long requestingUserId,
+            Set<Long> includeUserIds,
+            Set<Long> excludeUserIds,
+            RecommendationRequestSource requestSource) {
         if (requestingUserId == null || !projectMemberPort.isProjectMember(projectId, requestingUserId)) {
             throw new BusinessException(HttpStatus.FORBIDDEN.value(), "You are not a member of this project");
+        }
+        Long capturedTaskVersion = null;
+        Long capturedAssignmentVersion = null;
+        if (taskId != null && taskCommandPort != null) {
+            TaskAssignmentContextDto taskCtx = taskCommandPort.getTaskAssignmentContext(taskId, requestingUserId)
+                    .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found: " + taskId));
+            if (taskCtx.deleted()) {
+                throw new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found: " + taskId);
+            }
+            if (!Objects.equals(taskCtx.projectId(), projectId)) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                        "Task " + taskId + " does not belong to project " + projectId);
+            }
+            capturedTaskVersion = taskCtx.taskVersion();
+            capturedAssignmentVersion = taskCtx.assignmentVersion();
         }
         List<String> skills = requiredSkills == null ? List.of() : requiredSkills.stream()
                 .filter(Objects::nonNull).map(String::trim).filter(skill -> !skill.isEmpty())
@@ -154,18 +213,88 @@ public class AutoAssignmentService {
                         .thenComparing(candidate -> candidate.user().id()))
                 .toList();
         List<CandidateScore> candidates = new ArrayList<>(ranked.size());
+        boolean hasRequirements = !skills.isEmpty();
         for (int i = 0; i < ranked.size(); i++) {
-            candidates.add(toView(ranked.get(i), i + 1, !skills.isEmpty()));
+            candidates.add(toView(ranked.get(i), i + 1, hasRequirements));
         }
         String differentiation = ranked.isEmpty() ? null
                 : ranked.size() > 1 && Double.compare(ranked.get(0).score(), ranked.get(1).score()) == 0
                         ? "INSUFFICIENT_TO_DIFFERENTIATE" : "DIFFERENTIATED";
 
+        String snapshotId = null;
+        if (telemetryEnabled && recommendationSnapshotService != null) {
+            RecommendationDifferentiationStatus diffStatus = ranked.isEmpty()
+                    ? RecommendationDifferentiationStatus.UNOBSERVED
+                    : RecommendationDifferentiationStatus.valueOf(differentiation);
+            List<InternalCandidateRanking> internalRankings = ranked.stream()
+                    .map(r -> toInternalRanking(r, mode, hasRequirements))
+                    .toList();
+            String weightVersion = heuristicStrategyFactory.resolveWeightVersion(mode);
+            String rosterRevision = projectMemberPort.computeProjectRosterRevision(projectId);
+            RecommendationRequestSource effectiveSource = requestSource != null
+                    ? requestSource
+                    : (taskId != null ? RecommendationRequestSource.AI_TOOL_TASK_RECOMMENDATION
+                    : RecommendationRequestSource.AI_TOOL_RECOMMEND);
+            RecommendationSnapshotEntity savedSnapshot = recommendationSnapshotService.createSnapshot(
+                    requestingUserId,
+                    projectId,
+                    taskId,
+                    capturedTaskVersion,
+                    capturedAssignmentVersion,
+                    skills,
+                    mode,
+                    strategy,
+                    weightVersion,
+                    rosterRevision,
+                    diffStatus,
+                    internalRankings,
+                    effectiveSource);
+            snapshotId = savedSnapshot.getSnapshotId();
+        }
+
         return AutoAssignmentResponse.builder()
                 .projectId(projectId).requiredSkills(skills).candidates(List.copyOf(candidates))
                 .heuristicMode(mode).presentationContractVersion("allowlisted-view-v3")
                 .scoringModelVersion(NormalizedScores.PROJECT_RANKING_VERSION).differentiationStatus(differentiation)
+                .snapshotId(snapshotId).taskId(taskId)
+                .taskVersion(snapshotId == null ? null : capturedTaskVersion)
                 .aiExplanation(ranked.isEmpty() ? "No eligible members are currently available for assignment." : null)
+                .build();
+    }
+
+    private InternalCandidateRanking toInternalRanking(RankedCandidate ranked, String mode, boolean hasRequirements) {
+        var metrics = ranked.metrics();
+        var performance = metrics.performance();
+        var workload = metrics.workload();
+        return InternalCandidateRanking.builder()
+                .userId(ranked.user().id())
+                .fullName(ranked.user().fullName())
+                .rankingRawFit(ranked.fit())
+                .presentationFitValue(hasRequirements ? ranked.fit() : null)
+                .fitStatus(hasRequirements ? MetricDataStatus.MEASURED : MetricDataStatus.MISSING_REQUIREMENTS)
+                .fitSource(hasRequirements ? "DECLARED_PROFILE" : null)
+                .storedWorkloadValue((int) workload.activeTaskCount())
+                .workloadStatus(MetricDataStatus.MEASURED)
+                .workloadUnit(workload.unit())
+                .workloadScope(workload.scope())
+                .workloadMeasuredAt(metrics.asOf())
+                .workloadRevision(workload.revision())
+                .derivedPerformanceInput(performance.score())
+                .performanceStatus(performance.status() == TaskAssignmentMetrics.DataStatus.MEASURED
+                        ? MetricDataStatus.MEASURED
+                        : MetricDataStatus.DEFAULT)
+                .performanceVersion(performance.version())
+                .performanceRubricVersion(performance.rubricVersion())
+                .performanceSampleCount(performance.eligibleTaskCount())
+                .performanceWindowLimit(performance.windowLimit())
+                .observedQualityMean(performance.observedQualityMean())
+                .evidenceWeight(performance.evidenceWeight())
+                .performanceEvidenceRevision(performance.evidenceRevision())
+                .performanceMeasuredAt(metrics.asOf())
+                .fullPrecisionScore(ranked.score())
+                .rankingKey(Math.round(ranked.score() * 1_000_000_000.0))
+                .memberStatus(ranked.user().status() != null ? ranked.user().status() : "AVAILABLE")
+                .heuristicMode(mode)
                 .build();
     }
 

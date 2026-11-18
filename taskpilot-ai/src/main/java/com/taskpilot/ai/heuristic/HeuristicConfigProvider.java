@@ -43,6 +43,10 @@ public class HeuristicConfigProvider {
         return config;
     }
 
+    public String getWeightVersion(String mode) {
+        return "baseline-v1";
+    }
+
     public String getCurrentMode() {
         Map<String, Object> raw = systemSettingPort.findJsonObjectByKey(CURRENT_MODE_KEY)
                 .orElse(Map.of());

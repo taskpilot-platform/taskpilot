@@ -553,6 +553,18 @@ public class TaskCommandService {
             UUID requestId,
             Long actorUserId,
             boolean simulate) {
+        return assignTaskToMember(taskId, memberId, expectedTaskVersion, requestId, actorUserId, simulate, null);
+    }
+
+    @Transactional
+    public TaskDto assignTaskToMember(
+            Long taskId,
+            Long memberId,
+            Long expectedTaskVersion,
+            UUID requestId,
+            Long actorUserId,
+            boolean simulate,
+            String assignmentDecisionId) {
         if (!simulate) {
             Map<String, Object> values = new LinkedHashMap<>();
             values.put("assigneeId", memberId);
@@ -561,7 +573,7 @@ public class TaskCommandService {
                     expectedTaskVersion,
                     requestId,
                     values);
-            return patchTaskInternal(cmd, actorUserId, "ASSIGN_TASK");
+            return patchTaskInternal(cmd, actorUserId, "ASSIGN_TASK", assignmentDecisionId);
         }
 
         // Simulation: validate same locking, version, sprint, REVIEW freeze, and active
@@ -762,11 +774,23 @@ public class TaskCommandService {
     }
 
     private TaskDto patchTaskInternal(PatchTaskCommand command, Long actorUserId, String operation) {
+        return patchTaskInternal(command, actorUserId, operation, null);
+    }
+
+    private TaskDto patchTaskInternal(
+            PatchTaskCommand command,
+            Long actorUserId,
+            String operation,
+            String explicitAssignmentDecisionId) {
         if (command == null) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Patch command is required");
         }
         requireExpectedTaskVersionPresent(command.expectedTaskVersion());
         requireRequestIdPresent(command.requestId());
+
+        String normalizedDecisionId = (explicitAssignmentDecisionId == null || explicitAssignmentDecisionId.isBlank())
+                ? null
+                : explicitAssignmentDecisionId.trim();
 
         Long targetAssigneeId = parseOptionalAssigneeId(command);
         TaskContext ctx = lockAndAuthorizeTaskWrite(command.taskId(), actorUserId, targetAssigneeId);
@@ -774,7 +798,9 @@ public class TaskCommandService {
         ProjectEntity project = ctx.project();
         long projectId = project.getId();
 
-        String payloadHash = command.requestId() != null ? computePatchPayloadHash(operation, command) : null;
+        String payloadHash = command.requestId() != null
+                ? computePatchPayloadHash(operation, command, normalizedDecisionId)
+                : null;
         if (command.requestId() != null && idempotencyRepository != null) {
             Optional<TaskCommandIdempotencyEntity> existing = idempotencyRepository
                     .findByActorUserIdAndOperationAndRequestId(actorUserId, operation, command.requestId());
@@ -953,8 +979,17 @@ public class TaskCommandService {
 
         Long notifyAssignedUserId = null;
         if (command.isPresent("assigneeId")) {
-            if (task.updateAssignee(targetAssigneeId) && targetAssigneeId != null) {
-                notifyAssignedUserId = targetAssigneeId;
+            if (task.updateAssignee(targetAssigneeId)) {
+                task.setAssignmentDecisionId(normalizedDecisionId);
+                if (targetAssigneeId != null) {
+                    notifyAssignedUserId = targetAssigneeId;
+                }
+            } else if (normalizedDecisionId != null) {
+                task.bumpAssignmentVersion();
+                task.setAssignmentDecisionId(normalizedDecisionId);
+                if (targetAssigneeId != null) {
+                    notifyAssignedUserId = targetAssigneeId;
+                }
             }
         }
 
@@ -1540,7 +1575,10 @@ public class TaskCommandService {
         }
     }
 
-    private String computePatchPayloadHash(String operation, PatchTaskCommand command) {
+    private String computePatchPayloadHash(
+            String operation,
+            PatchTaskCommand command,
+            String explicitAssignmentDecisionId) {
         Map<String, Object> sortedValues = new TreeMap<>();
         for (String key : command.presentFields()) {
             sortedValues.put(key, command.valueOf(key));
@@ -1549,6 +1587,9 @@ public class TaskCommandService {
         canonical.put("operation", operation);
         canonical.put("taskId", command.taskId());
         canonical.put("expectedTaskVersion", command.expectedTaskVersion());
+        if (explicitAssignmentDecisionId != null) {
+            canonical.put("assignmentDecisionId", explicitAssignmentDecisionId);
+        }
         canonical.put("values", sortedValues);
         return sha256Json(canonical);
     }

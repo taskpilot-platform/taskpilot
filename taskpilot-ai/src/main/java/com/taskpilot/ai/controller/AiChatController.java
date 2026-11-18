@@ -25,6 +25,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.beans.factory.annotation.Value;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 @Slf4j
 @RestController
@@ -39,6 +40,7 @@ public class AiChatController {
     private final AiLogService aiLogService;
     private final AutoAssignmentService autoAssignmentService;
     private final ToolCallingRegistryService toolCallingRegistryService;
+    private final RecommendationDecisionService recommendationDecisionService;
 
     @Value("${ai.chat.max-user-input-chars:1500}")
     private int maxUserInputChars;
@@ -198,11 +200,55 @@ public class AiChatController {
             @Valid @RequestBody AutoAssignmentRequest request,
             Authentication authentication) {
         Long userId = resolveUserId(authentication);
-        log.info("[AutoAssign] Request from user {} for project {}", userId,
-                request.projectId());
+        log.info("[AutoAssign] Request from user {} for project {} task {}", userId,
+                request.projectId(), request.taskId());
         AutoAssignmentResponse response = autoAssignmentService.recommend(request.projectId(),
-                request.requiredSkills(), request.taskDifficulty(), userId);
+                request.taskId(), request.requiredSkills(), request.taskDifficulty(), userId);
         return ApiResponse.success(response);
+    }
+
+    @Operation(summary = "Record ACCEPT, OVERRIDE, or REJECT decision for a recommendation snapshot")
+    @PostMapping("/recommendations/{snapshotId}/decisions")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    public ApiResponse<RecommendationDecisionResponse> recordRecommendationDecision(
+            @PathVariable String snapshotId,
+            @Valid @RequestBody RecordRecommendationDecisionRequest request,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKeyHeader,
+            Authentication authentication) {
+        Long userId = resolveUserId(authentication);
+        UUID requestId = request.requestId() != null ? request.requestId() : parseOptionalUuid(idempotencyKeyHeader);
+        RecommendationDecisionResponse response = recommendationDecisionService.recordAndApplyDecision(
+                userId,
+                snapshotId,
+                request.decisionType(),
+                request.selectedCandidateId(),
+                request.taskId(),
+                request.expectedTaskVersion(),
+                requestId,
+                request.reasonCode(),
+                request.note());
+        return ApiResponse.success(response);
+    }
+
+    @Operation(summary = "Get recorded decision for a recommendation snapshot")
+    @GetMapping("/recommendations/{snapshotId}/decision")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    public ApiResponse<RecommendationDecisionResponse> getRecommendationDecision(
+            @PathVariable String snapshotId,
+            Authentication authentication) {
+        Long userId = resolveUserId(authentication);
+        return ApiResponse.success(recommendationDecisionService.getDecisionBySnapshotId(snapshotId, userId));
+    }
+
+    private static UUID parseOptionalUuid(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(raw.trim());
+        } catch (IllegalArgumentException ex) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Idempotency-Key must be a valid UUID");
+        }
     }
 
     private Long resolveUserId(Authentication authentication) {

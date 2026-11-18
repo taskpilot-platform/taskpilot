@@ -3,9 +3,11 @@ package com.taskpilot.contracts.aiquery.port.out;
 import com.taskpilot.contracts.aiquery.dto.TaskAssignmentResultDto;
 import com.taskpilot.contracts.aiquery.dto.TaskDetailDto;
 import com.taskpilot.contracts.aiquery.dto.TaskSummaryDto;
+import com.taskpilot.contracts.assignment.dto.TaskAssignmentContextDto;
 import com.taskpilot.contracts.task.PatchTaskCommand;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface TaskCommandPort {
@@ -24,6 +26,17 @@ public interface TaskCommandPort {
 
         TaskAssignmentResultDto assignTaskToMember(Long taskId, Long memberId, String reason, Long expectedTaskVersion,
                         UUID requestId, Long requesterUserId, boolean simulate);
+
+        default TaskAssignmentResultDto assignTaskToMember(Long taskId, Long memberId, String reason,
+                        Long expectedTaskVersion, UUID requestId, Long requesterUserId, boolean simulate,
+                        String assignmentDecisionId) {
+                return assignTaskToMember(taskId, memberId, reason, expectedTaskVersion, requestId, requesterUserId,
+                                simulate);
+        }
+
+        default Optional<TaskAssignmentContextDto> getTaskAssignmentContext(Long taskId, Long requesterUserId) {
+                return Optional.empty();
+        }
 
         TaskSummaryDto updateTaskStatus(Long taskId, String status, Long expectedTaskVersion, UUID requestId,
                         Long requesterUserId);

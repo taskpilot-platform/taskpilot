@@ -21,4 +21,9 @@ public class HeuristicStrategyFactory {
             default -> new BalancedHeuristicStrategy(config);
         };
     }
+
+    public String resolveWeightVersion(String mode) {
+        String normalized = mode == null ? "BALANCED" : mode.trim().toUpperCase(Locale.ROOT);
+        return configProvider.getWeightVersion(normalized);
+    }
 }

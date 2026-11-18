@@ -13,6 +13,7 @@ import com.taskpilot.contracts.aiquery.port.out.MemberAnalyticsPort;
 import com.taskpilot.contracts.aiquery.port.out.ProjectInsightsPort;
 import com.taskpilot.contracts.aiquery.port.out.SprintQueryPort;
 import com.taskpilot.contracts.aiquery.port.out.TaskCommandPort;
+import com.taskpilot.contracts.assignment.dto.TaskAssignmentContextDto;
 import com.taskpilot.contracts.assignment.dto.UserProfileDto;
 import com.taskpilot.contracts.assignment.dto.UserSkillDto;
 import com.taskpilot.contracts.assignment.port.out.UserPort;
@@ -219,10 +220,34 @@ public class AiQueryModuleAdapter
     public TaskAssignmentResultDto assignTaskToMember(Long taskId, Long memberId, String reason,
             Long expectedTaskVersion,
             UUID requestId, Long requesterUserId, boolean simulate) {
+        return assignTaskToMember(taskId, memberId, reason, expectedTaskVersion, requestId, requesterUserId, simulate,
+                null);
+    }
+
+    @Override
+    @Transactional
+    public TaskAssignmentResultDto assignTaskToMember(Long taskId, Long memberId, String reason,
+            Long expectedTaskVersion,
+            UUID requestId, Long requesterUserId, boolean simulate, String assignmentDecisionId) {
         taskCommandService.assignTaskToMember(
-                taskId, memberId, expectedTaskVersion, requestId, requesterUserId, simulate);
+                taskId, memberId, expectedTaskVersion, requestId, requesterUserId, simulate, assignmentDecisionId);
         return TaskAssignmentResultDto.success(taskId, memberId,
                 normalizeReason(reason, simulate ? "Assignment simulated successfully" : "Task assigned by AI tool"));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public java.util.Optional<TaskAssignmentContextDto> getTaskAssignmentContext(Long taskId, Long requesterUserId) {
+        TaskEntity task = findTask(taskId);
+        validateProjectMember(task.getProjectId(), requesterUserId);
+        return java.util.Optional.of(new TaskAssignmentContextDto(
+                task.getId(),
+                task.getProjectId(),
+                task.effectiveVersion(),
+                task.effectiveAssignmentVersion(),
+                task.getStatus() != null ? task.getStatus().name() : null,
+                task.getAssigneeId(),
+                task.isDeleted()));
     }
 
     @Override

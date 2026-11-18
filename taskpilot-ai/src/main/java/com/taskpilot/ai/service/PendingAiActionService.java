@@ -40,6 +40,11 @@ public class PendingAiActionService {
 
     public ConfirmationRequiredDto create(Long userId,Long sessionId,String toolName,String summary,
             Map<String,Object> arguments,Object preview,Supplier<Object> executor) {
+        return create(userId, sessionId, toolName, summary, arguments, preview, executor, null);
+    }
+
+    public ConfirmationRequiredDto create(Long userId,Long sessionId,String toolName,String summary,
+            Map<String,Object> arguments,Object preview,Supplier<Object> executor,Runnable onCancel) {
         var frozen=AiToolSupport.immutableArguments(arguments);
         String revision=policy.fingerprint(toolName,frozen,userId,sessionId,false);
         Object frozenPreview=preview==null?null:AiToolSupport.immutableValue(preview);
@@ -50,7 +55,7 @@ public class PendingAiActionService {
         synchronized(actions) {
             cleanupExpired();
             if(actions.size()>=1000) throw new BusinessException(429,"Too many pending AI actions; cancel an existing action");
-            actions.put(id,new Action(userId,sessionId,dto,revision,executor));
+            actions.put(id,new Action(userId,sessionId,dto,revision,executor,onCancel));
         }
         return dto;
     }
@@ -111,9 +116,16 @@ public class PendingAiActionService {
     public void cancel(String id,Long userId,Long sessionId) {
         policy.authorizeSession(userId,sessionId);
         Action action=owned(id,userId,sessionId);
+        Runnable cancelHook = null;
         synchronized(action) {
             if(action.state==State.RUNNING || action.state==State.SUCCEEDED) throw new BusinessException(409,"Action already executing or completed");
+            if (action.state == State.PENDING) {
+                cancelHook = action.onCancel;
+            }
             action.state=State.CANCELLED;
+        }
+        if (cancelHook != null) {
+            cancelHook.run();
         }
     }
     private Action owned(String id,Long userId,Long sessionId) {
@@ -140,10 +152,10 @@ public class PendingAiActionService {
     }
     private enum State { PENDING,RUNNING,SUCCEEDED,CANCELLED }
     private static final class Action {
-        final Long userId,sessionId; final ConfirmationRequiredDto dto; final String revision; final Supplier<Object> executor;
+        final Long userId,sessionId; final ConfirmationRequiredDto dto; final String revision; final Supplier<Object> executor; final Runnable onCancel;
         State state=State.PENDING; String key; Object result;
-        Action(Long uid,Long sid,ConfirmationRequiredDto dto,String revision,Supplier<Object> executor) {
-            this.userId=uid;this.sessionId=sid;this.dto=dto;this.revision=revision;this.executor=executor;
+        Action(Long uid,Long sid,ConfirmationRequiredDto dto,String revision,Supplier<Object> executor,Runnable onCancel) {
+            this.userId=uid;this.sessionId=sid;this.dto=dto;this.revision=revision;this.executor=executor;this.onCancel=onCancel;
         }
     }
 }

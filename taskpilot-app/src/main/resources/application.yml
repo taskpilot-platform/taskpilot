@@ -191,6 +191,10 @@ ai:
   assignment:
     explanation-timeout-ms: ${AI_ASSIGNMENT_EXPLANATION_TIMEOUT_MS:5000}
 
+  adaptive:
+    telemetry-enabled: ${AI_ADAPTIVE_TELEMETRY_ENABLED:true}
+    minimum-samples: ${AI_ADAPTIVE_MINIMUM_SAMPLES:20}
+
   groq:
     enabled: ${AI_GROQ_ENABLED:true}
     api-key: ${GROQ_API_KEY:}
