@@ -28,4 +28,12 @@ public interface TaskWorkflowJournalRepository extends JpaRepository<TaskWorkflo
     @Meta(comment = "TaskWorkflowJournalRepository.findPendingIdsByTaskId")
     @Query("SELECT j.id FROM TaskWorkflowJournalEntity j WHERE j.taskId = :taskId AND j.status IN ('PENDING', 'RETRY_PENDING') ORDER BY j.id ASC")
     List<Long> findPendingIdsByTaskId(@Param("taskId") Long taskId);
+
+    @Meta(comment = "TaskWorkflowJournalRepository.countByStatus")
+    @Query("SELECT COUNT(j) FROM TaskWorkflowJournalEntity j WHERE j.status = :status")
+    long countByStatus(@Param("status") String status);
+
+    @Meta(comment = "TaskWorkflowJournalRepository.countByProjectIdAndStatus")
+    @Query("SELECT COUNT(j) FROM TaskWorkflowJournalEntity j WHERE j.projectId = :projectId AND j.status = :status")
+    long countByProjectIdAndStatus(@Param("projectId") Long projectId, @Param("status") String status);
 }

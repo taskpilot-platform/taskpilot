@@ -6,7 +6,10 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.taskpilot.contracts.task.TaskEvaluationAccepted;
 import com.taskpilot.contracts.task.TaskEvaluationInvalidated;
 import com.taskpilot.contracts.task.TaskEvaluationJournalConsumer;
+import com.taskpilot.contracts.task.TaskEvaluationJournalStatePort;
+import com.taskpilot.projects.common.entity.TaskEvaluationInvalidationEntity;
 import com.taskpilot.projects.common.entity.TaskWorkflowJournalEntity;
+import com.taskpilot.projects.common.repository.TaskEvaluationInvalidationRepository;
 import com.taskpilot.projects.common.repository.TaskWorkflowJournalRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,8 +26,11 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Durable post-commit dispatcher for task evaluation/workflow journal records.
@@ -33,7 +39,7 @@ import java.util.Optional;
  */
 @Slf4j
 @Service
-public class TaskWorkflowJournalDispatcher {
+public class TaskWorkflowJournalDispatcher implements TaskEvaluationJournalStatePort {
 
     public static final String EVENT_EVALUATION_ACCEPTED = "TASK_EVALUATION_ACCEPTED";
     public static final String EVENT_EVALUATION_INVALIDATED = "TASK_EVALUATION_INVALIDATED";
@@ -44,6 +50,7 @@ public class TaskWorkflowJournalDispatcher {
             .build();
 
     private final TaskWorkflowJournalRepository journalRepository;
+    private final TaskEvaluationInvalidationRepository invalidationRepository;
     private final List<TaskEvaluationJournalConsumer> consumers;
     private final TransactionTemplate requiresNewTemplate;
     private final Clock clock;
@@ -51,19 +58,22 @@ public class TaskWorkflowJournalDispatcher {
     @Autowired
     public TaskWorkflowJournalDispatcher(
             TaskWorkflowJournalRepository journalRepository,
+            TaskEvaluationInvalidationRepository invalidationRepository,
             @Autowired(required = false) List<TaskEvaluationJournalConsumer> consumers,
             PlatformTransactionManager transactionManager,
             Optional<Clock> clock) {
-        this(journalRepository, consumers, transactionManager,
+        this(journalRepository, invalidationRepository, consumers, transactionManager,
                 clock != null ? clock.orElse(Clock.systemUTC()) : Clock.systemUTC());
     }
 
     public TaskWorkflowJournalDispatcher(
             TaskWorkflowJournalRepository journalRepository,
+            TaskEvaluationInvalidationRepository invalidationRepository,
             List<TaskEvaluationJournalConsumer> consumers,
             PlatformTransactionManager transactionManager,
             Clock clock) {
         this.journalRepository = journalRepository;
+        this.invalidationRepository = invalidationRepository;
         this.consumers = consumers != null ? List.copyOf(consumers) : List.of();
         if (transactionManager != null) {
             TransactionTemplate tpl = new TransactionTemplate(transactionManager);
@@ -73,6 +83,17 @@ public class TaskWorkflowJournalDispatcher {
             this.requiresNewTemplate = null;
         }
         this.clock = clock != null ? clock : Clock.systemUTC();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Map<Long, String> findInvalidationReasons(Collection<Long> evaluationIds) {
+        if (evaluationIds.isEmpty()) {
+            return Map.of();
+        }
+        return invalidationRepository.findByEvaluationIdIn(evaluationIds).stream()
+                .collect(Collectors.toMap(TaskEvaluationInvalidationEntity::getEvaluationId,
+                        TaskEvaluationInvalidationEntity::getReason));
     }
 
     public void scheduleAfterCommit(List<Long> journalIds) {
@@ -110,12 +131,49 @@ public class TaskWorkflowJournalDispatcher {
     }
 
     @Scheduled(fixedDelay = 30000)
-    public void replayDueEntries() {
+    public void replayDueEntriesJob() {
+        replayDueEntries();
+    }
+
+    @Override
+    public int replayDueEntries() {
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
         List<Long> dueIds = journalRepository.findDueJournalIds(now);
-        if (!dueIds.isEmpty()) {
-            dispatchBatchSafely(dueIds);
+        if (dueIds.isEmpty()) {
+            return 0;
         }
+        int succeeded = 0;
+        for (Long id : dueIds) {
+            try {
+                boolean ok;
+                if (requiresNewTemplate != null) {
+                    ok = Boolean.TRUE.equals(requiresNewTemplate.execute(status -> dispatchSingleLocked(id)));
+                } else {
+                    ok = dispatchSingleLocked(id);
+                }
+                if (ok) {
+                    succeeded++;
+                }
+            } catch (Exception ex) {
+                log.warn("[TaskWorkflowJournal] Scheduled replay failed for journalId={}: {}", id, ex.getMessage());
+            }
+        }
+        return succeeded;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public JournalHealthSummary summarize(Long projectId) {
+        if (projectId == null) {
+            return new JournalHealthSummary(
+                    journalRepository.countByStatus("PENDING"),
+                    journalRepository.countByStatus("RETRY_PENDING"),
+                    journalRepository.countByStatus("FAILED"));
+        }
+        return new JournalHealthSummary(
+                journalRepository.countByProjectIdAndStatus(projectId, "PENDING"),
+                journalRepository.countByProjectIdAndStatus(projectId, "RETRY_PENDING"),
+                journalRepository.countByProjectIdAndStatus(projectId, "FAILED"));
     }
 
     public int replayPendingForTask(long taskId) {
@@ -144,7 +202,17 @@ public class TaskWorkflowJournalDispatcher {
 
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
         try {
-            deliverToConsumers(entry);
+            if (requiresNewTemplate != null) {
+                requiresNewTemplate.executeWithoutResult(status -> {
+                    try {
+                        deliverToConsumers(entry);
+                    } catch (Exception ex) {
+                        throw ex instanceof RuntimeException re ? re : new IllegalStateException(ex);
+                    }
+                });
+            } else {
+                deliverToConsumers(entry);
+            }
             entry.setAttempts(entry.getAttempts() + 1);
             entry.setStatus("SUCCEEDED");
             entry.setProcessedAt(now);
