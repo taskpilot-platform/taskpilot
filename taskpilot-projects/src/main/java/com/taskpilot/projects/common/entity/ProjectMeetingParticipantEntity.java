@@ -34,6 +34,9 @@ public class ProjectMeetingParticipantEntity {
     @Builder.Default
     private Instant joinedAt = Instant.now();
 
+    @Column(name = "provider_sid", length = 96)
+    private String providerSid;
+
     @Column(name = "left_at")
     private Instant leftAt;
 }

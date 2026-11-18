@@ -45,6 +45,57 @@ class MigrationSchemaIntegrationTest {
         exercise("migration_upgrade_backend",true);
     }
 
+    @Test
+    @Timeout(90)
+    void p7UpgradeKeepsLegacyRecordingLinksAndExpiresUnverifiedActiveAttendance() throws Exception {
+        String database = "migration_p7_meetings";
+        try (var connection = DriverManager.getConnection(postgres.getJdbcUrl(), "test", "test");
+             var statement = connection.createStatement()) {
+            statement.execute("CREATE DATABASE " + database);
+        }
+        String url = "jdbc:postgresql://" + postgres.getHost() + ":" + postgres.getMappedPort(5432) + "/" + database;
+        var v49 = MigrationDatabaseConfiguration.configure(Flyway.configure().dataSource(url, "test", "test"))
+                .target("49").load();
+        v49.migrate();
+
+        try (var connection = DriverManager.getConnection(url, "test", "test"); var statement = connection.createStatement()) {
+            statement.execute("INSERT INTO public.users(id, email, full_name) VALUES (7, 'fixture@example.invalid', 'Fixture')");
+            statement.execute("INSERT INTO public.projects(id, name) VALUES (2, 'Fixture project')");
+            statement.execute("""
+                    INSERT INTO public.project_files(id, project_id, uploader_id, file_name, original_name, file_size, storage_key)
+                    VALUES (9, 2, 7, 'recording.webm', 'recording.webm', 1024, 'fixture-key')
+                    """);
+            statement.execute("""
+                    INSERT INTO public.project_meetings(id, project_id, host_id, title, room_name, status, recording_file_id, ended_at)
+                    VALUES (4, 2, 7, 'Recorded', 'tp-proj-2-fixture', 'ENDED', 9, CURRENT_TIMESTAMP)
+                    """);
+            statement.execute("""
+                    INSERT INTO public.project_meeting_participants(id, meeting_id, user_id, role)
+                    VALUES (1, 4, 7, 'HOST'), (2, 4, 7, 'HOST')
+                    """);
+        }
+
+        var latest = MigrationDatabaseConfiguration.configure(Flyway.configure().dataSource(url, "test", "test")).load();
+        assertThat(latest.migrate().migrationsExecuted).isGreaterThanOrEqualTo(1);
+        assertThat(latest.validateWithResult().validationSuccessful).isTrue();
+        try (var connection = DriverManager.getConnection(url, "test", "test"); var statement = connection.createStatement()) {
+            try (var result = statement.executeQuery("""
+                    SELECT recording_file_id, room_cleanup_at FROM public.project_meetings WHERE id = 4
+                    """)) {
+                assertThat(result.next()).isTrue();
+                assertThat(result.getLong("recording_file_id")).isEqualTo(9);
+                assertThat(result.getTimestamp("room_cleanup_at")).isNotNull();
+            }
+            try (var result = statement.executeQuery("""
+                    SELECT count(*) AS rows, count(left_at) AS closed FROM public.project_meeting_participants WHERE meeting_id = 4
+                    """)) {
+                assertThat(result.next()).isTrue();
+                assertThat(result.getInt("rows")).isEqualTo(2);
+                assertThat(result.getInt("closed")).isEqualTo(2);
+            }
+        }
+    }
+
     private void exercise(String database,boolean upgrade) throws Exception {
         try(var c=DriverManager.getConnection(postgres.getJdbcUrl(),"test","test");var s=c.createStatement()) {
             s.execute("CREATE DATABASE "+database);

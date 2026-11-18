@@ -3,8 +3,10 @@ package com.taskpilot.projects.common.repository;
 import com.taskpilot.projects.common.entity.ProjectMeetingEntity;
 import com.taskpilot.projects.common.enums.MeetingRecordingStatus;
 import com.taskpilot.projects.common.enums.ProjectMeetingStatus;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -16,6 +18,12 @@ import java.util.Optional;
 
 @Repository
 public interface ProjectMeetingRepository extends JpaRepository<ProjectMeetingEntity, Long> {
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select m from ProjectMeetingEntity m where m.id = :id and m.projectId = :projectId")
+    Optional<ProjectMeetingEntity> findForUpdate(@Param("id") Long id, @Param("projectId") Long projectId);
+
+    List<ProjectMeetingEntity> findTop5ByRoomCleanupAtBeforeOrderByRoomCleanupAtAsc(Instant now);
 
     List<ProjectMeetingEntity> findByProjectIdOrderByCreatedAtDesc(Long projectId);
 

@@ -952,6 +952,7 @@ class SprintLifecyclePostgresIntegrationTest {
         v48.migrate();
         Flyway v49 = MigrationDatabaseConfiguration
                 .configure(Flyway.configure().dataSource(upgradeUrl, postgres.getUsername(), postgres.getPassword()))
+                .target("49")
                 .load();
         assertThat(v49.migrate().migrationsExecuted).isEqualTo(1);
         assertThat(v49.validateWithResult().validationSuccessful).isTrue();

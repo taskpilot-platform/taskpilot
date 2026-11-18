@@ -90,6 +90,12 @@ public class ProjectMeetingEntity {
     @Column(name = "ended_at")
     private Instant endedAt;
 
+    @Column(name = "room_cleanup_at")
+    private Instant roomCleanupAt;
+
+    @Column(name = "ending_requested_at")
+    private Instant endingRequestedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     @Builder.Default
     private Instant createdAt = Instant.now();
