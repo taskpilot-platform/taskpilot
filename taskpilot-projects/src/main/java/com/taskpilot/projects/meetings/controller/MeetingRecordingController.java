@@ -4,8 +4,8 @@ import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.projects.common.entity.MeetingRecordingEntity.Coverage;
 import com.taskpilot.projects.common.entity.MeetingRecordingEntity.Origin;
 import com.taskpilot.projects.common.entity.MeetingRecordingEntity.State;
-import com.taskpilot.projects.meetings.service.MeetingRecordingService;
-import com.taskpilot.projects.meetings.service.MeetingRecordingService.RecordingView;
+import com.taskpilot.projects.meetings.service.ClientMeetingRecordingService;
+import com.taskpilot.projects.meetings.service.ClientMeetingRecordingService.RecordingView;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotBlank;
@@ -25,12 +25,12 @@ import java.util.UUID;
         "/api/projects/{projectId}/meetings/{meetingId}/recordings"})
 @RequiredArgsConstructor
 public class MeetingRecordingController {
-    private final MeetingRecordingService recordings;
+    private final ClientMeetingRecordingService recordings;
 
     public record BeginRequest(@NotNull UUID idempotencyKey, @NotNull Origin origin, @NotNull Coverage coverage) {}
     public record StateRequest(@NotNull State state, @NotNull @PositiveOrZero Long expectedVersion) {}
     public record FinalizeRequest(@NotNull @Positive Long projectFileId, @Positive Long durationMs,
-                                  @NotNull @Positive @Max(MeetingRecordingService.MAX_BYTES) Long byteLength,
+                                  @NotNull @Positive @Max(ClientMeetingRecordingService.MAX_BYTES) Long byteLength,
                                   @NotBlank @jakarta.validation.constraints.Size(max = 96) String mimeType,
                                   @NotBlank @Pattern(regexp = "[A-Fa-f0-9]{64}") String checksum,
                                   @NotNull @PositiveOrZero Long expectedVersion) {}

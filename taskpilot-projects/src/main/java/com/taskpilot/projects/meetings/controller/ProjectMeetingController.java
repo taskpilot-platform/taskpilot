@@ -17,8 +17,11 @@ import com.taskpilot.projects.meetings.service.ProjectMeetingService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -31,6 +34,18 @@ public class ProjectMeetingController {
 
     private final ProjectMeetingService meetingService;
     private final MeetingRecordingService meetingRecordingService;
+
+    public record ParticipantSession(@NotBlank @Size(max = 96) String participantSid) {}
+
+    @PostMapping("/{meetingId}/attendance")
+    public ApiResponse<Void> confirmAttendance(
+            @PathVariable Long projectId,
+            @PathVariable Long meetingId,
+            Authentication authentication,
+            @Valid @RequestBody ParticipantSession session) {
+        meetingService.confirmAttendance(projectId, meetingId, CurrentActorResolver.userId(authentication), session.participantSid());
+        return ApiResponse.ok("Attendance verified", null);
+    }
 
     @Operation(summary = "Create project meeting", description = "Create a new meeting room in the project")
     @PostMapping
@@ -86,19 +101,24 @@ public class ProjectMeetingController {
     public ApiResponse<Void> leaveMeeting(
             @PathVariable Long projectId,
             @PathVariable Long meetingId,
-            Authentication authentication) {
-        meetingService.leaveMeeting(projectId, meetingId, CurrentActorResolver.userId(authentication));
+            Authentication authentication,
+            @Valid @RequestBody(required = false) ParticipantSession session) {
+        meetingService.leaveMeeting(projectId, meetingId, CurrentActorResolver.userId(authentication),
+                session != null ? session.participantSid() : null);
         return ApiResponse.ok("Left meeting successfully", null);
     }
 
     @Operation(summary = "End meeting", description = "End meeting for all participants (Host or Project Manager only)")
     @PatchMapping("/{meetingId}/end")
-    public ApiResponse<ProjectMeetingResponse> endMeeting(
+    public ResponseEntity<ApiResponse<ProjectMeetingResponse>> endMeeting(
             @PathVariable Long projectId,
             @PathVariable Long meetingId,
             Authentication authentication) {
-        return ApiResponse.ok("Meeting ended successfully",
-                meetingService.endMeeting(projectId, meetingId, CurrentActorResolver.userId(authentication)));
+        ProjectMeetingResponse meeting = meetingService.endMeeting(projectId, meetingId, CurrentActorResolver.userId(authentication));
+        if (meeting.status() == ProjectMeetingStatus.ENDING) {
+            return ResponseEntity.accepted().body(ApiResponse.ok("Room termination is pending", meeting));
+        }
+        return ResponseEntity.ok(ApiResponse.ok("Meeting ended", meeting));
     }
 
     @Operation(summary = "Link meeting recording", description = "Attach an uploaded project file as the meeting recording")

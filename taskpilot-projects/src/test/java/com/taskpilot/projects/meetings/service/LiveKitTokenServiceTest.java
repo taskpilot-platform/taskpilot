@@ -62,7 +62,11 @@ class LiveKitTokenServiceTest {
         assertEquals(true, video.get("canPublish"));
         assertEquals(true, video.get("canSubscribe"));
         assertEquals(true, video.get("canPublishData"));
-        assertEquals(true, video.get("roomAdmin"));
+        assertNull(video.get("roomAdmin"));
+        assertNull(video.get("roomCreate"));
+        assertNull(video.get("roomList"));
+        assertNull(video.get("roomRecord"));
+        assertEquals(300_000L, claims.getExpiration().getTime() - claims.getIssuedAt().getTime());
 
         assertNotNull(claims.get("metadata"));
         assertTrue(claims.get("metadata").toString().contains("alice@example.com"));
@@ -87,10 +91,23 @@ class LiveKitTokenServiceTest {
     }
 
     @Test
-    void createAccessToken_emptyCredentials_fallsBackGracefully() {
+    void createAccessToken_emptyCredentials_refusesJoin() {
         ReflectionTestUtils.setField(liveKitTokenService, "apiKey", "");
-        String token = liveKitTokenService.createAccessToken("room-fallback", "user_1", "Test", false, null);
-        assertNotNull(token);
-        assertTrue(token.startsWith("mock-livekit-token-"));
+        assertThrows(com.taskpilot.infrastructure.exception.BusinessException.class,
+                () -> liveKitTokenService.createAccessToken("room-test", "user_1", "Test", false, null));
+    }
+    @Test
+    void webhookRequiresAValidIssuerAndTheExactSignedBody() throws Exception {
+        byte[] body = "{\"event\":\"participant_joined\"}".getBytes(StandardCharsets.UTF_8);
+        byte[] payloadDigest = java.security.MessageDigest.getInstance("SHA-256").digest(body);
+        String signed = Jwts.builder().issuer(apiKey)
+                .claim("sha256", java.util.Base64.getEncoder().encodeToString(payloadDigest))
+                .expiration(new java.util.Date(System.currentTimeMillis() + 60_000))
+                .signWith(Keys.hmacShaKeyFor(apiSecret.getBytes(StandardCharsets.UTF_8)), Jwts.SIG.HS256)
+                .compact();
+
+        assertTrue(liveKitTokenService.verifiesWebhook("Bearer " + signed, body));
+        assertFalse(liveKitTokenService.verifiesWebhook(signed, "different body".getBytes(StandardCharsets.UTF_8)));
+        assertFalse(liveKitTokenService.verifiesWebhook(null, body));
     }
 }

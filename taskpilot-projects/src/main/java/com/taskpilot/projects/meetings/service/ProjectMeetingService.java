@@ -10,9 +10,7 @@ import com.taskpilot.projects.common.entity.ProjectMeetingParticipantEntity;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
 import com.taskpilot.projects.common.enums.MeetingRecordingStatus;
 import com.taskpilot.projects.common.enums.MemberRole;
-import com.taskpilot.projects.common.enums.ProjectMeetingRole;
 import com.taskpilot.projects.common.enums.ProjectMeetingStatus;
-import com.taskpilot.projects.common.repository.ProjectFileRepository;
 import com.taskpilot.projects.common.repository.ProjectMeetingParticipantRepository;
 import com.taskpilot.projects.common.repository.ProjectMeetingRepository;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
@@ -42,10 +40,12 @@ public class ProjectMeetingService {
     private final ProjectMeetingRepository meetingRepository;
     private final ProjectMeetingParticipantRepository participantRepository;
     private final ProjectMemberRepository projectMemberRepository;
-    private final ProjectFileRepository projectFileRepository;
     private final ProjectSecurityService projectSecurityService;
     private final LiveKitTokenService liveKitTokenService;
     private final UserProfilePort userProfilePort;
+    private final MeetingRoomGateway roomGateway;
+    private final MeetingRoomLifecycle roomLifecycle;
+    private final ClientMeetingRecordingService recordingService;
 
     private MeetingRecordingService meetingRecordingService;
 
@@ -59,7 +59,7 @@ public class ProjectMeetingService {
         projectSecurityService.requireActiveProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
-        String roomName = "tp-proj-" + projectId + "-m-" + UUID.randomUUID().toString().substring(0, 8);
+        String roomName = "tp-proj-" + projectId + "-m-" + UUID.randomUUID().toString();
 
         boolean isScheduled = request.scheduledStartTime() != null 
                 && request.scheduledStartTime().isAfter(Instant.now());
@@ -84,15 +84,6 @@ public class ProjectMeetingService {
                 .build();
 
         ProjectMeetingEntity saved = meetingRepository.save(meeting);
-
-        // Record host as the first participant
-        ProjectMeetingParticipantEntity hostParticipant = ProjectMeetingParticipantEntity.builder()
-                .meetingId(saved.getId())
-                .userId(userId)
-                .role(ProjectMeetingRole.HOST)
-                .joinedAt(Instant.now())
-                .build();
-        participantRepository.save(hostParticipant);
 
         return mapToResponse(saved, userId);
     }
@@ -140,36 +131,13 @@ public class ProjectMeetingService {
         projectSecurityService.requireActiveProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
-        ProjectMeetingEntity meeting = meetingRepository.findByIdAndProjectId(meetingId, projectId)
-                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Meeting not found"));
+        ProjectMeetingEntity meeting = meetingRepository.findForUpdate(meetingId, projectId)
+                .orElseThrow(() -> new BusinessException(404, "Meeting not found"));
 
-        if (meeting.getStatus() == ProjectMeetingStatus.ENDED) {
-            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "This meeting has already ended");
+        if (meeting.getStatus() == ProjectMeetingStatus.ENDED || meeting.getStatus() == ProjectMeetingStatus.ENDING) {
+            throw new BusinessException(409, "This meeting has ended or is closing");
         }
-
-        if (meeting.getStatus() == ProjectMeetingStatus.SCHEDULED) {
-            meeting.setStatus(ProjectMeetingStatus.ACTIVE);
-            if (meeting.getStartedAt() == null) {
-                meeting.setStartedAt(Instant.now());
-            }
-            meetingRepository.save(meeting);
-        }
-
         boolean isHost = Objects.equals(meeting.getHostId(), userId) || isProjectManager(projectId, userId);
-
-        // Record participant entry if not already actively joined
-        Optional<ProjectMeetingParticipantEntity> existing = participantRepository
-                .findFirstByMeetingIdAndUserIdAndLeftAtIsNullOrderByJoinedAtDesc(meetingId, userId);
-
-        if (existing.isEmpty()) {
-            ProjectMeetingParticipantEntity participant = ProjectMeetingParticipantEntity.builder()
-                    .meetingId(meetingId)
-                    .userId(userId)
-                    .role(isHost ? ProjectMeetingRole.HOST : ProjectMeetingRole.PARTICIPANT)
-                    .joinedAt(Instant.now())
-                    .build();
-            participantRepository.save(participant);
-        }
 
         UserProfileLiteDto profile = userProfilePort.findLiteById(userId).orElse(null);
         String displayName = profile != null && profile.fullName() != null && !profile.fullName().isBlank()
@@ -179,7 +147,6 @@ public class ProjectMeetingService {
 
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("userId", userId);
-        metadata.put("email", actor.currentEmail());
         metadata.put("role", isHost ? "HOST" : "PARTICIPANT");
         if (profile != null && profile.avatarUrl() != null) {
             metadata.put("avatarUrl", profile.avatarUrl());
@@ -192,6 +159,10 @@ public class ProjectMeetingService {
                 isHost,
                 metadata
         );
+
+        if (roomGateway.ensureRoom(meeting.getRoomName()) != MeetingRoomGateway.Outcome.SUCCESS) {
+            throw new BusinessException(503, "LiveKit is unavailable");
+        }
 
         ProjectMeetingResponse meetingResponse = mapToResponse(meeting, userId);
 
@@ -206,78 +177,22 @@ public class ProjectMeetingService {
                 .build();
     }
 
-    @Transactional
-    public void leaveMeeting(Long projectId, Long meetingId, Long userId) {
-        projectSecurityService.validateMember(projectId, userId);
-        meetingRepository.findByIdAndProjectId(meetingId, projectId)
-                .orElseThrow(() -> new BusinessException(404, "Meeting not found"));
-
-        participantRepository.findFirstByMeetingIdAndUserIdAndLeftAtIsNullOrderByJoinedAtDesc(meetingId, userId)
-                .ifPresent(p -> {
-                    p.setLeftAt(Instant.now());
-                    participantRepository.save(p);
-                });
+    public void leaveMeeting(Long projectId, Long meetingId, Long userId, String participantSid) {
+        roomLifecycle.leave(projectId, meetingId, userId, participantSid);
     }
 
-    @Transactional
+    public void confirmAttendance(Long projectId, Long meetingId, Long userId, String participantSid) {
+        roomLifecycle.confirmAttendance(projectId, meetingId, userId, participantSid);
+    }
+
     public ProjectMeetingResponse endMeeting(Long projectId, Long meetingId, Long userId) {
-        projectSecurityService.requireActiveProject(projectId);
-        projectSecurityService.validateMember(projectId, userId);
-
-        ProjectMeetingEntity meeting = meetingRepository.findByIdAndProjectId(meetingId, projectId)
-                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Meeting not found"));
-
-        boolean isHost = Objects.equals(meeting.getHostId(), userId) || isProjectManager(projectId, userId);
-        if (!isHost) {
-            throw new BusinessException(HttpStatus.FORBIDDEN.value(), "Only the meeting host or project manager can end the meeting");
-        }
-
-        if (meeting.getStatus() != ProjectMeetingStatus.ENDED) {
-            Instant now = Instant.now();
-            // Targeted update touches ONLY status/endedAt/updatedAt so a concurrent webhook updating recordingStatus is never clobbered
-            meetingRepository.markMeetingEnded(meetingId, now, now);
-            meeting.setStatus(ProjectMeetingStatus.ENDED);
-            meeting.setEndedAt(now);
-
-            // Close all active participants
-            List<ProjectMeetingParticipantEntity> activeParticipants =
-                    participantRepository.findByMeetingIdAndLeftAtIsNullOrderByJoinedAtAsc(meetingId);
-            activeParticipants.forEach(p -> p.setLeftAt(now));
-            participantRepository.saveAll(activeParticipants);
-
-            // Best-effort stop active cloud Egress recording so LiveKit Cloud minutes are not leaked
-            if (meetingRecordingService != null) {
-                meetingRecordingService.stopRecordingIfActive(meeting);
-                // Re-fetch because stopRecordingIfActive updates recordingStatus/recordingFileId via modifying JPQL
-                meeting = meetingRepository.findByIdAndProjectId(meetingId, projectId).orElse(meeting);
-            }
-        }
-
-        return mapToResponse(meeting, userId);
+        roomLifecycle.requestEnd(projectId, meetingId, userId);
+        return getMeetingById(projectId, meetingId, userId);
     }
 
-    @Transactional
     public ProjectMeetingResponse updateRecordingFile(Long projectId, Long meetingId, Long userId, Long recordingFileId) {
-        projectSecurityService.requireActiveProject(projectId);
-        projectSecurityService.validateMember(projectId, userId);
-
-        ProjectMeetingEntity meeting = meetingRepository.findByIdAndProjectId(meetingId, projectId)
-                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Meeting not found"));
-        boolean isHost = Objects.equals(meeting.getHostId(), userId) || isProjectManager(projectId, userId);
-        if (meeting.getRecordingFileId() != null && !isHost) {
-            throw new BusinessException(HttpStatus.FORBIDDEN.value(),
-                    "Only the meeting host or project manager can overwrite an existing recording");
-        }
-        projectFileRepository.findByIdAndProjectId(recordingFileId, projectId)
-                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Recording file not found in this project"));
-
-        // Recordings are uploaded and linked right as or after the meeting ends.
-        meeting.setRecordingFileId(recordingFileId);
-        meeting.setRecordingEnabled(true);
-        meeting.setRecordingStatus(MeetingRecordingStatus.COMPLETED);
-        meeting.setRecordingError(null);
-        meeting.setBackupStorageUsed(false);
-        return mapToResponse(meetingRepository.save(meeting), userId);
+        recordingService.linkLegacy(projectId, meetingId, userId, recordingFileId);
+        return getMeetingById(projectId, meetingId, userId);
     }
 
     @Transactional(readOnly = true)

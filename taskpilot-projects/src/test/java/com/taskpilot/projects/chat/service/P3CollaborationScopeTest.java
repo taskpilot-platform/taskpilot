@@ -9,6 +9,9 @@ import com.taskpilot.projects.common.service.ProjectSecurityService;
 import com.taskpilot.projects.meetings.service.*;
 import org.junit.jupiter.api.Test;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionTemplate;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -31,10 +34,17 @@ class P3CollaborationScopeTest {
     void foreignMeetingCannotBeUsedForLeaveOrParticipantEnumeration() {
         var meetings = mock(ProjectMeetingRepository.class);
         var participants = mock(ProjectMeetingParticipantRepository.class);
-        var service = new ProjectMeetingService(meetings, participants, mock(ProjectMemberRepository.class),
-                mock(ProjectFileRepository.class), mock(ProjectSecurityService.class),
-                mock(LiveKitTokenService.class), mock(UserProfilePort.class));
-        assertThrows(BusinessException.class, () -> service.leaveMeeting(1L, 99L, 7L));
+        var members = mock(ProjectMemberRepository.class);
+        var security = mock(ProjectSecurityService.class);
+        var provider = mock(MeetingRoomGateway.class);
+        var txManager = mock(PlatformTransactionManager.class);
+        when(txManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+        var lifecycle = new MeetingRoomLifecycle(meetings, participants, members, security, provider,
+                new TransactionTemplate(txManager));
+        var service = new ProjectMeetingService(meetings, participants, members, security,
+                mock(LiveKitTokenService.class), mock(UserProfilePort.class), provider, lifecycle,
+                mock(MeetingRecordingService.class));
+        assertThrows(BusinessException.class, () -> service.leaveMeeting(1L, 99L, 7L, "PA_test"));
         assertThrows(BusinessException.class, () -> service.getParticipants(1L, 99L, 7L));
         verifyNoInteractions(participants);
     }

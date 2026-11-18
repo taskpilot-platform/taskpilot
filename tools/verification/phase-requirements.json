@@ -1399,6 +1399,38 @@
           "measuredLoadKeepsFixedScaleAndMissingSkillsAreNeutral"
         ]
       }
+    },
+    "P7": {
+      "required": {
+        "com.taskpilot.projects.files.service.ProjectFileRecordingAttachmentTest": [
+          "aRetriedRecordingUploadCannotAttachASecondProjectFile"
+        ],
+        "com.taskpilot.app.migration.MigrationSchemaIntegrationTest": [
+          "p7UpgradeKeepsLegacyRecordingLinksAndExpiresUnverifiedActiveAttendance"
+        ],
+        "com.taskpilot.projects.meetings.service.LiveKitTokenServiceTest": [
+          "createAccessToken_generatesValidLiveKitJwt",
+          "createAccessToken_emptyCredentials_refusesJoin",
+          "webhookRequiresAValidIssuerAndTheExactSignedBody"
+        ],
+        "com.taskpilot.projects.meetings.service.ProjectMeetingServiceTest": [
+          "createMeeting_success",
+          "joinMeeting_success",
+          "endMeetingReflectsPendingProviderTermination",
+          "legacyLinkUsesTheSameRecordingScope"
+        ],
+        "com.taskpilot.projects.meetings.service.MeetingRoomLifecycleTest": [
+          "aClientClaimAloneDoesNotStartOrJoinAScheduledMeeting",
+          "aConfirmedSessionReplacesTheOldSessionAndAStaleLeaveCannotCloseIt",
+          "providerFailureLeavesDurableEndingAndNotFoundCompletesItOnRetry"
+        ],
+        "com.taskpilot.projects.meetings.service.MeetingRecordingServiceTest": [
+          "aForeignUploaderCannotAttachALegitimateProjectFile",
+          "aRepeatedFinalizationReturnsTheCommittedReceiptButDoesNotAcceptADifferentFile",
+          "memberHistoryContainsReadyFilesAndOmitsAnotherRecordersPendingClip",
+          "onlyProviderVerifiedBytesProduceAReadyFileThatAnotherMemberCanList"
+        ]
+      }
     }
   }
 }

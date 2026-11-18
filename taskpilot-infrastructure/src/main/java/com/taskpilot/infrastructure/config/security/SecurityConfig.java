@@ -59,6 +59,7 @@ public class SecurityConfig {
                                                 .dispatcherTypeMatchers(DispatcherType.ASYNC)
                                                 .permitAll()
                                                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                                                .requestMatchers(HttpMethod.POST, "/api/v1/integrations/livekit/room-events").permitAll()
                                                 .requestMatchers("/actuator/health").permitAll()
                                                 .requestMatchers("/actuator/**").hasRole("ADMIN")
                                                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
