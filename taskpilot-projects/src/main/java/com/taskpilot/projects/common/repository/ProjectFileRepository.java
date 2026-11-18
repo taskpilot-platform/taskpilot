@@ -33,6 +33,7 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFileEntity, 
     Optional<ProjectFileEntity> findBySourceEgressId(String sourceEgressId);
 
     Optional<ProjectFileEntity> findByProjectIdAndStorageKey(Long projectId, String storageKey);
+    boolean existsByProjectIdAndUploaderIdAndOriginalNameIn(Long projectId, Long uploaderId, List<String> originalNames);
 
     long countByProjectId(Long projectId);
 
