@@ -1,9 +1,13 @@
 package com.taskpilot.app;
 
 import com.taskpilot.ai.entity.ChatMessageEntity;
+import com.taskpilot.ai.repository.AdaptiveReviewedOutcomeRepository;
 import com.taskpilot.ai.repository.AiLogRepository;
 import com.taskpilot.ai.repository.ChatMessageRepository;
 import com.taskpilot.ai.repository.ChatSessionRepository;
+import com.taskpilot.ai.repository.RecommendationDecisionEventRepository;
+import com.taskpilot.ai.repository.RecommendationSnapshotRepository;
+import com.taskpilot.ai.repository.RecommendationTaskOutcomeRepository;
 import com.taskpilot.infrastructure.util.JpaSortUtils;
 import com.taskpilot.projects.common.repository.*;
 import com.taskpilot.users.common.entity.NotificationEntity;
@@ -31,6 +35,10 @@ class SpringDataModernizationTest {
             ChatMessageRepository.class,
             ChatSessionRepository.class,
             AiLogRepository.class,
+            RecommendationSnapshotRepository.class,
+            RecommendationDecisionEventRepository.class,
+            AdaptiveReviewedOutcomeRepository.class,
+            RecommendationTaskOutcomeRepository.class,
             CommentRepository.class,
             ProjectMemberRepository.class,
             TaskRepository.class,
