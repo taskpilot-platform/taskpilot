@@ -21,12 +21,13 @@ class P3ResourceAuthorizationTest {
         AiAuditPort audit = mock(AiAuditPort.class);
         StreamingChatModel model = mock(StreamingChatModel.class);
         HeuristicStrategyFactory strategies = mock(HeuristicStrategyFactory.class);
-        AutoAssignmentService service = new AutoAssignmentService(members, skills, audit, users, projects, strategies, model);
+        TaskPerformanceReadPort metrics = mock(TaskPerformanceReadPort.class);
+        AutoAssignmentService service = new AutoAssignmentService(members, metrics, skills, audit, users, projects, strategies, model);
         BusinessException denied = assertThrows(BusinessException.class,
                 () -> service.recommendCandidates(91L, List.of("Java"), 3, 12L, Set.of(), Set.of()));
         assertEquals(403, denied.getStatus());
         verify(members).isProjectMember(91L, 12L);
         verify(members, never()).findProjectMembers(any());
-        verifyNoInteractions(users, skills, projects, audit, model, strategies);
+        verifyNoInteractions(metrics, users, skills, projects, audit, model, strategies);
     }
 }

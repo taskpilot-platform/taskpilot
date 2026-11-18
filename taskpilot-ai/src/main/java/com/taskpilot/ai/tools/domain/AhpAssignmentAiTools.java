@@ -196,12 +196,6 @@ public class AhpAssignmentAiTools {
         String resolvedSkills = hasText(skills) ? skills : task.requiredSkills();
         boolean shouldPersistProvidedSkills = hasText(skills) && !hasText(task.requiredSkills());
 
-        if (!hasText(resolvedSkills)) {
-            return new RecommendAndAssignResult(false, resolvedTaskId, resolvedProjectId, null, null, reason,
-                    null, null,
-                    "Task " + taskId + " is missing required skills. Please provide skills before assigning.");
-        }
-
         int parsedDifficulty = task.difficultyLevel() != null ? task.difficultyLevel() : 5;
         if (difficulty != null && !difficulty.isBlank()) {
             try { parsedDifficulty = Integer.parseInt(difficulty.trim()); } catch (Exception ignored) {}
@@ -267,7 +261,7 @@ public class AhpAssignmentAiTools {
     }
 
 
-    @Tool("Recommend ranked candidates for a project based on skills and difficulty (1-10, default is 5). Read-only.")
+    @Tool("Recommend ranked candidates for a project using declared skills, active project tasks and reviewed quality. Difficulty is descriptive. Read-only.")
     public AutoAssignmentResponse recommendAssignmentCandidates(
             @P("The project ID") String projectId,
             @P("Comma-separated list of required skill names") String skills,
@@ -301,10 +295,6 @@ public class AhpAssignmentAiTools {
         TaskDetailDto task = taskCommandPort.getTaskDetails(resolvedTaskId, userId);
         Long projectId = task.projectId();
         String resolvedSkills = hasText(skills) ? skills : task.requiredSkills();
-        if (!hasText(resolvedSkills)) {
-            throw new com.taskpilot.infrastructure.exception.BusinessException(400,
-                    "Task requirements are missing; provide required skills before requesting recommendations");
-        }
 
         Set<Long> includeIds = parseIdSet(includeMemberIds);
         includeIds.addAll(resolveProjectMemberIdsByNames(projectInsightsPort, projectId, includeMemberNames, userId));
@@ -332,12 +322,7 @@ public class AhpAssignmentAiTools {
         if ((explanation == null || explanation.isBlank()) && isTruthy(excludeCurrentAssignee) && task.assigneeName() != null) {
             explanation = "Excluded current assignee " + task.assigneeName() + " for this recommendation.";
         }
-        return AutoAssignmentResponse.builder()
-                .projectId(response.projectId())
-                .requiredSkills(response.requiredSkills())
-                .candidates(response.candidates())
-                .aiExplanation(explanation)
-                .build();
+        return response.toBuilder().aiExplanation(explanation).build();
     }
 
 
