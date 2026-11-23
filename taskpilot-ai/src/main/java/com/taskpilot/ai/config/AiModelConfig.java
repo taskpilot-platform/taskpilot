@@ -1,5 +1,6 @@
 package com.taskpilot.ai.config;
 
+import com.taskpilot.ai.routing.CopilotRoutingProperties;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.googleai.GeminiMode;
@@ -10,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -17,9 +19,11 @@ import org.springframework.context.annotation.Primary;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 
 @Slf4j
 @Configuration
+@EnableConfigurationProperties(CopilotRoutingProperties.class)
 public class AiModelConfig {
 
         @Value("${ai.gemini.api-key}")
@@ -77,34 +81,34 @@ public class AiModelConfig {
         @Value("${ai.openrouter.base-url:https://openrouter.ai/api/v1}")
         private String openRouterBaseUrl;
 
-        @Value("${ai.openrouter.reasoning-model:google/gemma-4-31b-it:free}")
+        @Value("${ai.openrouter.reasoning-model:}")
         private String openRouterReasoningModelName;
 
-        @Value("${ai.openrouter.reasoning-fallback1-model:nvidia/nemotron-3-ultra-550b-a55b:free}")
+        @Value("${ai.openrouter.reasoning-fallback1-model:}")
         private String openRouterReasoningFallback1ModelName;
 
-        @Value("${ai.openrouter.reasoning-fallback2-model:poolside/laguna-m.1:free}")
+        @Value("${ai.openrouter.reasoning-fallback2-model:}")
         private String openRouterReasoningFallback2ModelName;
 
-        @Value("${ai.openrouter.reasoning-fallback3-model:openai/gpt-oss-120b:free}")
+        @Value("${ai.openrouter.reasoning-fallback3-model:}")
         private String openRouterReasoningFallback3ModelName;
 
-        @Value("${ai.openrouter.reasoning-fallback4-model:moonshotai/kimi-k2.6:free}")
+        @Value("${ai.openrouter.reasoning-fallback4-model:}")
         private String openRouterReasoningFallback4ModelName;
 
-        @Value("${ai.openrouter.reasoning-fallback5-model:z-ai/glm-4.5-air:free}")
+        @Value("${ai.openrouter.reasoning-fallback5-model:}")
         private String openRouterReasoningFallback5ModelName;
 
-        @Value("${ai.openrouter.reasoning-fallback6-model:poolside/laguna-xs.2:free}")
+        @Value("${ai.openrouter.reasoning-fallback6-model:}")
         private String openRouterReasoningFallback6ModelName;
 
-        @Value("${ai.openrouter.reasoning-fallback7-model:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free}")
+        @Value("${ai.openrouter.reasoning-fallback7-model:}")
         private String openRouterReasoningFallback7ModelName;
 
-        @Value("${ai.openrouter.reasoning-fallback8-model:google/gemma-4-26b-a4b-it:free}")
+        @Value("${ai.openrouter.reasoning-fallback8-model:}")
         private String openRouterReasoningFallback8ModelName;
 
-        @Value("${ai.openrouter.reasoning-fallback9-model:openai/gpt-oss-20b:free}")
+        @Value("${ai.openrouter.reasoning-fallback9-model:}")
         private String openRouterReasoningFallback9ModelName;
 
         @Value("${ai.openrouter.reasoning-fallback10-model:}")
@@ -302,6 +306,7 @@ public class AiModelConfig {
                                 .modelName(modelName)
                                 .temperature(0.3)
                                 .timeout(Duration.ofSeconds(geminiTimeoutSeconds))
+                                .maxRetries(0)
                                 .parallelToolCalls(true)
                                 .build();
                 return register(model, "GEMINI", modelName);
@@ -352,6 +357,7 @@ public class AiModelConfig {
                                 .modelName(modelName)
                                 .temperature(0.4)
                                 .timeout(Duration.ofSeconds(timeoutSeconds * 2))
+                                .maxRetries(0)
                                 .parallelToolCalls(true)
                                 .build();
         }
@@ -427,48 +433,56 @@ public class AiModelConfig {
 
         @Bean("openRouterReasoningModel")
         @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        @ConditionalOnExpression("'${ai.openrouter.reasoning-model:}'.trim().length() > 0")
         public StreamingChatModel openRouterReasoningModel() {
                 return openRouterReasoningModel(openRouterReasoningModelName, true);
         }
 
         @Bean("openRouterReasoningFallback1Model")
         @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        @ConditionalOnExpression("'${ai.openrouter.reasoning-fallback1-model:}'.trim().length() > 0")
         public StreamingChatModel openRouterReasoningFallback1Model() {
                 return openRouterReasoningModel(openRouterReasoningFallback1ModelName, true);
         }
 
         @Bean("openRouterReasoningFallback2Model")
         @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        @ConditionalOnExpression("'${ai.openrouter.reasoning-fallback2-model:}'.trim().length() > 0")
         public StreamingChatModel openRouterReasoningFallback2Model() {
                 return openRouterReasoningModel(openRouterReasoningFallback2ModelName, true);
         }
 
         @Bean("openRouterReasoningFallback3Model")
         @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        @ConditionalOnExpression("'${ai.openrouter.reasoning-fallback3-model:}'.trim().length() > 0")
         public StreamingChatModel openRouterReasoningFallback3Model() {
                 return openRouterReasoningModel(openRouterReasoningFallback3ModelName, true);
         }
 
         @Bean("openRouterReasoningFallback4Model")
         @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        @ConditionalOnExpression("'${ai.openrouter.reasoning-fallback4-model:}'.trim().length() > 0")
         public StreamingChatModel openRouterReasoningFallback4Model() {
                 return openRouterReasoningModel(openRouterReasoningFallback4ModelName, true);
         }
 
         @Bean("openRouterReasoningFallback5Model")
         @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        @ConditionalOnExpression("'${ai.openrouter.reasoning-fallback5-model:}'.trim().length() > 0")
         public StreamingChatModel openRouterReasoningFallback5Model() {
                 return openRouterReasoningModel(openRouterReasoningFallback5ModelName, true);
         }
 
         @Bean("openRouterReasoningFallback6Model")
         @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        @ConditionalOnExpression("'${ai.openrouter.reasoning-fallback6-model:}'.trim().length() > 0")
         public StreamingChatModel openRouterReasoningFallback6Model() {
                 return openRouterReasoningModel(openRouterReasoningFallback6ModelName, true);
         }
 
         @Bean("openRouterReasoningFallback7Model")
         @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        @ConditionalOnExpression("'${ai.openrouter.reasoning-fallback7-model:}'.trim().length() > 0")
         public StreamingChatModel openRouterReasoningFallback7Model() {
                 return openRouterReasoningModel(openRouterReasoningFallback7ModelName, true);
         }
@@ -496,6 +510,7 @@ public class AiModelConfig {
 
         @Bean("openRouterReasoningTextModel")
         @ConditionalOnProperty(value = "ai.openrouter.enabled", havingValue = "true")
+        @ConditionalOnExpression("'${ai.openrouter.reasoning-model:}'.trim().length() > 0")
         public StreamingChatModel openRouterReasoningTextModel() {
                 return openRouterReasoningModel(openRouterReasoningModelName, false);
         }
@@ -525,6 +540,7 @@ public class AiModelConfig {
                                         .modelName(modelName)
                                         .temperature(0.4)
                                         .parallelToolCalls(true)
+                                        .maxRetries(0)
                                         .timeout(Duration.ofSeconds(25))
                                         .build();
                 }
@@ -533,8 +549,26 @@ public class AiModelConfig {
                                 .baseUrl(openRouterBaseUrl)
                                 .modelName(modelName)
                                 .temperature(0.4)
+                                .maxRetries(0)
                                 .timeout(Duration.ofSeconds(25))
                                 .build();
+        }
+
+        public Optional<Boolean> hasConfiguredKeys(String provider) {
+                if (provider == null || provider.isBlank()) {
+                        return Optional.of(false);
+                }
+                String normalized = provider.trim().toUpperCase(java.util.Locale.ROOT);
+                if ("GROQ".equals(normalized)) {
+                        return Optional.of(!groqApiKeyPool().isEmpty());
+                }
+                if ("OPENROUTER".equals(normalized)) {
+                        return Optional.of(!openRouterApiKeyPool().isEmpty());
+                }
+                if ("GEMINI".equals(normalized)) {
+                        return Optional.of(geminiApiKey != null && !geminiApiKey.isBlank());
+                }
+                return Optional.of(false);
         }
 
         private List<String> openRouterApiKeyPool() {

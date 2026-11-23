@@ -172,9 +172,8 @@ ai:
   gemini:
     api-key: ${GEMINI_API_KEY:}
     api-keys: ${GEMINI_API_KEYS:}
-    # Quality-first primary. Fallbacks prefer models that currently have text-out quota.
+    # Copilot Gemini fallback order. All verified models in ai.copilot.verified-models are tried in this order.
     model-name: ${AI_GEMINI_MODEL:gemini-3.5-flash}
-    # Queue: primary -> callable text-out fallbacks -> quota-limited fallbacks -> external fallback.
     fallback1-model: ${AI_GEMINI_FALLBACK1_MODEL:gemini-2.5-flash}
     fallback2-model: ${AI_GEMINI_FALLBACK2_MODEL:gemini-3.1-flash-lite}
     fallback3-model: ${AI_GEMINI_FALLBACK3_MODEL:gemini-2.5-flash-lite}
@@ -182,7 +181,9 @@ ai:
     fallback5-model: ${AI_GEMINI_FALLBACK5_MODEL:gemini-3.5-flash-lite}
     fallback6-model: ${AI_GEMINI_FALLBACK6_MODEL:gemini-3.8-flash}
     fallback7-model: ${AI_GEMINI_FALLBACK7_MODEL:gemini-3.1-pro-preview}
+    # Retained for backward compatibility; Copilot candidate chain does not truncate verified Gemini models.
     waterfall-max-attempts: ${AI_GEMINI_WATERFALL_MAX_ATTEMPTS:2}
+    # true: allow verified Gemini models in tool-enabled Copilot chains (does not mean Gemini-first).
     use-for-tools: ${AI_GEMINI_USE_FOR_TOOLS:true}
     timeout-seconds: ${AI_GEMINI_TIMEOUT_SECONDS:180}
     embedding-model: ${AI_GEMINI_EMBEDDING_MODEL:gemini-embedding-2}
@@ -205,21 +206,48 @@ ai:
     gatekeeper-model: ${AI_GROQ_GATEKEEPER_MODEL:openai/gpt-oss-20b}
 
   openrouter:
+    # Enabled because nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free passed both tool-call and tool-output probe.
     enabled: ${AI_OPENROUTER_ENABLED:true}
+    allow-paid-models: ${AI_OPENROUTER_ALLOW_PAID_MODELS:false}
     api-key: ${OPENROUTER_API_KEY:}
     api-keys: ${OPENROUTER_API_KEYS:}
     base-url: ${AI_OPENROUTER_BASE_URL:https://openrouter.ai/api/v1}
-    reasoning-model: ${AI_OPENROUTER_REASONING_MODEL:nvidia/nemotron-3-super-120b-a12b:free}
-    reasoning-fallback1-model: ${AI_OPENROUTER_REASONING_FALLBACK1_MODEL:nex-agi/nex-n2-pro:free}
-    reasoning-fallback2-model: ${AI_OPENROUTER_REASONING_FALLBACK2_MODEL:openai/gpt-oss-120b:free}
-    reasoning-fallback3-model: ${AI_OPENROUTER_REASONING_FALLBACK3_MODEL:z-ai/glm-4.5-air:free}
-    reasoning-fallback4-model: ${AI_OPENROUTER_REASONING_FALLBACK4_MODEL:poolside/laguna-m.1:free}
-    reasoning-fallback5-model: ${AI_OPENROUTER_REASONING_FALLBACK5_MODEL:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free}
-    reasoning-fallback6-model: ${AI_OPENROUTER_REASONING_FALLBACK6_MODEL:google/gemma-4-26b-a4b-it:free}
-    reasoning-fallback7-model: ${AI_OPENROUTER_REASONING_FALLBACK7_MODEL:openai/gpt-oss-20b:free}
-    reasoning-fallback8-model: ${AI_OPENROUTER_REASONING_FALLBACK8_MODEL:poolside/laguna-xs.2:free}
+    reasoning-model: ${AI_OPENROUTER_REASONING_MODEL:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free}
+    reasoning-fallback1-model: ${AI_OPENROUTER_REASONING_FALLBACK1_MODEL:}
+    reasoning-fallback2-model: ${AI_OPENROUTER_REASONING_FALLBACK2_MODEL:}
+    reasoning-fallback3-model: ${AI_OPENROUTER_REASONING_FALLBACK3_MODEL:}
+    reasoning-fallback4-model: ${AI_OPENROUTER_REASONING_FALLBACK4_MODEL:}
+    reasoning-fallback5-model: ${AI_OPENROUTER_REASONING_FALLBACK5_MODEL:}
+    reasoning-fallback6-model: ${AI_OPENROUTER_REASONING_FALLBACK6_MODEL:}
+    reasoning-fallback7-model: ${AI_OPENROUTER_REASONING_FALLBACK7_MODEL:}
+    reasoning-fallback8-model: ${AI_OPENROUTER_REASONING_FALLBACK8_MODEL:}
     reasoning-fallback9-model: ${AI_OPENROUTER_REASONING_FALLBACK9_MODEL:}
     reasoning-fallback10-model: ${AI_OPENROUTER_REASONING_FALLBACK10_MODEL:}
+
+  copilot:
+    turn:
+      # Shared turn deadline in seconds across all tool rounds and model failovers.
+      deadline-seconds: ${AI_COPILOT_TURN_DEADLINE_SECONDS:60}
+      # 0 = uncapped (equals eligible chain length).
+      max-model-attempts-cap: ${AI_COPILOT_TURN_MAX_MODEL_ATTEMPTS_CAP:0}
+    verified-models:
+      # Verified via CopilotModelProbeTest against TaskPilot's OpenAI-compatible adapter (step1 tool call + step2 flattened tool output).
+      - { provider: GROQ,       model: openai/gpt-oss-120b,                                  tools: true, verified-by: copilot-model-probe }
+      - { provider: GEMINI,     model: gemini-3.5-flash,                                     tools: true, verified-by: copilot-model-probe }
+      - { provider: GEMINI,     model: gemini-2.5-flash,                                     tools: true, verified-by: copilot-model-probe }
+      - { provider: GEMINI,     model: gemini-3.1-flash-lite,                                tools: true, verified-by: copilot-model-probe }
+      - { provider: GEMINI,     model: gemini-3.5-flash-lite,                                tools: true, verified-by: copilot-model-probe }
+      - { provider: OPENROUTER, model: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free,   tools: true, verified-by: copilot-model-probe }
+    blocked-models:
+      # OpenRouter slugs confirmed 404 in UAT / absent from public catalog.
+      - { provider: OPENROUTER, model: nvidia/nemotron-3-super-120b-a12b:free, reason: uat-404-not-in-catalog }
+      - { provider: OPENROUTER, model: nex-agi/nex-n2-pro:free,                reason: uat-404-not-in-catalog }
+      - { provider: OPENROUTER, model: openai/gpt-oss-120b:free,               reason: uat-404-not-in-catalog }
+      - { provider: OPENROUTER, model: z-ai/glm-4.5-air:free,                  reason: uat-404-not-in-catalog }
+      - { provider: OPENROUTER, model: poolside/laguna-m.1:free,               reason: uat-404-not-in-catalog }
+      - { provider: OPENROUTER, model: openai/gpt-oss-20b:free,                reason: uat-404-not-in-catalog }
+      - { provider: OPENROUTER, model: poolside/laguna-xs.2:free,              reason: uat-404-not-in-catalog }
+      - { provider: OPENROUTER, model: moonshotai/kimi-k2.6:free,              reason: not-in-catalog }
 
   model:
     timeout-seconds: ${AI_MODEL_TIMEOUT:60}
