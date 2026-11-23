@@ -1,5 +1,9 @@
 # TaskPilot repository instructions
 
+## Remediation work
+
+Use the [shared remediation plan](docs/development/remediation/PLAN.md) and [handoff status](docs/development/remediation/STATUS.md) to identify the current phase, repository dependencies, and verification for remediation work. Coordinate changes that affect both repositories as part of the same work item.
+
 ## Database and Flyway work
 
 When a task changes schema/entity mappings, creates/reviews migrations, resolves Flyway errors, or starts a branch against the shared DB, first read [the standalone Flyway team skill](.agents/skills/taskpilot-flyway-team/SKILL.md). No Superpowers installation is required.
