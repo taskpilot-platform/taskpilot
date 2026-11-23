@@ -10,12 +10,14 @@ import com.taskpilot.ai.service.AiLogService;
 import com.taskpilot.ai.service.ChatStreamStatusService;
 import com.taskpilot.ai.service.SessionChatMemoryService;
 import com.taskpilot.ai.streaming.engine.DirectOpenAiModelClient;
+import com.taskpilot.infrastructure.observability.TaskPilotMetrics;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -38,8 +40,14 @@ public class SessionPostProcessor {
     private final SessionChatMemoryService sessionChatMemoryService;
     private final ChatStreamStatusService chatStreamStatusService;
     private final DirectOpenAiModelClient directModelClient;
+    private TaskPilotMetrics metrics = TaskPilotMetrics.noop();
 
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+
+    @Autowired(required = false)
+    public void setMetrics(TaskPilotMetrics metrics) {
+        this.metrics = metrics != null ? metrics : TaskPilotMetrics.noop();
+    }
 
     @PreDestroy
     public void shutdown() {
@@ -171,7 +179,7 @@ public class SessionPostProcessor {
             long durationMs,
             String clientMessageId,
             String diagnosticErrorMessage) {
-        executor.submit(() -> {
+        executor.submit(metrics.wrapWithCurrentContext(() -> {
             try {
                 ChatMessageEntity assistantMsg = messageRepository.save(ChatMessageEntity.builder()
                         .sessionId(sessionId)
@@ -203,6 +211,6 @@ public class SessionPostProcessor {
             } catch (Exception e) {
                 log.error("[SSE] Exception in async finalize for session {}: {}", sessionId, e.getMessage(), e);
             }
-        });
+        }));
     }
 }

@@ -2,6 +2,7 @@ package com.taskpilot.projects.files.service;
 
 import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.infrastructure.exception.BusinessException;
+import com.taskpilot.infrastructure.observability.TaskPilotMetrics;
 import com.taskpilot.infrastructure.storage.EgressS3StorageService;
 import com.taskpilot.infrastructure.storage.googledrive.GoogleDriveService;
 import com.taskpilot.projects.common.entity.ProjectFileEntity;
@@ -69,6 +70,12 @@ public class RecordingArchiveWorker {
     private final long retryCooldownMinutes;
     private final int chunkSizeBytes;
     private final long staleArchivingMinutes;
+    private TaskPilotMetrics metrics = TaskPilotMetrics.noop();
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setMetrics(TaskPilotMetrics metrics) {
+        this.metrics = metrics != null ? metrics : TaskPilotMetrics.noop();
+    }
 
     public RecordingArchiveWorker(
             ProjectFileRepository projectFileRepository,
@@ -225,6 +232,15 @@ public class RecordingArchiveWorker {
     }
 
     boolean archiveSingleFile(ProjectFileEntity file, List<FileArchiveStatus> claimableStatuses) {
+        return Boolean.TRUE.equals(metrics.observe(
+                "taskpilot.archive.transfer",
+                "storage",
+                "b2_to_gdrive",
+                () -> doArchiveSingleFile(file, claimableStatuses)
+        ));
+    }
+
+    private boolean doArchiveSingleFile(ProjectFileEntity file, List<FileArchiveStatus> claimableStatuses) {
         Long fileId = file.getId();
         String b2Key = file.getStorageKey();
 
@@ -236,6 +252,7 @@ public class RecordingArchiveWorker {
             return false;
         }
 
+        long startedAt = System.currentTimeMillis();
         String uploadedDriveFileId = null;
         try {
             EgressS3StorageService.ObjectMetadata b2Meta = egressS3StorageService.headObject(b2Key);
@@ -283,6 +300,7 @@ public class RecordingArchiveWorker {
                 log.error("FileId={} archive verification mismatch: {}", fileId, mismatch);
                 safeDeleteDriveOrphan(uploadedDriveFileId);
                 recordArchiveFailure(fileId, mismatch);
+                metrics.recordArchiveTransfer("integrity_mismatch", 0L, System.currentTimeMillis() - startedAt);
                 return false;
             }
 
@@ -299,6 +317,7 @@ public class RecordingArchiveWorker {
             if (updated == null || updated == 0) {
                 log.warn("FileId={} DB completion update affected 0 rows; keeping B2 object intact", fileId);
                 safeDeleteDriveOrphan(verifiedDriveId);
+                metrics.recordArchiveTransfer("failed", 0L, System.currentTimeMillis() - startedAt);
                 return false;
             }
 
@@ -308,10 +327,12 @@ public class RecordingArchiveWorker {
             try {
                 egressS3StorageService.deleteFileOrThrow(b2Key);
             } catch (Exception b2CleanupEx) {
+                metrics.recordArchiveTransfer("b2_cleanup_failed", 0L, -1L);
                 log.warn("Archived fileId={} to private Google Drive ({}), but failed to delete hot B2 copy ({}): {}",
                         fileId, verifiedDriveId, b2Key, b2CleanupEx.getMessage());
             }
 
+            metrics.recordArchiveTransfer("success", expectedSize, System.currentTimeMillis() - startedAt);
             log.info("Archived fileId={} from B2 ({}) to private Google Drive ({}): size={}, md5={}",
                     fileId, b2Key, verifiedDriveId, expectedSize, computedMd5);
             return true;
@@ -321,6 +342,7 @@ public class RecordingArchiveWorker {
                 safeDeleteDriveOrphan(uploadedDriveFileId);
             }
             recordArchiveFailure(fileId, truncateError(e.getMessage()));
+            metrics.recordArchiveTransfer("failed", 0L, System.currentTimeMillis() - startedAt);
             return false;
         }
     }

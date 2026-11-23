@@ -1,10 +1,12 @@
 package com.taskpilot.projects.meetings.controller;
 
+import com.taskpilot.infrastructure.observability.TaskPilotMetrics;
 import com.taskpilot.projects.meetings.service.MeetingRecordingService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -26,6 +28,12 @@ import org.springframework.web.bind.annotation.RestController;
 public class LiveKitWebhookController {
 
     private final MeetingRecordingService meetingRecordingService;
+    private TaskPilotMetrics metrics = TaskPilotMetrics.noop();
+
+    @Autowired(required = false)
+    public void setMetrics(TaskPilotMetrics metrics) {
+        this.metrics = metrics != null ? metrics : TaskPilotMetrics.noop();
+    }
 
     @Operation(summary = "Receive LiveKit Cloud webhook", description = "Verifies LiveKit JWT+SHA256 signature and processes Egress events")
     @PostMapping(
@@ -36,24 +44,30 @@ public class LiveKitWebhookController {
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestBody(required = false) String rawBody) {
         if (authorization == null || authorization.isBlank()) {
+            metrics.recordLiveKitWebhook("invalid", "rejected");
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Missing Authorization header");
         }
         if (rawBody == null || rawBody.isBlank()) {
+            metrics.recordLiveKitWebhook("invalid", "rejected");
             return ResponseEntity.badRequest().body("Empty webhook body");
         }
         try {
             meetingRecordingService.handleWebhook(rawBody, authorization);
             return ResponseEntity.ok("OK");
         } catch (SecurityException e) {
+            metrics.recordLiveKitWebhook("invalid", "rejected");
             log.warn("Rejected LiveKit webhook with invalid signature: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid webhook signature");
         } catch (IllegalArgumentException e) {
+            metrics.recordLiveKitWebhook("invalid", "rejected");
             log.warn("Rejected invalid LiveKit webhook: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid webhook payload or signature");
         } catch (IllegalStateException e) {
+            metrics.recordLiveKitWebhook("other", "error");
             log.warn("LiveKit webhook rejected because LiveKit is not configured: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body("LiveKit webhook service is not configured");
         } catch (Exception e) {
+            metrics.recordLiveKitWebhook("other", "error");
             log.error("Error processing LiveKit webhook: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Webhook processing error");
         }

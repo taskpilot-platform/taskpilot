@@ -2,8 +2,10 @@ package com.taskpilot.projects.chat.config;
 
 import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.infrastructure.config.security.JwtService;
+import com.taskpilot.infrastructure.observability.TaskPilotMetrics;
 import com.taskpilot.projects.common.service.ProjectSecurityService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
@@ -30,6 +32,12 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
     private final JwtService jwtService;
     private final UserIdentityPort userIdentityPort;
     private final ProjectSecurityService projectSecurityService;
+    private TaskPilotMetrics metrics = TaskPilotMetrics.noop();
+
+    @Autowired(required = false)
+    public void setMetrics(TaskPilotMetrics metrics) {
+        this.metrics = metrics != null ? metrics : TaskPilotMetrics.noop();
+    }
 
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
@@ -38,25 +46,30 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
             return message;
         }
 
-        switch (acc.getCommand()) {
-            case CONNECT, STOMP -> {
-                String authHeader = acc.getFirstNativeHeader(HttpHeaders.AUTHORIZATION);
-                if (authHeader == null) {
-                    authHeader = acc.getFirstNativeHeader("authorization");
+        try {
+            switch (acc.getCommand()) {
+                case CONNECT, STOMP -> {
+                    String authHeader = acc.getFirstNativeHeader(HttpHeaders.AUTHORIZATION);
+                    if (authHeader == null) {
+                        authHeader = acc.getFirstNativeHeader("authorization");
+                    }
+                    acc.setUser(authenticate(authHeader));
                 }
-                acc.setUser(authenticate(authHeader));
-            }
-            case SUBSCRIBE -> authorizeSubscribe(requireUser(acc), acc.getDestination());
-            case SEND -> {
-                requireUser(acc);
-                if (acc.getDestination() == null || !acc.getDestination().startsWith("/app/")) {
-                    throw new AccessDeniedException("SEND is only allowed to /app/**");
+                case SUBSCRIBE -> authorizeSubscribe(requireUser(acc), acc.getDestination());
+                case SEND -> {
+                    requireUser(acc);
+                    if (acc.getDestination() == null || !acc.getDestination().startsWith("/app/")) {
+                        throw new AccessDeniedException("SEND is only allowed to /app/**");
+                    }
+                }
+                default -> {
                 }
             }
-            default -> {
-            }
+            return message;
+        } catch (AccessDeniedException ex) {
+            metrics.recordWebSocketMessage("auth_denied");
+            throw ex;
         }
-        return message;
     }
 
     private Authentication authenticate(String header) {
