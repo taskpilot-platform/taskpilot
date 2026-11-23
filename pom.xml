@@ -30,6 +30,7 @@
         <livekit.server.version>0.17.0</livekit.server.version>
         <opentelemetry.logback.appender.version>2.28.1-alpha</opentelemetry.logback.appender.version>
         <test.excludedGroups>provider-live</test.excludedGroups>
+        <docker.api.version>1.44</docker.api.version>
         <remediation.runId>untracked</remediation.runId>
     </properties>
 
@@ -211,7 +212,12 @@
                     <excludedGroups>${test.excludedGroups}</excludedGroups>
                     <systemPropertyVariables>
                         <remediation.runId>${remediation.runId}</remediation.runId>
+                        <!-- Docker Engine 29+ requires client API >= 1.40; Testcontainers 1.20.4 defaults to 1.32. -->
+                        <api.version>${docker.api.version}</api.version>
                     </systemPropertyVariables>
+                    <environmentVariables>
+                        <DOCKER_API_VERSION>${docker.api.version}</DOCKER_API_VERSION>
+                    </environmentVariables>
                 </configuration>
             </plugin>
         </plugins>
