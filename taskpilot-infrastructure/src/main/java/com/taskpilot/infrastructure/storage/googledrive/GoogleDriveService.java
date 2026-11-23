@@ -52,6 +52,13 @@ public class GoogleDriveService {
      * @throws IOException on upload failure
      */
     public GoogleDriveFileDto uploadFile(MultipartFile multipartFile, String targetFolderId) throws IOException {
+        return uploadFile(multipartFile, targetFolderId, true);
+    }
+
+    /**
+     * Upload a multipart file to a specific folder in Google Drive, optionally keeping it private.
+     */
+    public GoogleDriveFileDto uploadFile(MultipartFile multipartFile, String targetFolderId, boolean makePublic) throws IOException {
         if (multipartFile == null || multipartFile.isEmpty()) {
             throw new IllegalArgumentException("Cannot upload empty file to Google Drive");
         }
@@ -77,23 +84,26 @@ public class GoogleDriveService {
         InputStreamContent mediaContent = new InputStreamContent(contentType, multipartFile.getInputStream());
         mediaContent.setLength(multipartFile.getSize());
 
-        log.info("Uploading file '{}' (size={} bytes) to Google Drive folder '{}'...", originalFilename, multipartFile.getSize(), parentFolder);
+        log.info("Uploading file '{}' (size={} bytes, public={}) to Google Drive folder '{}'...",
+                originalFilename, multipartFile.getSize(), makePublic, parentFolder);
 
         File uploadedFile = drive.files().create(fileMetadata, mediaContent)
-                .setFields("id, name, mimeType, size, webViewLink, webContentLink")
+                .setFields("id, name, mimeType, size, md5Checksum, webViewLink, webContentLink")
                 .execute();
 
         log.info("File uploaded to Google Drive: id={}, name={}", uploadedFile.getId(), uploadedFile.getName());
 
-        // Make file readable to anyone with link for direct streaming / download
-        try {
-            Permission permission = new Permission()
-                    .setType("anyone")
-                    .setRole("reader");
-            drive.permissions().create(uploadedFile.getId(), permission).execute();
-            log.info("Public read permission granted for Drive file id={}", uploadedFile.getId());
-        } catch (Exception e) {
-            log.warn("Failed to set public permission on Drive file {}: {}", uploadedFile.getId(), e.getMessage());
+        if (makePublic) {
+            // Make file readable to anyone with link for direct streaming / download
+            try {
+                Permission permission = new Permission()
+                        .setType("anyone")
+                        .setRole("reader");
+                drive.permissions().create(uploadedFile.getId(), permission).execute();
+                log.info("Public read permission granted for Drive file id={}", uploadedFile.getId());
+            } catch (Exception e) {
+                log.warn("Failed to set public permission on Drive file {}: {}", uploadedFile.getId(), e.getMessage());
+            }
         }
 
         return GoogleDriveFileDto.builder()
@@ -111,6 +121,24 @@ public class GoogleDriveService {
      */
     public InputStream downloadFile(String fileId) throws IOException {
         return drive.files().get(fileId).executeMediaAsInputStream();
+    }
+
+    /**
+     * Stream an inclusive byte range [start, end] directly from Google Drive without full-file buffering.
+     */
+    public InputStream downloadFileRange(String fileId, long start, long end) throws IOException {
+        Drive.Files.Get request = drive.files().get(fileId);
+        request.getRequestHeaders().setRange("bytes=" + start + "-" + end);
+        return request.executeMediaAsInputStream();
+    }
+
+    /**
+     * Fetch file metadata (size, mimeType, md5Checksum) from Google Drive.
+     */
+    public File getFileMetadata(String fileId) throws IOException {
+        return drive.files().get(fileId)
+                .setFields("id, name, mimeType, size, md5Checksum")
+                .execute();
     }
 
     /**

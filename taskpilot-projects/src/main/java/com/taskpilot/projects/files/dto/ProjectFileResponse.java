@@ -18,11 +18,16 @@ public record ProjectFileResponse(
         String contentType,
         String storageKey,
         String storageBucket,
+        String storageProvider,
         String description,
         Instant createdAt,
         Instant updatedAt
 ) {
     public static ProjectFileResponse fromEntity(ProjectFileEntity entity, String uploaderName, String uploaderEmail) {
+        String provider = entity.getStorageProvider();
+        if (provider == null || provider.isBlank()) {
+            provider = "googledrive".equalsIgnoreCase(entity.getStorageBucket()) ? "gdrive" : "s3";
+        }
         return ProjectFileResponse.builder()
                 .id(entity.getId())
                 .projectId(entity.getProjectId())
@@ -35,6 +40,7 @@ public record ProjectFileResponse(
                 .contentType(entity.getContentType())
                 .storageKey(entity.getStorageKey())
                 .storageBucket(entity.getStorageBucket())
+                .storageProvider(provider)
                 .description(entity.getDescription())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())

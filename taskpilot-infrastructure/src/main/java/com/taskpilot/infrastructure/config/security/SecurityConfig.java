@@ -83,6 +83,8 @@ public class SecurityConfig {
                                                                 "/login/oauth2/**",
                                                                 "/ws/**")
                                                 .permitAll()
+                                                .requestMatchers(HttpMethod.POST, "/api/v1/webhooks/livekit").permitAll()
+                                                .requestMatchers(HttpMethod.GET, "/api/v1/projects/*/files/*/stream").permitAll()
                                                 .requestMatchers("/v3/api-docs/**", "/swagger-ui/**",
                                                                 "/swagger-ui.html")
                                                 .permitAll()
@@ -131,6 +133,8 @@ public class SecurityConfig {
                 configuration.setAllowedHeaders(List.of("*"));
                 configuration.setExposedHeaders(List.of(
                                 "Authorization",
+                                // Range streaming headers
+                                "Accept-Ranges", "Content-Range", "Content-Length", "Content-Disposition",
                                 // SSE required headers
                                 "Cache-Control", "Content-Type", "X-Accel-Buffering"));
                 configuration.setAllowCredentials(true);

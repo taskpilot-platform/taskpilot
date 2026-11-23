@@ -42,6 +42,18 @@ class ReconciledFlywayIntegrationTest {
         return MigrationDatabaseConfiguration.configure(Flyway.configure().dataSource(url,"test","test")).table(history).load();
     }
 
+    private Flyway flywayAtTarget(String url, String history, String targetVersion) {
+        return MigrationDatabaseConfiguration.configure(Flyway.configure().dataSource(url,"test","test"))
+                .table(history).target(targetVersion).load();
+    }
+
+    private int maxBundleVersion(Flyway f) {
+        return java.util.Arrays.stream(f.info().all())
+                .filter(m -> m.getVersion() != null)
+                .mapToInt(m -> Integer.parseInt(m.getVersion().getVersion()))
+                .max().orElseThrow();
+    }
+
     private String scalar(Connection c, String sql) throws Exception {
         try (var s = c.createStatement(); var r = s.executeQuery(sql)) { r.next(); return r.getString(1); }
     }
@@ -58,7 +70,9 @@ class ReconciledFlywayIntegrationTest {
             s.execute("ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO anon, authenticated");
         }
         var f = flyway(url, "flyway_schema_history_v2");
-        assertThat(f.migrate().migrationsExecuted).isEqualTo(2);
+        int expectedBundleMigrations = f.info().all().length;
+        assertThat(expectedBundleMigrations).isGreaterThanOrEqualTo(2);
+        assertThat(f.migrate().migrationsExecuted).isEqualTo(expectedBundleMigrations);
         assertThat(f.validateWithResult().validationSuccessful).isTrue();
         assertThat(f.migrate().migrationsExecuted).isZero();
         assertThatThrownBy(f::clean).isInstanceOf(FlywayException.class);
@@ -83,7 +97,9 @@ class ReconciledFlywayIntegrationTest {
         var f = flyway(url, "flyway_schema_history_v2");
         assertThatThrownBy(f::migrate).isInstanceOf(FlywayException.class);
         f.baseline();
-        assertThat(f.migrate().migrationsExecuted).isEqualTo(1);
+        int expectedForwardCount = f.info().pending().length;
+        assertThat(expectedForwardCount).isGreaterThanOrEqualTo(1);
+        assertThat(f.migrate().migrationsExecuted).isEqualTo(expectedForwardCount);
         assertThat(f.validateWithResult().validationSuccessful).isTrue();
         assertThat(f.migrate().migrationsExecuted).isZero();
         try (var c = DriverManager.getConnection(url, "test", "test")) {
@@ -136,12 +152,15 @@ class ReconciledFlywayIntegrationTest {
         var after = RecoveryAdoption.inspect(valid).approval();
         assertThat(after.legacyHistoryDigest()).isEqualTo(before.legacyHistoryDigest());
         assertThat(after.dataDigest()).isEqualTo(before.dataDigest());
-        assertThat(flyway(validUrl, "flyway_schema_history_v2").validateWithResult().validationSuccessful).isTrue();
+        assertThat(flywayAtTarget(validUrl, "flyway_schema_history_v2", "42").validateWithResult().validationSuccessful).isTrue();
     }
 
     @Test
     void freshStockPostgresDoesNotRequireSupabaseRoles() {
-        assertThat(flyway(stock.getJdbcUrl(), "flyway_schema_history_v2").migrate().migrationsExecuted).isEqualTo(2);
+        var f = flyway(stock.getJdbcUrl(), "flyway_schema_history_v2");
+        int expectedBundleMigrations = f.info().all().length;
+        assertThat(expectedBundleMigrations).isGreaterThanOrEqualTo(2);
+        assertThat(f.migrate().migrationsExecuted).isEqualTo(expectedBundleMigrations);
     }
 
     @Test
@@ -208,8 +227,9 @@ class ReconciledFlywayIntegrationTest {
     @Test
     void normalForwardMigrationDoesNotRequireChangingJavaRecoveryPolicy() throws Exception {
         String url=database("recovery_forward");var initial=flyway(url,"flyway_schema_history_v2");initial.migrate();
+        int nextVersion = maxBundleVersion(initial) + 1;
         var directory=java.nio.file.Files.createTempDirectory("reviewed-forward-");
-        java.nio.file.Files.writeString(directory.resolve("V43__future_schema_change.sql"),"CREATE TABLE public.future_migration_probe(id integer);");
+        java.nio.file.Files.writeString(directory.resolve("V"+nextVersion+"__future_schema_change.sql"),"CREATE TABLE public.future_migration_probe(id integer);");
         var next=MigrationDatabaseConfiguration.configure(Flyway.configure().dataSource(url,"test","test"))
                 .locations("classpath:db/reconciled","filesystem:"+directory.toAbsolutePath()).load();
         RecoveryAdoption.verifyBeforeMigrate(next);
@@ -228,8 +248,9 @@ class ReconciledFlywayIntegrationTest {
         var initial=flyway(url,"flyway_schema_history_v2");initial.migrate();
         // Actual Flyway table, primary/success indexes, row and array types are allowed.
         RecoveryAdoption.validateComplete(initial);
+        int nextVersion = maxBundleVersion(initial) + 1;
         var directory=java.nio.file.Files.createTempDirectory("metadata-negative-");
-        java.nio.file.Files.writeString(directory.resolve("V43__metadata_negative_probe.sql"),sql);
+        java.nio.file.Files.writeString(directory.resolve("V"+nextVersion+"__metadata_negative_probe.sql"),sql);
         var next=MigrationDatabaseConfiguration.configure(Flyway.configure().dataSource(url,"test","test"))
                 .locations("classpath:db/reconciled","filesystem:"+directory.toAbsolutePath()).load();
         assertThat(next.migrate().migrationsExecuted).isEqualTo(1);
@@ -254,7 +275,7 @@ class ReconciledFlywayIntegrationTest {
         var approved=RecoveryAdoption.inspect(target).approval();
         flyway(url,"flyway_schema_history_v2").baseline();
         RecoveryAdoption.adopt(target,approved);
-        RecoveryAdoption.validateComplete(flyway(url,"flyway_schema_history_v2"));
+        RecoveryAdoption.validateComplete(flywayAtTarget(url,"flyway_schema_history_v2","42"));
         try(var c=DriverManager.getConnection(url,"test","test")) {
             assertThat(scalar(c,"SELECT to_regclass('public.unreviewed_callback_executed') IS NULL")).isEqualTo("t");
         }
@@ -321,7 +342,7 @@ class ReconciledFlywayIntegrationTest {
     @Test
     void completeValidationRejectsSchemaDriftEvenWhenMigrationChecksumsMatch() throws Exception {
         String url=database("recovery_completed_schema_drift");
-        var f=flyway(url,"flyway_schema_history_v2");f.migrate();
+        var f=flywayAtTarget(url,"flyway_schema_history_v2","42");f.migrate();
         RecoveryAdoption.validateComplete(f);
         try(var c=DriverManager.getConnection(url,"test","test");var s=c.createStatement()) {
             s.execute("ALTER TABLE public.users DROP COLUMN avatar_url");
@@ -333,7 +354,7 @@ class ReconciledFlywayIntegrationTest {
     @Test
     void completeValidationRequiresTheV42IndexToStillExist() throws Exception {
         String url=database("recovery_completed_index_drift");
-        var f=flyway(url,"flyway_schema_history_v2");f.migrate();
+        var f=flywayAtTarget(url,"flyway_schema_history_v2","42");f.migrate();
         RecoveryAdoption.validateComplete(f);
         try(var c=DriverManager.getConnection(url,"test","test");var s=c.createStatement()) {
             s.execute("DROP INDEX public.idx_project_meetings_scheduled_start");

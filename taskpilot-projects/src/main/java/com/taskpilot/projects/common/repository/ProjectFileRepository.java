@@ -21,5 +21,7 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFileEntity, 
 
     Optional<ProjectFileEntity> findByIdAndProjectId(Long id, Long projectId);
 
+    Optional<ProjectFileEntity> findBySourceEgressId(String sourceEgressId);
+
     long countByProjectId(Long projectId);
 }

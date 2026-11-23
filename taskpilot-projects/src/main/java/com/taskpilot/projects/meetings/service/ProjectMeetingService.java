@@ -8,6 +8,7 @@ import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.entity.ProjectMeetingEntity;
 import com.taskpilot.projects.common.entity.ProjectMeetingParticipantEntity;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
+import com.taskpilot.projects.common.enums.MeetingRecordingStatus;
 import com.taskpilot.projects.common.enums.MemberRole;
 import com.taskpilot.projects.common.enums.ProjectMeetingRole;
 import com.taskpilot.projects.common.enums.ProjectMeetingStatus;
@@ -22,6 +23,8 @@ import com.taskpilot.projects.meetings.dto.MeetingTokenResponse;
 import com.taskpilot.projects.meetings.dto.ProjectMeetingResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -44,6 +47,13 @@ public class ProjectMeetingService {
     private final LiveKitTokenService liveKitTokenService;
     private final UserIdentityPort userIdentityPort;
     private final UserProfilePort userProfilePort;
+
+    private MeetingRecordingService meetingRecordingService;
+
+    @Autowired(required = false)
+    public void setMeetingRecordingService(@Lazy MeetingRecordingService meetingRecordingService) {
+        this.meetingRecordingService = meetingRecordingService;
+    }
 
     @Transactional
     public ProjectMeetingResponse createMeeting(Long projectId, String userEmail, CreateMeetingRequest request) {
@@ -238,6 +248,11 @@ public class ProjectMeetingService {
             Instant now = Instant.now();
             activeParticipants.forEach(p -> p.setLeftAt(now));
             participantRepository.saveAll(activeParticipants);
+
+            // Best-effort stop active cloud Egress recording so LiveKit Cloud minutes are not leaked
+            if (meetingRecordingService != null) {
+                meetingRecordingService.stopRecordingIfActive(meeting);
+            }
         }
 
         return mapToResponse(meeting, userId);
@@ -333,6 +348,10 @@ public class ProjectMeetingService {
                 .status(entity.getStatus())
                 .recordingEnabled(entity.getRecordingEnabled())
                 .recordingFileId(entity.getRecordingFileId())
+                .egressId(entity.getEgressId())
+                .recordingStatus(entity.getRecordingStatus() != null ? entity.getRecordingStatus() : MeetingRecordingStatus.IDLE)
+                .recordingError(entity.getRecordingError())
+                .backupStorageUsed(Boolean.TRUE.equals(entity.getBackupStorageUsed()))
                 .scheduledStartTime(entity.getScheduledStartTime())
                 .scheduledEndTime(entity.getScheduledEndTime())
                 .startedAt(entity.getStartedAt())

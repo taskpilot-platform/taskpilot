@@ -1,5 +1,6 @@
 package com.taskpilot.projects.common.entity;
 
+import com.taskpilot.projects.common.enums.MeetingRecordingStatus;
 import com.taskpilot.projects.common.enums.ProjectMeetingStatus;
 import jakarta.persistence.*;
 import lombok.*;
@@ -45,6 +46,21 @@ public class ProjectMeetingEntity {
 
     @Column(name = "recording_file_id")
     private Long recordingFileId;
+
+    @Column(name = "egress_id", length = 128)
+    private String egressId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "recording_status", nullable = false, length = 32)
+    @Builder.Default
+    private MeetingRecordingStatus recordingStatus = MeetingRecordingStatus.IDLE;
+
+    @Column(name = "recording_error", columnDefinition = "TEXT")
+    private String recordingError;
+
+    @Column(name = "backup_storage_used", nullable = false)
+    @Builder.Default
+    private Boolean backupStorageUsed = false;
 
     @Column(name = "scheduled_start_time")
     private Instant scheduledStartTime;

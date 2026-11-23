@@ -1,5 +1,6 @@
 package com.taskpilot.projects.meetings.dto;
 
+import com.taskpilot.projects.common.enums.MeetingRecordingStatus;
 import com.taskpilot.projects.common.enums.ProjectMeetingStatus;
 import lombok.Builder;
 
@@ -18,6 +19,10 @@ public record ProjectMeetingResponse(
         ProjectMeetingStatus status,
         Boolean recordingEnabled,
         Long recordingFileId,
+        String egressId,
+        MeetingRecordingStatus recordingStatus,
+        String recordingError,
+        Boolean backupStorageUsed,
         Instant scheduledStartTime,
         Instant scheduledEndTime,
         Instant startedAt,

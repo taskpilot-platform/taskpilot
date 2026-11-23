@@ -4,6 +4,7 @@ import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
 import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
+import com.taskpilot.infrastructure.storage.EgressS3StorageService;
 import com.taskpilot.infrastructure.storage.StorageService;
 import com.taskpilot.infrastructure.storage.googledrive.GoogleDriveFileDto;
 import com.taskpilot.infrastructure.storage.googledrive.GoogleDriveService;
@@ -14,9 +15,11 @@ import com.taskpilot.projects.common.repository.ProjectFileRepository;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
 import com.taskpilot.projects.common.service.ProjectSecurityService;
 import com.taskpilot.projects.files.dto.FileDownloadResource;
+import com.taskpilot.projects.files.dto.FileStreamResource;
 import com.taskpilot.projects.files.dto.ProjectFileResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -46,6 +49,13 @@ public class ProjectFileService {
     private final UserIdentityPort userIdentityPort;
     private final UserProfilePort userProfilePort;
 
+    private EgressS3StorageService egressS3StorageService;
+
+    @Autowired(required = false)
+    public void setEgressS3StorageService(EgressS3StorageService egressS3StorageService) {
+        this.egressS3StorageService = egressS3StorageService;
+    }
+
     @Transactional
     public ProjectFileResponse uploadFile(Long projectId, String userEmail, MultipartFile file, String description) {
         if (file == null || file.isEmpty()) {
@@ -67,6 +77,7 @@ public class ProjectFileService {
         String folder = "projects/" + projectId + "/files";
         String storageKey;
         String storageBucket = DEFAULT_STORAGE_BUCKET;
+        String storageProvider = "s3";
         String updatedDescription = description;
 
         boolean isVideoOrRecording = (file.getContentType() != null && file.getContentType().startsWith("video/"))
@@ -76,15 +87,12 @@ public class ProjectFileService {
 
         if (googleDriveService != null && googleDriveService.isConfigured() && isVideoOrRecording) {
             try {
-                GoogleDriveFileDto driveDto = googleDriveService.uploadFile(file);
+                // Keep meeting recordings private on Google Drive (never grant "anyone with link")
+                GoogleDriveFileDto driveDto = googleDriveService.uploadFile(file, null, false);
                 storageKey = driveDto.getFileId();
                 storageBucket = "googledrive";
-                if (updatedDescription == null || updatedDescription.isBlank()) {
-                    updatedDescription = driveDto.getWebViewLink();
-                } else if (!updatedDescription.contains(driveDto.getWebViewLink())) {
-                    updatedDescription = updatedDescription + " | " + driveDto.getWebViewLink();
-                }
-                log.info("Uploaded video/recording to Google Drive 5TB: fileId={}, link={}", driveDto.getFileId(), driveDto.getWebViewLink());
+                storageProvider = "gdrive";
+                log.info("Uploaded private video/recording to Google Drive 5TB: fileId={}", driveDto.getFileId());
             } catch (Exception driveEx) {
                 log.warn("Google Drive upload failed, falling back to S3: {}", driveEx.getMessage());
                 try {
@@ -100,11 +108,11 @@ public class ProjectFileService {
             } catch (IOException e) {
                 if (googleDriveService != null && googleDriveService.isConfigured()) {
                     try {
-                        GoogleDriveFileDto driveDto = googleDriveService.uploadFile(file);
+                        GoogleDriveFileDto driveDto = googleDriveService.uploadFile(file, null, false);
                         storageKey = driveDto.getFileId();
                         storageBucket = "googledrive";
-                        updatedDescription = (updatedDescription != null ? updatedDescription + " | " : "") + driveDto.getWebViewLink();
-                        log.info("S3 upload failed, automatic fallback to Google Drive 5TB succeeded: fileId={}", driveDto.getFileId());
+                        storageProvider = "gdrive";
+                        log.info("S3 upload failed, automatic fallback to private Google Drive 5TB succeeded: fileId={}", driveDto.getFileId());
                     } catch (Exception driveEx) {
                         log.error("Both S3 and Google Drive failed: {}", driveEx.getMessage());
                         throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR.value(), "Failed to upload file to storage");
@@ -125,6 +133,7 @@ public class ProjectFileService {
                 .contentType(file.getContentType())
                 .storageKey(storageKey)
                 .storageBucket(storageBucket)
+                .storageProvider(storageProvider)
                 .description(updatedDescription)
                 .createdAt(Instant.now())
                 .updatedAt(Instant.now())
@@ -172,7 +181,10 @@ public class ProjectFileService {
 
         try {
             InputStream is;
-            if ("googledrive".equalsIgnoreCase(entity.getStorageBucket()) && googleDriveService != null) {
+            String provider = resolveProvider(entity);
+            if ("b2".equals(provider) && egressS3StorageService != null) {
+                is = egressS3StorageService.downloadFile(entity.getStorageKey());
+            } else if ("gdrive".equals(provider) && googleDriveService != null) {
                 is = googleDriveService.downloadFile(entity.getStorageKey());
             } else {
                 is = storageService.downloadFile(entity.getStorageBucket(), entity.getStorageKey());
@@ -182,6 +194,116 @@ public class ProjectFileService {
             log.error("Failed to download file from storage: {}", e.getMessage(), e);
             throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR.value(), "Failed to download file from storage");
         }
+    }
+
+    @Transactional(readOnly = true)
+    public FileStreamResource streamFile(Long projectId, Long fileId, String userEmail, String rangeHeader) {
+        Long userId = getUserId(userEmail);
+        projectSecurityService.requireProject(projectId);
+        projectSecurityService.validateMember(projectId, userId);
+
+        ProjectFileEntity entity = projectFileRepository.findByIdAndProjectId(fileId, projectId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "File not found"));
+
+        String provider = resolveProvider(entity);
+        long totalSize = resolveFileSize(entity, provider);
+
+        long start = 0L;
+        long end = totalSize > 0 ? totalSize - 1 : 0L;
+        boolean partial = false;
+
+        if (rangeHeader != null && !rangeHeader.isBlank() && rangeHeader.trim().startsWith("bytes=") && totalSize > 0) {
+            String spec = rangeHeader.trim().substring("bytes=".length());
+            int commaIdx = spec.indexOf(',');
+            if (commaIdx >= 0) {
+                spec = spec.substring(0, commaIdx);
+            }
+            spec = spec.trim();
+            int dashIdx = spec.indexOf('-');
+            if (dashIdx < 0) {
+                throw new BusinessException(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE.value(), "Invalid Range header");
+            }
+            try {
+                String startStr = spec.substring(0, dashIdx).trim();
+                String endStr = spec.substring(dashIdx + 1).trim();
+                if (startStr.isEmpty()) {
+                    long suffix = Long.parseLong(endStr);
+                    if (suffix <= 0) {
+                        throw new BusinessException(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE.value(), "Invalid suffix range");
+                    }
+                    start = Math.max(0L, totalSize - suffix);
+                    end = totalSize - 1;
+                } else {
+                    start = Long.parseLong(startStr);
+                    end = endStr.isEmpty() ? (totalSize - 1) : Math.min(Long.parseLong(endStr), totalSize - 1);
+                }
+            } catch (NumberFormatException e) {
+                throw new BusinessException(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE.value(), "Invalid Range bounds");
+            }
+
+            if (start < 0 || start >= totalSize || end < start) {
+                throw new BusinessException(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE.value(),
+                        "Requested range not satisfiable for totalSize=" + totalSize);
+            }
+            partial = true;
+        }
+
+        final long finalStart = start;
+        final long finalEnd = end;
+        final boolean isPartial = partial;
+        final String key = entity.getStorageKey();
+        final String bucket = entity.getStorageBucket();
+
+        FileStreamResource.StreamOpener opener = () -> {
+            if ("b2".equals(provider) && egressS3StorageService != null) {
+                return isPartial
+                        ? egressS3StorageService.downloadFileRange(key, finalStart, finalEnd)
+                        : egressS3StorageService.downloadFile(key);
+            }
+            if ("gdrive".equals(provider) && googleDriveService != null) {
+                return isPartial
+                        ? googleDriveService.downloadFileRange(key, finalStart, finalEnd)
+                        : googleDriveService.downloadFile(key);
+            }
+            return isPartial
+                    ? storageService.downloadFileRange(bucket, key, finalStart, finalEnd)
+                    : storageService.downloadFile(bucket, key);
+        };
+
+        return new FileStreamResource(
+                entity.getOriginalName(),
+                entity.getContentType(),
+                totalSize,
+                finalStart,
+                finalEnd,
+                isPartial,
+                opener
+        );
+    }
+
+    private long resolveFileSize(ProjectFileEntity entity, String provider) {
+        if (entity.getFileSize() != null && entity.getFileSize() > 0) {
+            return entity.getFileSize();
+        }
+        try {
+            if ("b2".equals(provider) && egressS3StorageService != null && egressS3StorageService.isConfigured()) {
+                return egressS3StorageService.headObject(entity.getStorageKey()).contentLength();
+            }
+            if ("gdrive".equals(provider) && googleDriveService != null && googleDriveService.isConfigured()) {
+                var meta = googleDriveService.getFileMetadata(entity.getStorageKey());
+                return meta != null && meta.getSize() != null ? meta.getSize() : 0L;
+            }
+        } catch (Exception e) {
+            log.warn("Could not resolve file size for fileId={}: {}", entity.getId(), e.getMessage());
+        }
+        return 0L;
+    }
+
+    private static String resolveProvider(ProjectFileEntity entity) {
+        if (entity.getStorageProvider() != null && !entity.getStorageProvider().isBlank()) {
+            return entity.getStorageProvider().toLowerCase();
+        }
+        return "googledrive".equalsIgnoreCase(entity.getStorageBucket()) ? "gdrive" : "s3";
     }
 
     @Transactional
@@ -204,7 +326,10 @@ public class ProjectFileService {
         }
 
         try {
-            if ("googledrive".equalsIgnoreCase(entity.getStorageBucket()) && googleDriveService != null) {
+            String provider = resolveProvider(entity);
+            if ("b2".equals(provider) && egressS3StorageService != null) {
+                egressS3StorageService.deleteFile(entity.getStorageKey());
+            } else if ("gdrive".equals(provider) && googleDriveService != null) {
                 googleDriveService.deleteFile(entity.getStorageKey());
             } else {
                 storageService.deleteFile(entity.getStorageBucket(), entity.getStorageKey());
