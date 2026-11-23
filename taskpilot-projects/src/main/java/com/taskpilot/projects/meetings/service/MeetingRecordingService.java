@@ -806,11 +806,11 @@ public class MeetingRecordingService {
                         "Recording upload reservation expired before completion");
             }
         }
-        metrics.recordEgressRecording("fallback", "completed");
 
         Instant now = Instant.now();
         ProjectFileEntity savedFile = commitFallbackUploadAtomically(
                 meeting, userId, claims, meta.contentLength(), clientRecordingId, logicalKey, request, now);
+        metrics.recordEgressRecording("fallback", "completed");
 
         log.info("Completed fallback B2 recording upload: meetingId={}, fileId={}, key={}, size={}",
                 meetingId, savedFile.getId(), claims.objectKey(), meta.contentLength());
@@ -858,7 +858,8 @@ public class MeetingRecordingService {
                 // file/operation/meeting rows.
                 meetingRepository.findForUpdate(meeting.getId(), meeting.getProjectId());
 
-                // Same-token/same-key concurrent retry: if winner already committed this exact objectKey,
+                // Same-token/same-key concurrent retry: if winner already committed this exact
+                // objectKey,
                 // return it directly without rolling back or triggering compensation/deletion.
                 Optional<ProjectFileEntity> alreadyCommittedSameKey = projectFileRepository
                         .findByProjectIdAndStorageKey(meeting.getProjectId(), claims.objectKey());
@@ -912,8 +913,10 @@ public class MeetingRecordingService {
                 return saved;
             }));
         } catch (DuplicateLogicalClipException duplicateClip) {
-            // Transaction rolled back cleanly; compensate ONLY if this request uploaded a DIFFERENT B2 object key
-            // than the winning file (never delete/compensate the winner's own B2 object on same-token concurrency).
+            // Transaction rolled back cleanly; compensate ONLY if this request uploaded a
+            // DIFFERENT B2 object key
+            // than the winning file (never delete/compensate the winner's own B2 object on
+            // same-token concurrency).
             ProjectFileEntity winnerFile = projectFileRepository.findById(duplicateClip.winnerFileId)
                     .orElseThrow(() -> new BusinessException(HttpStatus.CONFLICT.value(),
                             "Recording clip already committed under fileId=" + duplicateClip.winnerFileId));
@@ -922,8 +925,7 @@ public class MeetingRecordingService {
                         claims,
                         bucket,
                         "B2_FALLBACK_DUPLICATE_CLIP",
-                        "Concurrent duplicate upload rolled back in favor of fileId=" + duplicateClip.winnerFileId
-                );
+                        "Concurrent duplicate upload rolled back in favor of fileId=" + duplicateClip.winnerFileId);
             }
             return winnerFile;
         } catch (IllegalStateException expiredOrCompensated) {
@@ -989,7 +991,8 @@ public class MeetingRecordingService {
             String bucket,
             String errorCode,
             String errorMessage) {
-        // Defense-in-depth: never compensate or delete a B2 object key already owned by a committed ProjectFileEntity.
+        // Defense-in-depth: never compensate or delete a B2 object key already owned by
+        // a committed ProjectFileEntity.
         if (projectFileRepository.findByProjectIdAndStorageKey(claims.projectId(), claims.objectKey()).isPresent()) {
             log.warn("Skipped B2 compensation/delete for committed key={} (projectId={}, errorCode={})",
                     claims.objectKey(), claims.projectId(), errorCode);
@@ -1087,6 +1090,8 @@ public class MeetingRecordingService {
                     String msg = buildBackupStorageErrorMessage(snapshot.egressId(), snapshot.error());
                     log.warn("Egress {} completed with backup_storage_used=true and object missing from B2: {}",
                             snapshot.egressId(), msg);
+                    boolean alreadyBackupFailed = currentStatus == MeetingRecordingStatus.FAILED
+                            && Boolean.TRUE.equals(meeting.getBackupStorageUsed());
                     Integer backupUpdated = requiresNewTx.execute(tx -> meetingRepository.transitionRecordingStatus(
                             meeting.getId(),
                             snapshot.egressId(),
@@ -1096,7 +1101,7 @@ public class MeetingRecordingService {
                             now,
                             RECOVERABLE_COMPLETION_STATUSES
                     ));
-                    if (backupUpdated != null && backupUpdated > 0) {
+                    if (!alreadyBackupFailed && backupUpdated != null && backupUpdated > 0) {
                         metrics.recordEgressRecording("cloud", "backup_storage");
                     }
                 }

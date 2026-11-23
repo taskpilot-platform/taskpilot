@@ -3,7 +3,14 @@ package com.taskpilot.projects.meetings.service;
 import com.taskpilot.infrastructure.config.security.FileStreamTokenService;
 import com.taskpilot.infrastructure.config.security.PresignedUploadTokenService;
 import com.taskpilot.infrastructure.exception.BusinessException;
+import com.taskpilot.infrastructure.observability.TaskPilotMetrics;
 import com.taskpilot.infrastructure.storage.EgressS3StorageService;
+import io.micrometer.common.KeyValue;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationHandler;
+import io.micrometer.observation.ObservationRegistry;
 import com.taskpilot.projects.common.entity.MeetingRecordingEntity;
 import com.taskpilot.projects.common.entity.ProjectFileEntity;
 import com.taskpilot.projects.common.entity.ProjectMeetingEntity;
@@ -33,6 +40,8 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -71,6 +80,9 @@ class MeetingRecordingServiceTest {
         private PlatformTransactionManager transactionManager;
 
         private PresignedUploadTokenService presignedUploadTokenService;
+        private SimpleMeterRegistry meterRegistry;
+        private ObservationRegistry observationRegistry;
+        private RecordingObservationHandler observationHandler;
 
         private MeetingRecordingService service;
 
@@ -82,6 +94,10 @@ class MeetingRecordingServiceTest {
 
                 presignedUploadTokenService = new PresignedUploadTokenService(
                                 "404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970");
+                meterRegistry = new SimpleMeterRegistry();
+                observationRegistry = ObservationRegistry.create();
+                observationHandler = new RecordingObservationHandler();
+                observationRegistry.observationConfig().observationHandler(observationHandler);
 
                 service = new MeetingRecordingService(
                                 meetingRepository,
@@ -97,6 +113,7 @@ class MeetingRecordingServiceTest {
                                 true,
                                 10L * 1024L * 1024L // 10 MB cap in test to assert oversize rejection & delete
                 );
+                service.setMetrics(new TaskPilotMetrics(meterRegistry, observationRegistry));
                 service.setMeetingRecordingRepository(meetingRecordingRepository);
         }
 
@@ -648,6 +665,9 @@ class MeetingRecordingServiceTest {
                 verify(meetingRepository).attachStartedEgress(eq(31L), eq("EG_RACE_END"),
                                 eq(MeetingRecordingStatus.RECORDING), any());
                 verify(egressClientAdapter).stopEgress("EG_RACE_END");
+                assertThat(observationHandler.stoppedByName("taskpilot.egress.start")).hasSize(1);
+                assertThat(egressRecordingCount("cloud", "started")).isZero();
+                assertThat(egressRecordingCount("cloud", "start_failed")).isZero();
         }
 
         @Test
@@ -1034,58 +1054,357 @@ class MeetingRecordingServiceTest {
                 verify(meetingRepository, never()).linkFallbackRecording(eq(46L), eq(44L), any());
         }
 
-    @Test
-    void f4p1_sameTokenConcurrentComplete_neverDeletesOrCompensatesWinnerKey() throws IOException {
-        var uploadPort = org.mockito.Mockito.mock(com.taskpilot.contracts.storage.StorageUploadOperationPort.class);
-        service.setStorageUploadOperationPort(uploadPort);
+        @Test
+        void f4p1_sameTokenConcurrentComplete_neverDeletesOrCompensatesWinnerKey() throws IOException {
+                var uploadPort = org.mockito.Mockito
+                                .mock(com.taskpilot.contracts.storage.StorageUploadOperationPort.class);
+                service.setStorageUploadOperationPort(uploadPort);
 
+                ProjectMeetingEntity meeting = ProjectMeetingEntity.builder()
+                                .id(47L).projectId(10L).hostId(100L).title("Same-Token Concurrent Complete")
+                                .status(ProjectMeetingStatus.ACTIVE).recordingStatus(MeetingRecordingStatus.IDLE)
+                                .build();
+                when(meetingRepository.findByIdAndProjectId(47L, 10L)).thenReturn(Optional.of(meeting));
+                when(meetingRepository.findForUpdate(47L, 10L)).thenReturn(Optional.of(meeting));
+                when(egressS3StorageService.isConfigured()).thenReturn(true);
+
+                String clientClipId = "clip-same-token-race";
+                java.util.UUID clipUuid = java.util.UUID.nameUUIDFromBytes(
+                                ("meeting-recording:10:47:client:100:" + clientClipId)
+                                                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                java.util.UUID sharedOpId = java.util.UUID.randomUUID();
+                String sharedKey = "recordings/10/47/shared-winner-key.webm";
+                String sharedToken = presignedUploadTokenService.issueToken(
+                                10L, 47L, 100L, sharedKey, "video/webm", "shared.webm",
+                                Duration.ofMinutes(60), sharedOpId, Instant.now().plus(Duration.ofMinutes(15)),
+                                clientClipId);
+
+                ProjectFileEntity winnerFile = ProjectFileEntity.builder()
+                                .id(947L).projectId(10L).storageKey(sharedKey).storageProvider("b2")
+                                .fileSize(2048L).contentType("video/webm").build();
+                MeetingRecordingEntity winnerClip = MeetingRecordingEntity.builder()
+                                .id(clipUuid).meetingId(47L).projectId(10L).recorderId(100L)
+                                .projectFileId(947L).origin(MeetingRecordingEntity.Origin.BROWSER)
+                                .coverage(MeetingRecordingEntity.Coverage.SCREEN_ONLY)
+                                .state(MeetingRecordingEntity.State.READY).build();
+
+                // Precheck misses before winner commits; after headObject &
+                // markProviderWritten, winner commits SAME key!
+                when(projectFileRepository.findByProjectIdAndStorageKey(10L, sharedKey))
+                                .thenReturn(Optional.empty())
+                                .thenReturn(Optional.of(winnerFile));
+                when(meetingRecordingRepository.findById(clipUuid))
+                                .thenReturn(Optional.empty())
+                                .thenReturn(Optional.of(winnerClip));
+                when(egressS3StorageService.headObject(sharedKey))
+                                .thenReturn(new EgressS3StorageService.ObjectMetadata(2048L, "video/webm",
+                                                "etag-shared"));
+                lenient().when(projectFileRepository.findById(947L)).thenReturn(Optional.of(winnerFile));
+                when(projectMeetingService.getMeetingById(10L, 47L, 100L))
+                                .thenReturn(ProjectMeetingResponse.builder().id(47L).recordingFileId(947L)
+                                                .recordingStatus(MeetingRecordingStatus.COMPLETED).build());
+
+                ProjectMeetingResponse res = service.completeFallbackUpload(
+                                10L, 47L, 100L,
+                                new CompleteRecordingUploadRequest(sharedToken, 10L,
+                                                MeetingRecordingEntity.Origin.BROWSER,
+                                                MeetingRecordingEntity.Coverage.SCREEN_ONLY, clientClipId));
+
+                assertThat(res.completedRecordingFileId()).isEqualTo(947L);
+                // MUST NEVER delete or enqueue cleanup for the winning B2 object key!
+                verify(egressS3StorageService, never()).deleteFile(any());
+                verify(uploadPort, never()).compensateFailedUpload(any(), any(), any(), any());
+                verify(uploadPort, never()).compensateFailedUpload(any(), any(), any(), any(), any());
+        }
+
+    @Test
+    void observability_startRecordingSuccess_opensAndStopsSpanAndIncrementsStartedMetric() throws IOException {
         ProjectMeetingEntity meeting = ProjectMeetingEntity.builder()
-                .id(47L).projectId(10L).hostId(100L).title("Same-Token Concurrent Complete")
+                .id(51L).projectId(10L).hostId(100L).title("Obs Start Success")
+                .roomName("tp-proj-10-m-51").status(ProjectMeetingStatus.ACTIVE)
+                .recordingStatus(MeetingRecordingStatus.IDLE).build();
+
+        when(meetingRepository.findByIdAndProjectId(51L, 10L)).thenReturn(Optional.of(meeting));
+        when(egressClientAdapter.isConfigured()).thenReturn(true);
+        when(egressS3StorageService.isConfigured()).thenReturn(true);
+        when(meetingRepository.claimRecordingStart(eq(51L), any())).thenReturn(1);
+        when(egressClientAdapter.startRoomCompositeEgress(eq("tp-proj-10-m-51"), any(), eq(egressS3StorageService)))
+                .thenReturn(new EgressSnapshot("EG_OBS_OK", "tp-proj-10-m-51", "EGRESS_ACTIVE", "", false, "", 0L, 0L));
+        when(meetingRepository.attachStartedEgress(eq(51L), eq("EG_OBS_OK"), eq(MeetingRecordingStatus.RECORDING), any()))
+                .thenReturn(1);
+        when(projectMeetingService.getMeetingById(10L, 51L, 100L))
+                .thenReturn(ProjectMeetingResponse.builder().id(51L).egressId("EG_OBS_OK")
+                        .recordingStatus(MeetingRecordingStatus.RECORDING).build());
+
+        service.startRecording(10L, 51L, 100L);
+
+        assertThat(egressRecordingCount("cloud", "started")).isEqualTo(1.0);
+        assertThat(egressRecordingCount("cloud", "start_failed")).isZero();
+        List<Observation.Context> startSpans = observationHandler.stoppedByName("taskpilot.egress.start");
+        assertThat(startSpans).hasSize(1);
+        assertThat(startSpans.get(0).getLowCardinalityKeyValue("mode")).isEqualTo(KeyValue.of("mode", "cloud"));
+        assertThat(startSpans.get(0).getError()).isNull();
+        assertThat(observationHandler.scopesOpenedByName("taskpilot.egress.start")).hasSize(1);
+        assertThat(observationHandler.scopesClosedByName("taskpilot.egress.start")).hasSize(1);
+    }
+
+    @Test
+    void observability_startRecordingFailure_recordsErrorOnSpanClosesSpanAndIncrementsStartFailed() throws IOException {
+        ProjectMeetingEntity meeting = ProjectMeetingEntity.builder()
+                .id(52L).projectId(10L).hostId(100L).title("Obs Start Fail")
+                .roomName("tp-proj-10-m-52").status(ProjectMeetingStatus.ACTIVE)
+                .recordingStatus(MeetingRecordingStatus.IDLE).build();
+
+        when(meetingRepository.findByIdAndProjectId(52L, 10L)).thenReturn(Optional.of(meeting));
+        when(egressClientAdapter.isConfigured()).thenReturn(true);
+        when(egressS3StorageService.isConfigured()).thenReturn(true);
+        when(meetingRepository.claimRecordingStart(eq(52L), any())).thenReturn(1);
+        IOException rpcFailure = new IOException("LiveKit Egress 502 upstream timeout");
+        when(egressClientAdapter.startRoomCompositeEgress(eq("tp-proj-10-m-52"), any(), eq(egressS3StorageService)))
+                .thenThrow(rpcFailure);
+
+        assertThatThrownBy(() -> service.startRecording(10L, 52L, 100L))
+                .isInstanceOf(BusinessException.class)
+                .extracting("status")
+                .isEqualTo(502);
+
+        verify(meetingRepository).releaseFailedStartClaim(eq(52L), any(), any());
+        assertThat(egressRecordingCount("cloud", "start_failed")).isEqualTo(1.0);
+        assertThat(egressRecordingCount("cloud", "started")).isZero();
+
+        List<Observation.Context> startSpans = observationHandler.stoppedByName("taskpilot.egress.start");
+        assertThat(startSpans).hasSize(1);
+        assertThat(startSpans.get(0).getLowCardinalityKeyValue("mode")).isEqualTo(KeyValue.of("mode", "cloud"));
+        assertThat(startSpans.get(0).getError()).isSameAs(rpcFailure);
+        assertThat(observationHandler.erroredByName("taskpilot.egress.start")).hasSize(1);
+        assertThat(observationHandler.scopesOpenedByName("taskpilot.egress.start")).hasSize(1);
+        assertThat(observationHandler.scopesClosedByName("taskpilot.egress.start")).hasSize(1);
+    }
+
+    @Test
+    void observability_failedWebhook_incrementsFailedOnceAndIgnoresDuplicateWebhook() {
+        ProjectMeetingEntity meeting = ProjectMeetingEntity.builder()
+                .id(53L).projectId(10L).hostId(100L).title("Obs Failed Webhook")
+                .egressId("EG_OBS_FAIL").recordingStatus(MeetingRecordingStatus.PROCESSING).build();
+        EgressSnapshot failedSnap = new EgressSnapshot(
+                "EG_OBS_FAIL", "tp-proj-10-m-53", "EGRESS_FAILED", "encoder crash", false, "", 0L, 0L);
+
+        when(egressClientAdapter.receiveWebhook("body-fail", "auth-fail")).thenReturn(
+                new LiveKitEgressClientAdapter.ParsedWebhookEvent("egress_ended", "tp-proj-10-m-53", failedSnap));
+        when(meetingRepository.findByEgressId("EG_OBS_FAIL")).thenReturn(Optional.of(meeting));
+        when(meetingRepository.transitionRecordingStatus(
+                eq(53L), eq("EG_OBS_FAIL"), eq(MeetingRecordingStatus.FAILED),
+                any(), eq(false), any(), anyCollection()))
+                .thenReturn(1)
+                .thenReturn(0);
+
+        service.handleWebhook("body-fail", "auth-fail");
+        service.handleWebhook("body-fail", "auth-fail");
+
+        assertThat(egressRecordingCount("cloud", "failed")).isEqualTo(1.0);
+        assertThat(egressRecordingCount("cloud", "backup_storage")).isZero();
+        assertThat(observationHandler.stoppedByName("taskpilot.egress.webhook")).hasSize(2);
+    }
+
+    @Test
+    void observability_failedWebhookWithBackupStorage_incrementsBackupStorageOnceAndIgnoresDuplicateWebhook() {
+        ProjectMeetingEntity meeting = ProjectMeetingEntity.builder()
+                .id(54L).projectId(10L).hostId(100L).title("Obs Failed Backup")
+                .egressId("EG_OBS_FAIL_BK").recordingStatus(MeetingRecordingStatus.PROCESSING).build();
+        EgressSnapshot backupFailSnap = new EgressSnapshot(
+                "EG_OBS_FAIL_BK", "tp-proj-10-m-54", "EGRESS_FAILED", "S3 403 Forbidden", true, "", 0L, 0L);
+
+        when(egressClientAdapter.receiveWebhook("body-fail-bk", "auth-fail-bk")).thenReturn(
+                new LiveKitEgressClientAdapter.ParsedWebhookEvent("egress_ended", "tp-proj-10-m-54", backupFailSnap));
+        when(meetingRepository.findByEgressId("EG_OBS_FAIL_BK")).thenReturn(Optional.of(meeting));
+        when(meetingRepository.transitionRecordingStatus(
+                eq(54L), eq("EG_OBS_FAIL_BK"), eq(MeetingRecordingStatus.FAILED),
+                any(), eq(true), any(), anyCollection()))
+                .thenReturn(1)
+                .thenReturn(0);
+
+        service.handleWebhook("body-fail-bk", "auth-fail-bk");
+        service.handleWebhook("body-fail-bk", "auth-fail-bk");
+
+        assertThat(egressRecordingCount("cloud", "backup_storage")).isEqualTo(1.0);
+        assertThat(egressRecordingCount("cloud", "failed")).isZero();
+    }
+
+    @Test
+    void observability_completedWebhookWithBackupStorageMissingFromB2_incrementsOnceAcrossDuplicates()
+            throws IOException {
+        ProjectMeetingEntity inFlightMeeting = ProjectMeetingEntity.builder()
+                .id(55L).projectId(10L).hostId(100L).title("Obs Complete Backup")
+                .egressId("EG_OBS_COMP_BK").recordingStatus(MeetingRecordingStatus.PROCESSING)
+                .backupStorageUsed(false).build();
+        ProjectMeetingEntity alreadyFailedBackupMeeting = ProjectMeetingEntity.builder()
+                .id(55L).projectId(10L).hostId(100L).title("Obs Complete Backup")
+                .egressId("EG_OBS_COMP_BK").recordingStatus(MeetingRecordingStatus.FAILED)
+                .backupStorageUsed(true).build();
+        EgressSnapshot backupCompleteSnap = new EgressSnapshot(
+                "EG_OBS_COMP_BK", "tp-proj-10-m-55", "EGRESS_COMPLETE", "B2 503", true,
+                "recordings/project-10/m-55.mp4", 0L, 0L);
+
+        when(egressClientAdapter.receiveWebhook("body-comp-bk", "auth-comp-bk")).thenReturn(
+                new LiveKitEgressClientAdapter.ParsedWebhookEvent("egress_ended", "tp-proj-10-m-55", backupCompleteSnap));
+        when(egressS3StorageService.isConfigured()).thenReturn(true);
+        when(egressS3StorageService.headObject("recordings/project-10/m-55.mp4"))
+                .thenThrow(new EgressS3StorageService.ObjectNotFoundException("404 Not Found", null));
+        when(meetingRepository.findByEgressId("EG_OBS_COMP_BK"))
+                .thenReturn(Optional.of(inFlightMeeting))
+                .thenReturn(Optional.of(inFlightMeeting))
+                .thenReturn(Optional.of(alreadyFailedBackupMeeting));
+        when(meetingRepository.transitionRecordingStatus(
+                eq(55L), eq("EG_OBS_COMP_BK"), eq(MeetingRecordingStatus.FAILED),
+                any(), eq(true), any(), anyCollection()))
+                .thenReturn(1)
+                .thenReturn(0)
+                .thenReturn(1);
+
+        // 1st delivery: row transitions PROCESSING -> FAILED (rows=1) -> increments backup_storage
+        service.handleWebhook("body-comp-bk", "auth-comp-bk");
+        // 2nd delivery: transition updates 0 rows -> must NOT increment
+        service.handleWebhook("body-comp-bk", "auth-comp-bk");
+        // 3rd delivery: meeting already FAILED with backupStorageUsed=true -> must NOT increment
+        service.handleWebhook("body-comp-bk", "auth-comp-bk");
+
+        assertThat(egressRecordingCount("cloud", "backup_storage")).isEqualTo(1.0);
+        assertThat(egressRecordingCount("cloud", "failed")).isZero();
+        assertThat(egressRecordingCount("cloud", "completed")).isZero();
+    }
+
+    @Test
+    void observability_completedWebhook_incrementsCompletedOnceAndIgnoresDuplicateWebhook() {
+        ProjectMeetingEntity meeting = ProjectMeetingEntity.builder()
+                .id(57L).projectId(10L).hostId(100L).title("Obs Complete Cloud")
+                .egressId("EG_OBS_COMP").recordingStatus(MeetingRecordingStatus.PROCESSING).build();
+        ProjectFileEntity file = ProjectFileEntity.builder()
+                .id(957L).projectId(10L).sourceEgressId("EG_OBS_COMP")
+                .storageKey("recordings/project-10/m-57.mp4").storageProvider("b2")
+                .fileSize(4096L).contentType("video/mp4").build();
+        EgressSnapshot completeSnap = new EgressSnapshot(
+                "EG_OBS_COMP", "tp-proj-10-m-57", "EGRESS_COMPLETE", "", false,
+                "recordings/project-10/m-57.mp4", 4096L, 12_000_000_000L);
+
+        when(egressClientAdapter.receiveWebhook("body-comp", "auth-comp")).thenReturn(
+                new LiveKitEgressClientAdapter.ParsedWebhookEvent("egress_ended", "tp-proj-10-m-57", completeSnap));
+        when(meetingRepository.findByEgressId("EG_OBS_COMP")).thenReturn(Optional.of(meeting));
+        when(projectFileRepository.findBySourceEgressId("EG_OBS_COMP")).thenReturn(Optional.of(file));
+        when(meetingRepository.transitionRecordingCompleted(
+                eq(57L), eq("EG_OBS_COMP"), eq(MeetingRecordingStatus.COMPLETED), eq(957L), eq(false),
+                any(), anyCollection()))
+                .thenReturn(1)
+                .thenReturn(0);
+
+        service.handleWebhook("body-comp", "auth-comp");
+        service.handleWebhook("body-comp", "auth-comp");
+
+        assertThat(egressRecordingCount("cloud", "completed")).isEqualTo(1.0);
+        assertThat(egressRecordingCount("cloud", "backup_storage")).isZero();
+        assertThat(egressRecordingCount("cloud", "failed")).isZero();
+    }
+
+    @Test
+    void observability_fallbackCompleted_onlyIncrementsAfterAtomicCommitAndNotOnFailureOrReplay() throws IOException {
+        ProjectMeetingEntity meeting = ProjectMeetingEntity.builder()
+                .id(56L).projectId(10L).hostId(100L).title("Obs Fallback")
                 .status(ProjectMeetingStatus.ACTIVE).recordingStatus(MeetingRecordingStatus.IDLE).build();
-        when(meetingRepository.findByIdAndProjectId(47L, 10L)).thenReturn(Optional.of(meeting));
-        when(meetingRepository.findForUpdate(47L, 10L)).thenReturn(Optional.of(meeting));
+        when(meetingRepository.findByIdAndProjectId(56L, 10L)).thenReturn(Optional.of(meeting));
         when(egressS3StorageService.isConfigured()).thenReturn(true);
 
-        String clientClipId = "clip-same-token-race";
-        java.util.UUID clipUuid = java.util.UUID.nameUUIDFromBytes(
-                ("meeting-recording:10:47:client:100:" + clientClipId).getBytes(java.nio.charset.StandardCharsets.UTF_8)
-        );
-        java.util.UUID sharedOpId = java.util.UUID.randomUUID();
-        String sharedKey = "recordings/10/47/shared-winner-key.webm";
-        String sharedToken = presignedUploadTokenService.issueToken(
-                10L, 47L, 100L, sharedKey, "video/webm", "shared.webm",
-                Duration.ofMinutes(60), sharedOpId, Instant.now().plus(Duration.ofMinutes(15)), clientClipId);
+        String key = "recordings/10/56/obs-fallback.webm";
+        String token = presignedUploadTokenService.issueToken(
+                10L, 56L, 100L, key, "video/webm", "obs-fallback.webm", Duration.ofMinutes(20));
 
-        ProjectFileEntity winnerFile = ProjectFileEntity.builder()
-                .id(947L).projectId(10L).storageKey(sharedKey).storageProvider("b2")
+        ProjectFileEntity savedFile = ProjectFileEntity.builder()
+                .id(956L).projectId(10L).storageKey(key).storageProvider("b2")
                 .fileSize(2048L).contentType("video/webm").build();
-        MeetingRecordingEntity winnerClip = MeetingRecordingEntity.builder()
-                .id(clipUuid).meetingId(47L).projectId(10L).recorderId(100L)
-                .projectFileId(947L).origin(MeetingRecordingEntity.Origin.BROWSER)
-                .coverage(MeetingRecordingEntity.Coverage.SCREEN_ONLY)
-                .state(MeetingRecordingEntity.State.READY).build();
+        when(egressS3StorageService.headObject(key))
+                .thenReturn(new EgressS3StorageService.ObjectMetadata(2048L, "video/webm", "etag-obs"));
+        when(projectFileRepository.saveAndFlush(any(ProjectFileEntity.class))).thenReturn(savedFile);
 
-        // Precheck misses before winner commits; after headObject & markProviderWritten, winner commits SAME key!
-        when(projectFileRepository.findByProjectIdAndStorageKey(10L, sharedKey))
-                .thenReturn(Optional.empty())
-                .thenReturn(Optional.of(winnerFile));
-        when(meetingRecordingRepository.findById(clipUuid))
-                .thenReturn(Optional.empty())
-                .thenReturn(Optional.of(winnerClip));
-        when(egressS3StorageService.headObject(sharedKey))
-                .thenReturn(new EgressS3StorageService.ObjectMetadata(2048L, "video/webm", "etag-shared"));
-        lenient().when(projectFileRepository.findById(947L)).thenReturn(Optional.of(winnerFile));
-        when(projectMeetingService.getMeetingById(10L, 47L, 100L))
-                .thenReturn(ProjectMeetingResponse.builder().id(47L).recordingFileId(947L).recordingStatus(MeetingRecordingStatus.COMPLETED).build());
+        // 1. Atomic commit fails (F1 race: linkFallbackRecording returns 0 -> 409) -> metric must remain 0
+        when(projectFileRepository.findByProjectIdAndStorageKey(10L, key)).thenReturn(Optional.empty());
+        when(meetingRepository.linkFallbackRecording(eq(56L), eq(956L), any())).thenReturn(0);
 
-        ProjectMeetingResponse res = service.completeFallbackUpload(
-                10L, 47L, 100L,
-                new CompleteRecordingUploadRequest(sharedToken, 10L, MeetingRecordingEntity.Origin.BROWSER, MeetingRecordingEntity.Coverage.SCREEN_ONLY, clientClipId));
+        assertThatThrownBy(() -> service.completeFallbackUpload(
+                10L, 56L, 100L, new CompleteRecordingUploadRequest(token, 15L)))
+                .isInstanceOf(BusinessException.class)
+                .extracting("status")
+                .isEqualTo(409);
+        assertThat(egressRecordingCount("fallback", "completed")).isZero();
 
-        assertThat(res.completedRecordingFileId()).isEqualTo(947L);
-        // MUST NEVER delete or enqueue cleanup for the winning B2 object key!
-        verify(egressS3StorageService, never()).deleteFile(any());
-        verify(uploadPort, never()).compensateFailedUpload(any(), any(), any(), any());
-        verify(uploadPort, never()).compensateFailedUpload(any(), any(), any(), any(), any());
+        // 2. Atomic commit succeeds -> increments fallback/completed to 1
+        when(meetingRepository.linkFallbackRecording(eq(56L), eq(956L), any())).thenReturn(1);
+        when(projectMeetingService.getMeetingById(10L, 56L, 100L))
+                .thenReturn(ProjectMeetingResponse.builder().id(56L).recordingFileId(956L)
+                        .recordingStatus(MeetingRecordingStatus.COMPLETED).build());
+
+        service.completeFallbackUpload(10L, 56L, 100L, new CompleteRecordingUploadRequest(token, 15L));
+        assertThat(egressRecordingCount("fallback", "completed")).isEqualTo(1.0);
+
+        // 3. Idempotent replay of the committed uploadToken -> must NOT increment again
+        when(projectFileRepository.findByProjectIdAndStorageKey(10L, key)).thenReturn(Optional.of(savedFile));
+        when(meetingRecordingRepository.findByProjectFileId(956L))
+                .thenReturn(Optional.of(MeetingRecordingEntity.builder().projectFileId(956L).build()));
+
+        service.completeFallbackUpload(10L, 56L, 100L, new CompleteRecordingUploadRequest(token, 15L));
+        assertThat(egressRecordingCount("fallback", "completed")).isEqualTo(1.0);
+    }
+
+    private double egressRecordingCount(String mode, String outcome) {
+        Counter counter = meterRegistry.find("taskpilot.egress.recordings")
+                .tag("mode", mode)
+                .tag("outcome", outcome)
+                .counter();
+        return counter == null ? 0.0 : counter.count();
+    }
+
+    private static final class RecordingObservationHandler implements ObservationHandler<Observation.Context> {
+        private final List<Observation.Context> stopped = new ArrayList<>();
+        private final List<Observation.Context> errored = new ArrayList<>();
+        private final List<Observation.Context> scopesOpened = new ArrayList<>();
+        private final List<Observation.Context> scopesClosed = new ArrayList<>();
+
+        @Override
+        public boolean supportsContext(Observation.Context context) {
+            return true;
+        }
+
+        @Override
+        public void onError(Observation.Context context) {
+            errored.add(context);
+        }
+
+        @Override
+        public void onScopeOpened(Observation.Context context) {
+            scopesOpened.add(context);
+        }
+
+        @Override
+        public void onScopeClosed(Observation.Context context) {
+            scopesClosed.add(context);
+        }
+
+        @Override
+        public void onStop(Observation.Context context) {
+            stopped.add(context);
+        }
+
+        private List<Observation.Context> stoppedByName(String name) {
+            return stopped.stream().filter(c -> name.equals(c.getName())).toList();
+        }
+
+        private List<Observation.Context> erroredByName(String name) {
+            return errored.stream().filter(c -> name.equals(c.getName())).toList();
+        }
+
+        private List<Observation.Context> scopesOpenedByName(String name) {
+            return scopesOpened.stream().filter(c -> name.equals(c.getName())).toList();
+        }
+
+        private List<Observation.Context> scopesClosedByName(String name) {
+            return scopesClosed.stream().filter(c -> name.equals(c.getName())).toList();
+        }
     }
 }
