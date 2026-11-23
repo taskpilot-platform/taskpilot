@@ -45,15 +45,27 @@ public class ChatMessageSanitizer {
         }
 
         List<ChatMessage> cleanedRawMessages = new ArrayList<>();
-        if (rawMessages.get(0) instanceof SystemMessage) {
+        int firstNonSystemIdx = (rawMessages.get(0) instanceof SystemMessage) ? 1 : 0;
+        if (firstNonSystemIdx == 1) {
             cleanedRawMessages.add(rawMessages.get(0));
         }
 
-        for (int i = (rawMessages.get(0) instanceof SystemMessage ? 1 : 0); i < rawMessages.size(); i++) {
+        // Identify the current turn's user request (last UserMessage in rawMessages) so tool rounds
+        // do not drop it when it contains confirmation/cancellation phrases like "xác nhận" or "hủy bỏ".
+        int currentRequestIdx = -1;
+        for (int i = rawMessages.size() - 1; i >= firstNonSystemIdx; i--) {
+            if (rawMessages.get(i) instanceof UserMessage) {
+                currentRequestIdx = i;
+                break;
+            }
+        }
+
+        int cleanedCurrentIdx = -1;
+        for (int i = firstNonSystemIdx; i < rawMessages.size(); i++) {
             ChatMessage msg = rawMessages.get(i);
             boolean isLast = (i == rawMessages.size() - 1);
 
-            if (!isLast) {
+            if (!isLast && i != currentRequestIdx) {
                 if (msg instanceof UserMessage userMsg) {
                     String text = userMsg.singleText();
                     if (text != null) {
@@ -77,16 +89,24 @@ public class ChatMessageSanitizer {
                     }
                 }
             }
+            if (i == currentRequestIdx) {
+                cleanedCurrentIdx = cleanedRawMessages.size();
+            }
             cleanedRawMessages.add(msg);
         }
 
-        // Keep the first SystemMessage (if any) and at most 8 most recent messages.
+        // Keep the first SystemMessage (if any) and at most 8 most recent messages,
+        // while ensuring the current user request stays in context across deep tool rounds.
         List<ChatMessage> filteredMessages = new ArrayList<>();
         if (!cleanedRawMessages.isEmpty() && cleanedRawMessages.get(0) instanceof SystemMessage) {
             filteredMessages.add(cleanedRawMessages.get(0));
         }
 
         int startIdx = Math.max(filteredMessages.isEmpty() ? 0 : 1, cleanedRawMessages.size() - 8);
+        if (cleanedCurrentIdx >= 0 && cleanedCurrentIdx < startIdx) {
+            filteredMessages.add(cleanedRawMessages.get(cleanedCurrentIdx));
+            log.info("[Sanitizer] Kept current user request outside recent window.");
+        }
         for (int i = startIdx; i < cleanedRawMessages.size(); i++) {
             if (i == 0 && cleanedRawMessages.get(0) instanceof SystemMessage) {
                 continue;
