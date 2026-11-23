@@ -30,5 +30,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_project_files_source_egress_id
     ON public.project_files(source_egress_id)
     WHERE source_egress_id IS NOT NULL;
 
+CREATE UNIQUE INDEX IF NOT EXISTS uq_project_files_b2_storage_key
+    ON public.project_files(storage_key)
+    WHERE storage_provider = 'b2';
+
 CREATE INDEX IF NOT EXISTS idx_project_files_archive_status
     ON public.project_files(archive_status);

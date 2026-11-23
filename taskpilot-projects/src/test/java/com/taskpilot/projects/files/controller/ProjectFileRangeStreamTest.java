@@ -31,6 +31,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -76,6 +77,8 @@ class ProjectFileRangeStreamTest {
 
         lenient().when(userIdentityPort.findByEmail("member@taskpilot.io"))
                 .thenReturn(Optional.of(new UserIdentityDto(7L, "member@taskpilot.io")));
+        lenient().when(googleDriveService.isConfigured()).thenReturn(true);
+        lenient().when(egressS3StorageService.isConfigured()).thenReturn(true);
     }
 
     @Test
@@ -124,7 +127,7 @@ class ProjectFileRangeStreamTest {
     }
 
     @Test
-    void streamFile_rejectsUnsatisfiableRangeWith416() {
+    void streamFile_rejectsUnsatisfiableRangeWith416AndContentRangeHeader() {
         ProjectFileEntity entity = ProjectFileEntity.builder()
                 .id(42L).projectId(10L).originalName("meeting.mp4").contentType("video/mp4")
                 .fileSize(100L).storageProvider("b2").storageKey("recordings/m.mp4").build();
@@ -134,5 +137,46 @@ class ProjectFileRangeStreamTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting("status")
                 .isEqualTo(416);
+
+        String signedToken = tokenService.issueToken("member@taskpilot.io", 10L, 42L).token();
+        ResponseEntity<StreamingResponseBody> resp = controller.streamFile(10L, 42L, "bytes=500-600", signedToken, null);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE);
+        assertThat(resp.getHeaders().getFirst(HttpHeaders.CONTENT_RANGE)).isEqualTo("bytes */100");
+    }
+
+    @Test
+    void streamFile_supportsSuffixRangeOpenEndedGdriveChunkCapFull200AndRbacRejection() throws Exception {
+        long fiftyMb = 50L * 1024L * 1024L;
+        ProjectFileEntity gdriveEntity = ProjectFileEntity.builder()
+                .id(42L).projectId(10L).originalName("meeting.mp4").contentType("video/mp4")
+                .fileSize(fiftyMb).storageProvider("gdrive").storageBucket("googledrive").storageKey("drive-big").build();
+        when(projectFileRepository.findByIdAndProjectId(42L, 10L)).thenReturn(Optional.of(gdriveEntity));
+
+        // 1. Suffix range: bytes=-100
+        FileStreamResource suffixRes = fileService.streamFile(10L, 42L, "member@taskpilot.io", "bytes=-100");
+        assertThat(suffixRes.partial()).isTrue();
+        assertThat(suffixRes.rangeStart()).isEqualTo(fiftyMb - 100);
+        assertThat(suffixRes.rangeEnd()).isEqualTo(fiftyMb - 1);
+
+        // 2. Open-ended Google Drive range bytes=1024- is capped to 8MB chunk
+        FileStreamResource openEndedRes = fileService.streamFile(10L, 42L, "member@taskpilot.io", "bytes=1024-");
+        assertThat(openEndedRes.partial()).isTrue();
+        assertThat(openEndedRes.rangeStart()).isEqualTo(1024L);
+        assertThat(openEndedRes.contentLength()).isEqualTo(8L * 1024L * 1024L);
+
+        // 3. Full content 200 OK without Range header + attachment disposition when download=true
+        String signedToken = tokenService.issueToken("member@taskpilot.io", 10L, 42L).token();
+        ResponseEntity<StreamingResponseBody> fullResp =
+                controller.streamFile(10L, 42L, null, signedToken, true, null);
+        assertThat(fullResp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(fullResp.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION)).startsWith("attachment;");
+
+        // 4. Non-member RBAC rejection even with valid signed token
+        doThrow(new BusinessException(403, "Not a project member"))
+                .when(projectSecurityService).validateMember(10L, 7L);
+        assertThatThrownBy(() -> controller.streamFile(10L, 42L, "bytes=0-10", signedToken, null))
+                .isInstanceOf(BusinessException.class)
+                .extracting("status")
+                .isEqualTo(403);
     }
 }

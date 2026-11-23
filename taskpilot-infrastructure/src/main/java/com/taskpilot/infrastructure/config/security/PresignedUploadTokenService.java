@@ -8,6 +8,8 @@ import org.springframework.stereotype.Service;
 
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Date;
@@ -17,11 +19,13 @@ import java.util.Optional;
  * Cryptographically binds a server-generated Backblaze B2 object key, content-type,
  * projectId, meetingId, and uploader userId into a short-lived signed token.
  * Prevents clients from submitting arbitrary bucket keys during complete-upload.
+ * Uses a domain-separated derived HMAC key so upload tokens can NEVER be accepted by JwtService.
  */
 @Service
 public class PresignedUploadTokenService {
 
     private static final String TOKEN_TYPE = "B2_RECORDING_UPLOAD";
+    private static final String KEY_DOMAIN = ":taskpilot-b2-upload-v1";
     private static final Duration MAX_TTL = Duration.ofMinutes(30);
 
     public record UploadTokenClaims(
@@ -34,10 +38,10 @@ public class PresignedUploadTokenService {
             Instant expiresAt
     ) {}
 
-    private final String secretKey;
+    private final SecretKey signingKey;
 
     public PresignedUploadTokenService(@Value("${application.security.jwt.secret-key}") String secretKey) {
-        this.secretKey = secretKey;
+        this.signingKey = deriveDomainKey(secretKey, KEY_DOMAIN);
     }
 
     public String issueToken(
@@ -132,6 +136,17 @@ public class PresignedUploadTokenService {
     }
 
     private SecretKey getSigningKey() {
-        return Keys.hmacShaKeyFor(secretKey.getBytes(StandardCharsets.UTF_8));
+        return signingKey;
+    }
+
+    private static SecretKey deriveDomainKey(String masterSecret, String domain) {
+        try {
+            MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
+            byte[] derived = sha256.digest(((masterSecret != null ? masterSecret : "") + domain)
+                    .getBytes(StandardCharsets.UTF_8));
+            return Keys.hmacShaKeyFor(derived);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 algorithm unavailable", e);
+        }
     }
 }

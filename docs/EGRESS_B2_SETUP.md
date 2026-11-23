@@ -22,6 +22,7 @@ b2 bucket update --cors-rules '[
     ],
     "allowedHeaders": [
       "content-type",
+      "range",
       "x-amz-*"
     ],
     "exposeHeaders": [

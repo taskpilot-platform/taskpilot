@@ -30,6 +30,8 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFileEntity, 
 
     Optional<ProjectFileEntity> findBySourceEgressId(String sourceEgressId);
 
+    Optional<ProjectFileEntity> findByProjectIdAndStorageKey(Long projectId, String storageKey);
+
     long countByProjectId(Long projectId);
 
     @Query("""
@@ -38,12 +40,17 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFileEntity, 
               AND f.archiveStatus IN :statuses
               AND f.archiveRetryCount < :maxRetries
               AND f.createdAt <= :cutoff
+              AND (
+                  f.archiveStatus = com.taskpilot.projects.common.enums.FileArchiveStatus.ARCHIVE_PENDING
+                  OR f.updatedAt <= :retryCutoff
+              )
             ORDER BY f.createdAt ASC
             """)
     List<ProjectFileEntity> findEligibleForArchive(
             @Param("statuses") Collection<FileArchiveStatus> statuses,
             @Param("maxRetries") int maxRetries,
             @Param("cutoff") Instant cutoff,
+            @Param("retryCutoff") Instant retryCutoff,
             Pageable pageable
     );
 

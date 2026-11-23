@@ -39,7 +39,21 @@ import java.util.stream.Collectors;
 public class ProjectFileService {
 
     private static final long MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+    private static final long MAX_GDRIVE_OPEN_RANGE_BYTES = 8L * 1024L * 1024L; // 8MB per open-ended Drive Range probe
     private static final String DEFAULT_STORAGE_BUCKET = "documents";
+
+    public static class RangeNotSatisfiableException extends BusinessException {
+        private final long totalSize;
+
+        public RangeNotSatisfiableException(long totalSize, String message) {
+            super(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE.value(), message);
+            this.totalSize = totalSize;
+        }
+
+        public long getTotalSize() {
+            return totalSize;
+        }
+    }
 
     private final ProjectFileRepository projectFileRepository;
     private final StorageService storageService;
@@ -206,6 +220,15 @@ public class ProjectFileService {
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "File not found"));
 
         String provider = resolveProvider(entity);
+        if ("b2".equals(provider) && (egressS3StorageService == null || !egressS3StorageService.isConfigured())) {
+            throw new BusinessException(HttpStatus.SERVICE_UNAVAILABLE.value(),
+                    "Backblaze B2 recording storage is not configured");
+        }
+        if ("gdrive".equals(provider) && (googleDriveService == null || !googleDriveService.isConfigured())) {
+            throw new BusinessException(HttpStatus.SERVICE_UNAVAILABLE.value(),
+                    "Google Drive archival storage is not configured");
+        }
+
         long totalSize = resolveFileSize(entity, provider);
 
         long start = 0L;
@@ -221,7 +244,7 @@ public class ProjectFileService {
             spec = spec.trim();
             int dashIdx = spec.indexOf('-');
             if (dashIdx < 0) {
-                throw new BusinessException(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE.value(), "Invalid Range header");
+                throw new RangeNotSatisfiableException(totalSize, "Invalid Range header");
             }
             try {
                 String startStr = spec.substring(0, dashIdx).trim();
@@ -229,20 +252,27 @@ public class ProjectFileService {
                 if (startStr.isEmpty()) {
                     long suffix = Long.parseLong(endStr);
                     if (suffix <= 0) {
-                        throw new BusinessException(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE.value(), "Invalid suffix range");
+                        throw new RangeNotSatisfiableException(totalSize, "Invalid suffix range");
                     }
                     start = Math.max(0L, totalSize - suffix);
                     end = totalSize - 1;
                 } else {
                     start = Long.parseLong(startStr);
-                    end = endStr.isEmpty() ? (totalSize - 1) : Math.min(Long.parseLong(endStr), totalSize - 1);
+                    if (endStr.isEmpty()) {
+                        long maxEnd = "gdrive".equals(provider)
+                                ? Math.min(totalSize - 1, start + MAX_GDRIVE_OPEN_RANGE_BYTES - 1)
+                                : (totalSize - 1);
+                        end = maxEnd;
+                    } else {
+                        end = Math.min(Long.parseLong(endStr), totalSize - 1);
+                    }
                 }
             } catch (NumberFormatException e) {
-                throw new BusinessException(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE.value(), "Invalid Range bounds");
+                throw new RangeNotSatisfiableException(totalSize, "Invalid Range bounds");
             }
 
             if (start < 0 || start >= totalSize || end < start) {
-                throw new BusinessException(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE.value(),
+                throw new RangeNotSatisfiableException(totalSize,
                         "Requested range not satisfiable for totalSize=" + totalSize);
             }
             partial = true;

@@ -115,7 +115,7 @@ class RecordingArchiveWorkerTest {
         InOrder order = inOrder(projectFileRepository, egressS3StorageService);
         order.verify(projectFileRepository).completeArchiveToGoogleDrive(
                 eq(77L), eq("drive-id-77"), eq((long) videoBytes.length), eq(md5), any());
-        order.verify(egressS3StorageService).deleteFile("recordings/project-10/meeting-5.mp4");
+        order.verify(egressS3StorageService).deleteFileOrThrow("recordings/project-10/meeting-5.mp4");
     }
 
     @Test
@@ -145,6 +145,7 @@ class RecordingArchiveWorkerTest {
 
         assertThat(ok).isFalse();
         verify(googleDriveService).deleteFile("drive-corrupt-78");
+        verify(egressS3StorageService, never()).deleteFileOrThrow(any());
         verify(egressS3StorageService, never()).deleteFile(any());
         verify(projectFileRepository).markArchiveFailed(eq(78L), contains("Integrity verification failed"), any());
     }
@@ -172,14 +173,14 @@ class RecordingArchiveWorkerTest {
         when(egressS3StorageService.isConfigured()).thenReturn(true);
         when(googleDriveService.isConfigured()).thenReturn(true);
         when(projectFileRepository.resetStaleArchiving(any(), any())).thenReturn(1);
-        when(projectFileRepository.findEligibleForArchive(anyCollection(), eq(5), any(Instant.class), any()))
+        when(projectFileRepository.findEligibleForArchive(anyCollection(), eq(5), any(Instant.class), any(Instant.class), any()))
                 .thenReturn(List.of());
 
         int count = immediateWorker.processEligibleArchives(10);
 
         assertThat(count).isZero();
         verify(projectFileRepository).resetStaleArchiving(any(), any());
-        verify(projectFileRepository).findEligibleForArchive(anyCollection(), eq(5), any(Instant.class), any());
+        verify(projectFileRepository).findEligibleForArchive(anyCollection(), eq(5), any(Instant.class), any(Instant.class), any());
     }
 
     @Test
@@ -210,8 +211,8 @@ class RecordingArchiveWorkerTest {
         when(projectFileRepository.completeArchiveToGoogleDrive(
                 eq(80L), eq("drive-live-80"), eq((long) payload.length), eq(md5), any()))
                 .thenReturn(1);
-        doThrow(new RuntimeException("Transient B2 network error"))
-                .when(egressS3StorageService).deleteFile("recordings/project-10/meeting-80.mp4");
+        doThrow(new java.io.IOException("Transient B2 network error"))
+                .when(egressS3StorageService).deleteFileOrThrow("recordings/project-10/meeting-80.mp4");
 
         boolean ok = worker.archiveSingleFile(file, List.of(FileArchiveStatus.ARCHIVE_PENDING));
 

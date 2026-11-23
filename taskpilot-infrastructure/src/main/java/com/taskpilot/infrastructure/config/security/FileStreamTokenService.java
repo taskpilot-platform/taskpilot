@@ -8,6 +8,8 @@ import org.springframework.stereotype.Service;
 
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Date;
@@ -17,21 +19,23 @@ import java.util.Optional;
  * Issues and verifies short-lived HMAC-signed stream tokens scoped to a specific
  * (projectId, fileId, userEmail) so browser &lt;video&gt; tags can perform native
  * HTTP Range requests against private backend-proxied storage without public sharing.
+ * Uses a domain-separated derived HMAC key so stream tokens can NEVER be accepted by JwtService.
  */
 @Service
 public class FileStreamTokenService {
 
     private static final String TOKEN_TYPE = "FILE_STREAM";
+    private static final String KEY_DOMAIN = ":taskpilot-file-stream-v1";
     private static final Duration DEFAULT_TTL = Duration.ofMinutes(30);
 
     public record StreamTokenClaims(String userEmail, Long projectId, Long fileId, Instant expiresAt) {}
 
     public record IssuedStreamToken(String token, Instant expiresAt) {}
 
-    private final String secretKey;
+    private final SecretKey signingKey;
 
     public FileStreamTokenService(@Value("${application.security.jwt.secret-key}") String secretKey) {
-        this.secretKey = secretKey;
+        this.signingKey = deriveDomainKey(secretKey, KEY_DOMAIN);
     }
 
     public IssuedStreamToken issueToken(String userEmail, Long projectId, Long fileId) {
@@ -98,6 +102,17 @@ public class FileStreamTokenService {
     }
 
     private SecretKey getSigningKey() {
-        return Keys.hmacShaKeyFor(secretKey.getBytes(StandardCharsets.UTF_8));
+        return signingKey;
+    }
+
+    private static SecretKey deriveDomainKey(String masterSecret, String domain) {
+        try {
+            MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
+            byte[] derived = sha256.digest(((masterSecret != null ? masterSecret : "") + domain)
+                    .getBytes(StandardCharsets.UTF_8));
+            return Keys.hmacShaKeyFor(derived);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 algorithm unavailable", e);
+        }
     }
 }

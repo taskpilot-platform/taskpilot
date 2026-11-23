@@ -1,5 +1,6 @@
 package com.taskpilot.infrastructure.storage.googledrive;
 
+import com.google.api.client.googleapis.media.MediaHttpUploader;
 import com.google.api.client.http.AbstractInputStreamContent;
 import com.google.api.services.drive.Drive;
 import com.google.api.services.drive.model.File;
@@ -65,6 +66,7 @@ class GoogleDriveServiceTest {
 
         Drive.Files filesApi = mock(Drive.Files.class);
         Drive.Files.Create createReq = mock(Drive.Files.Create.class);
+        MediaHttpUploader uploader = mock(MediaHttpUploader.class);
         when(drive.files()).thenReturn(filesApi);
         when(filesApi.create(any(File.class), any(AbstractInputStreamContent.class))).thenAnswer(inv -> {
             AbstractInputStreamContent content = inv.getArgument(1);
@@ -73,6 +75,7 @@ class GoogleDriveServiceTest {
             return createReq;
         });
         when(createReq.setFields(anyString())).thenReturn(createReq);
+        when(createReq.getMediaHttpUploader()).thenReturn(uploader);
         when(createReq.execute()).thenReturn(new File()
                 .setId("drive-private-99")
                 .setName("meeting.mp4")
@@ -94,7 +97,22 @@ class GoogleDriveServiceTest {
         assertThat(result.streamedBytes()).isEqualTo(payload.length);
         assertThat(result.driveFile().getFileId()).isEqualTo("drive-private-99");
         assertThat(result.driveFile().getMd5Checksum()).isEqualTo(expectedMd5);
+        // Resumable streaming configuration invariant: never buffer entire file via direct upload
+        verify(uploader).setDirectUploadEnabled(false);
+        verify(uploader).setChunkSize(4 * 1024 * 1024);
         // Privacy invariant: MUST NOT call drive.permissions() to create public link
         verify(drive, never()).permissions();
+    }
+
+    @Test
+    void normalizeChunkSize_alignsTo256KbMultiplesAndRequiresClientSecret() {
+        assertThat(GoogleDriveService.normalizeChunkSize(100)).isEqualTo(MediaHttpUploader.MINIMUM_CHUNK_SIZE);
+        assertThat(GoogleDriveService.normalizeChunkSize(300 * 1024)).isEqualTo(MediaHttpUploader.MINIMUM_CHUNK_SIZE);
+        assertThat(GoogleDriveService.normalizeChunkSize(0)).isEqualTo(4 * 1024 * 1024);
+
+        GoogleDriveService missingSecret = new GoogleDriveService(drive, "folder-123", "cid", "", "rtoken");
+        assertThat(missingSecret.isConfigured()).isFalse();
+        GoogleDriveService complete = new GoogleDriveService(drive, "folder-123", "cid", "csecret", "rtoken");
+        assertThat(complete.isConfigured()).isTrue();
     }
 }

@@ -10,10 +10,14 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.IOException;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -27,8 +31,12 @@ class EgressReconciliationJobTest {
     @Mock
     private MeetingRecordingService meetingRecordingService;
 
-    @InjectMocks
     private EgressReconciliationJob reconciliationJob;
+
+    @org.junit.jupiter.api.BeforeEach
+    void setUp() {
+        reconciliationJob = new EgressReconciliationJob(meetingRepository, egressClientAdapter, meetingRecordingService, 24L);
+    }
 
     @Test
     void reconcileInFlightRecordings_pollsListEgressAndAppliesSnapshot() throws IOException {
@@ -51,5 +59,25 @@ class EgressReconciliationJobTest {
 
         assertThat(count).isEqualTo(1);
         verify(meetingRecordingService).applyEgressSnapshot(completed);
+    }
+
+    @Test
+    void reconcileInFlightRecordings_marksExpiredVanishedEgressFailedInsteadOfLoopingForever() throws IOException {
+        ProjectMeetingEntity vanished = ProjectMeetingEntity.builder()
+                .id(12L)
+                .projectId(2L)
+                .egressId("EG_VANISHED")
+                .recordingStatus(MeetingRecordingStatus.PROCESSING)
+                .updatedAt(Instant.now().minus(Duration.ofHours(30)))
+                .build();
+
+        when(egressClientAdapter.isConfigured()).thenReturn(true);
+        when(meetingRepository.findByRecordingStatusInAndEgressIdIsNotNull(anyCollection())).thenReturn(List.of(vanished));
+        when(egressClientAdapter.listEgress(null, "EG_VANISHED")).thenReturn(List.of());
+
+        int count = reconciliationJob.reconcileInFlightRecordings();
+
+        assertThat(count).isEqualTo(1);
+        verify(meetingRecordingService).markMissingEgressFailed(eq(12L), eq("EG_VANISHED"), contains("no longer found"));
     }
 }

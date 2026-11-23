@@ -41,6 +41,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -102,7 +104,7 @@ class MeetingRecordingServiceTest {
     }
 
     @Test
-    void startRecording_startsLiveKitEgressAndPersistsEgressId() throws IOException {
+    void startRecording_claimsAtomicallyStartsLiveKitEgressAndAttachesEgressId() throws IOException {
         ProjectMeetingEntity meeting = ProjectMeetingEntity.builder()
                 .id(5L).projectId(10L).hostId(100L).title("Standup")
                 .roomName("tp-proj-10-m-abc").status(ProjectMeetingStatus.ACTIVE)
@@ -111,17 +113,38 @@ class MeetingRecordingServiceTest {
         when(meetingRepository.findByIdAndProjectId(5L, 10L)).thenReturn(Optional.of(meeting));
         when(egressClientAdapter.isConfigured()).thenReturn(true);
         when(egressS3StorageService.isConfigured()).thenReturn(true);
+        when(meetingRepository.claimRecordingStart(eq(5L), any())).thenReturn(1);
         when(egressClientAdapter.startRoomCompositeEgress(eq("tp-proj-10-m-abc"), any(), eq(egressS3StorageService)))
                 .thenReturn(new EgressSnapshot("EG_001", "tp-proj-10-m-abc", "EGRESS_ACTIVE", "", false, "", 0L, 0L));
+        when(meetingRepository.attachStartedEgress(eq(5L), eq("EG_001"), eq(MeetingRecordingStatus.RECORDING), any()))
+                .thenReturn(1);
         when(projectMeetingService.getMeetingById(10L, 5L, "host@taskpilot.io"))
                 .thenReturn(ProjectMeetingResponse.builder().id(5L).egressId("EG_001").recordingStatus(MeetingRecordingStatus.RECORDING).build());
 
         ProjectMeetingResponse res = service.startRecording(10L, 5L, "host@taskpilot.io");
 
         assertThat(res.egressId()).isEqualTo("EG_001");
-        assertThat(meeting.getEgressId()).isEqualTo("EG_001");
-        assertThat(meeting.getRecordingStatus()).isEqualTo(MeetingRecordingStatus.RECORDING);
-        verify(meetingRepository).save(meeting);
+        verify(meetingRepository).claimRecordingStart(eq(5L), any());
+        verify(meetingRepository).attachStartedEgress(eq(5L), eq("EG_001"), eq(MeetingRecordingStatus.RECORDING), any());
+    }
+
+    @Test
+    void startRecording_concurrentClaimLost_throws409WithoutCallingLiveKit() throws IOException {
+        ProjectMeetingEntity meeting = ProjectMeetingEntity.builder()
+                .id(5L).projectId(10L).hostId(100L).title("Standup")
+                .roomName("tp-proj-10-m-abc").status(ProjectMeetingStatus.ACTIVE)
+                .recordingStatus(MeetingRecordingStatus.IDLE).build();
+
+        when(meetingRepository.findByIdAndProjectId(5L, 10L)).thenReturn(Optional.of(meeting));
+        when(egressClientAdapter.isConfigured()).thenReturn(true);
+        when(egressS3StorageService.isConfigured()).thenReturn(true);
+        when(meetingRepository.claimRecordingStart(eq(5L), any())).thenReturn(0);
+
+        assertThatThrownBy(() -> service.startRecording(10L, 5L, "host@taskpilot.io"))
+                .isInstanceOf(BusinessException.class)
+                .extracting("status")
+                .isEqualTo(409);
+        verify(egressClientAdapter, never()).startRoomCompositeEgress(any(), any(), any());
     }
 
     @Test
@@ -269,14 +292,14 @@ class MeetingRecordingServiceTest {
                 .isEqualTo(413);
         verify(egressS3StorageService).deleteFile(org.mockito.ArgumentMatchers.startsWith("recordings/10/5/"));
 
-        // 2. Valid file size completes and links ProjectFileEntity with storageProvider=b2
+        // 2. Valid file size completes, clears egressId via linkFallbackRecording, and is idempotent on replay
+        when(projectFileRepository.findByProjectIdAndStorageKey(eq(10L), any()))
+                .thenReturn(Optional.empty());
         when(egressS3StorageService.headObject(any()))
                 .thenReturn(new EgressS3StorageService.ObjectMetadata(5L * 1024L * 1024L, "video/webm", "etag2"));
-        when(projectFileRepository.saveAndFlush(any(ProjectFileEntity.class))).thenAnswer(inv -> {
-            ProjectFileEntity e = inv.getArgument(0);
-            e.setId(701L);
-            return e;
-        });
+        ProjectFileEntity createdFile = ProjectFileEntity.builder().id(701L).projectId(10L).storageProvider("b2").build();
+        when(projectFileRepository.saveAndFlush(any(ProjectFileEntity.class))).thenReturn(createdFile);
+        when(meetingRepository.linkFallbackRecording(eq(5L), eq(701L), any())).thenReturn(1);
         when(projectMeetingService.getMeetingById(10L, 5L, "host@taskpilot.io"))
                 .thenReturn(ProjectMeetingResponse.builder().id(5L).recordingFileId(701L).recordingStatus(MeetingRecordingStatus.COMPLETED).build());
 
@@ -284,7 +307,56 @@ class MeetingRecordingServiceTest {
                 10L, 5L, "host@taskpilot.io", new CompleteRecordingUploadRequest(presigned.uploadToken(), 60L));
 
         assertThat(completed.recordingFileId()).isEqualTo(701L);
-        assertThat(meeting.getRecordingFileId()).isEqualTo(701L);
-        assertThat(meeting.getRecordingStatus()).isEqualTo(MeetingRecordingStatus.COMPLETED);
+        verify(meetingRepository).linkFallbackRecording(eq(5L), eq(701L), any());
+
+        // 3. Replaying the same uploadToken must NOT insert a duplicate ProjectFileEntity
+        when(projectFileRepository.findByProjectIdAndStorageKey(eq(10L), any()))
+                .thenReturn(Optional.of(createdFile));
+
+        ProjectMeetingResponse replayed = service.completeFallbackUpload(
+                10L, 5L, "host@taskpilot.io", new CompleteRecordingUploadRequest(presigned.uploadToken(), 60L));
+
+        assertThat(replayed.recordingFileId()).isEqualTo(701L);
+        verify(projectFileRepository, times(1)).saveAndFlush(any(ProjectFileEntity.class));
+    }
+
+    @Test
+    void applyEgressSnapshot_failedMeetingSync_recoversOnlyWhenB2ObjectExists() throws IOException {
+        ProjectMeetingEntity failedMeeting = ProjectMeetingEntity.builder()
+                .id(9L).projectId(10L).hostId(100L).title("Recovery Demo")
+                .egressId("EG_REC").recordingStatus(MeetingRecordingStatus.FAILED)
+                .backupStorageUsed(true).build();
+        when(meetingRepository.findByEgressId("EG_REC")).thenReturn(Optional.of(failedMeeting));
+        when(egressS3StorageService.isConfigured()).thenReturn(true);
+
+        // First call: B2 object missing -> MUST NOT create an unlinked ProjectFileEntity.
+        // Second call: B2 object present -> recovers cleanly to COMPLETED.
+        when(egressS3StorageService.headObject("recordings/project-10/m-9.mp4"))
+                .thenThrow(new IOException("404 Not Found"))
+                .thenReturn(new EgressS3StorageService.ObjectMetadata(5000L, "video/mp4", "etag"));
+
+        service.applyEgressSnapshot(new EgressSnapshot(
+                "EG_REC", "room-9", "EGRESS_COMPLETE", "", false,
+                "recordings/project-10/m-9.mp4", 5000L, 1000L
+        ));
+        verify(projectFileRepository, never()).saveAndFlush(any());
+
+        when(projectFileRepository.findBySourceEgressId("EG_REC")).thenReturn(Optional.empty());
+        when(projectFileRepository.saveAndFlush(any(ProjectFileEntity.class))).thenAnswer(inv -> {
+            ProjectFileEntity e = inv.getArgument(0);
+            e.setId(909L);
+            return e;
+        });
+        when(meetingRepository.transitionRecordingCompleted(
+                eq(9L), eq("EG_REC"), eq(MeetingRecordingStatus.COMPLETED), eq(909L), eq(false), any(), anyCollection()))
+                .thenReturn(1);
+
+        service.applyEgressSnapshot(new EgressSnapshot(
+                "EG_REC", "room-9", "EGRESS_COMPLETE", "", false,
+                "recordings/project-10/m-9.mp4", 5000L, 1000L
+        ));
+
+        verify(meetingRepository).transitionRecordingCompleted(
+                eq(9L), eq("EG_REC"), eq(MeetingRecordingStatus.COMPLETED), eq(909L), eq(false), any(), anyCollection());
     }
 }

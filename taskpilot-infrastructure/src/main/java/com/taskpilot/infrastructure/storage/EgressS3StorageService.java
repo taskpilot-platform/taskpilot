@@ -244,6 +244,14 @@ public class EgressS3StorageService {
     }
 
     public void deleteFile(String key) {
+        try {
+            deleteFileOrThrow(key);
+        } catch (Exception e) {
+            log.error("Failed to delete object from B2: bucket={}, key={}, error={}", bucket, cleanKey(key), e.getMessage());
+        }
+    }
+
+    public void deleteFileOrThrow(String key) throws IOException {
         if (key == null || key.isBlank() || !isConfigured()) {
             return;
         }
@@ -255,7 +263,7 @@ public class EgressS3StorageService {
                     .build());
             log.info("Deleted object from B2: bucket={}, key={}", bucket, cleanedKey);
         } catch (Exception e) {
-            log.error("Failed to delete object from B2: bucket={}, key={}, error={}", bucket, cleanedKey, e.getMessage());
+            throw new IOException("Failed to delete object from B2: bucket=" + bucket + ", key=" + cleanedKey + ": " + e.getMessage(), e);
         }
     }
 

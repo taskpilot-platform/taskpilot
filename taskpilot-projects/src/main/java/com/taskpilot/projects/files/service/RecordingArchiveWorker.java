@@ -66,6 +66,7 @@ public class RecordingArchiveWorker {
     private final boolean enabled;
     private final long archiveAfterDays;
     private final int maxRetries;
+    private final long retryCooldownMinutes;
     private final int chunkSizeBytes;
     private final long staleArchivingMinutes;
 
@@ -77,9 +78,29 @@ public class RecordingArchiveWorker {
             EgressS3StorageService egressS3StorageService,
             GoogleDriveService googleDriveService,
             PlatformTransactionManager transactionManager,
+            boolean enabled,
+            long archiveAfterDays,
+            int maxRetries,
+            int chunkSizeBytes,
+            long staleArchivingMinutes) {
+        this(projectFileRepository, projectMemberRepository, projectSecurityService, userIdentityPort,
+                egressS3StorageService, googleDriveService, transactionManager,
+                enabled, archiveAfterDays, maxRetries, 15L, chunkSizeBytes, staleArchivingMinutes);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public RecordingArchiveWorker(
+            ProjectFileRepository projectFileRepository,
+            ProjectMemberRepository projectMemberRepository,
+            ProjectSecurityService projectSecurityService,
+            UserIdentityPort userIdentityPort,
+            EgressS3StorageService egressS3StorageService,
+            GoogleDriveService googleDriveService,
+            PlatformTransactionManager transactionManager,
             @Value("${egress.archive.gdrive.enabled:true}") boolean enabled,
             @Value("${egress.archive.gdrive.after-days:3}") long archiveAfterDays,
             @Value("${egress.archive.gdrive.max-retries:5}") int maxRetries,
+            @Value("${egress.archive.gdrive.retry-cooldown-minutes:15}") long retryCooldownMinutes,
             @Value("${egress.archive.gdrive.chunk-size-bytes:4194304}") int chunkSizeBytes,
             @Value("${egress.archive.gdrive.stale-archiving-minutes:30}") long staleArchivingMinutes) {
         this.projectFileRepository = projectFileRepository;
@@ -91,6 +112,7 @@ public class RecordingArchiveWorker {
         this.enabled = enabled;
         this.archiveAfterDays = Math.max(0L, archiveAfterDays);
         this.maxRetries = Math.max(1, maxRetries);
+        this.retryCooldownMinutes = Math.max(1L, retryCooldownMinutes);
         this.chunkSizeBytes = chunkSizeBytes;
         this.staleArchivingMinutes = Math.max(1L, staleArchivingMinutes);
         this.requiresNewTx = new TransactionTemplate(transactionManager);
@@ -127,14 +149,17 @@ public class RecordingArchiveWorker {
 
         resetStaleArchivingLocks();
 
+        Instant now = Instant.now();
         Instant cutoff = archiveAfterDays == 0L
-                ? Instant.now()
-                : Instant.now().minus(Duration.ofDays(archiveAfterDays));
+                ? now
+                : now.minus(Duration.ofDays(archiveAfterDays));
+        Instant retryCutoff = now.minus(Duration.ofMinutes(retryCooldownMinutes));
 
         List<ProjectFileEntity> candidates = projectFileRepository.findEligibleForArchive(
                 CLAIMABLE_STATUSES,
                 maxRetries,
                 cutoff,
+                retryCutoff,
                 PageRequest.of(0, Math.max(1, batchSize))
         );
 
@@ -265,7 +290,7 @@ public class RecordingArchiveWorker {
             // Once committed, the Drive copy is live and must NEVER be deleted if B2 cleanup throws.
             uploadedDriveFileId = null;
             try {
-                egressS3StorageService.deleteFile(b2Key);
+                egressS3StorageService.deleteFileOrThrow(b2Key);
             } catch (Exception b2CleanupEx) {
                 log.warn("Archived fileId={} to private Google Drive ({}), but failed to delete hot B2 copy ({}): {}",
                         fileId, verifiedDriveId, b2Key, b2CleanupEx.getMessage());

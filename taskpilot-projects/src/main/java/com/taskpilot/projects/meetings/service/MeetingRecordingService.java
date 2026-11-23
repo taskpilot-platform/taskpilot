@@ -56,6 +56,14 @@ public class MeetingRecordingService {
             MeetingRecordingStatus.PROCESSING
     );
 
+    private static final List<MeetingRecordingStatus> RECOVERABLE_COMPLETION_STATUSES = List.of(
+            MeetingRecordingStatus.IDLE,
+            MeetingRecordingStatus.STARTING,
+            MeetingRecordingStatus.RECORDING,
+            MeetingRecordingStatus.PROCESSING,
+            MeetingRecordingStatus.FAILED
+    );
+
     private static final Map<String, String> ALLOWED_FALLBACK_CONTENT_TYPES = Map.of(
             "video/webm", ".webm",
             "video/mp4", ".mp4",
@@ -107,7 +115,6 @@ public class MeetingRecordingService {
         this.requiresNewTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
-    @Transactional
     public ProjectMeetingResponse startRecording(Long projectId, Long meetingId, String userEmail) {
         Long userId = getUserId(userEmail);
         projectSecurityService.requireActiveProject(projectId);
@@ -135,6 +142,13 @@ public class MeetingRecordingService {
                     "Cloud Egress recording is not configured on the server");
         }
 
+        // Atomic claim in a short transaction BEFORE remote LiveKit RPC so concurrent requests cannot spawn duplicate Egress jobs.
+        Integer claimed = requiresNewTx.execute(tx -> meetingRepository.claimRecordingStart(meetingId, Instant.now()));
+        if (claimed == null || claimed == 0) {
+            throw new BusinessException(HttpStatus.CONFLICT.value(),
+                    "Recording is already starting or in progress");
+        }
+
         String filepath = buildEgressFilepath(projectId, meetingId);
         EgressSnapshot snapshot;
         try {
@@ -144,19 +158,25 @@ public class MeetingRecordingService {
                     egressS3StorageService
             );
         } catch (Exception e) {
+            requiresNewTx.execute(tx -> meetingRepository.releaseFailedStartClaim(
+                    meetingId,
+                    truncateError("Failed to start cloud recording: " + e.getMessage()),
+                    Instant.now()
+            ));
             log.error("Failed to start LiveKit Egress for meeting {}: {}", meetingId, e.getMessage(), e);
             throw new BusinessException(HttpStatus.BAD_GATEWAY.value(),
                     "Failed to start cloud recording: " + e.getMessage());
         }
 
-        meeting.setEgressId(snapshot.egressId());
-        meeting.setRecordingEnabled(true);
-        meeting.setRecordingStatus("EGRESS_ACTIVE".equals(snapshot.status())
+        MeetingRecordingStatus nextStatus = "EGRESS_ACTIVE".equals(snapshot.status())
                 ? MeetingRecordingStatus.RECORDING
-                : MeetingRecordingStatus.STARTING);
-        meeting.setRecordingError(null);
-        meeting.setBackupStorageUsed(false);
-        meetingRepository.save(meeting);
+                : MeetingRecordingStatus.STARTING;
+        requiresNewTx.execute(tx -> meetingRepository.attachStartedEgress(
+                meetingId,
+                snapshot.egressId(),
+                nextStatus,
+                Instant.now()
+        ));
 
         log.info("Started LiveKit RoomComposite Egress: meetingId={}, room={}, egressId={}, targetKey={}",
                 meetingId, meeting.getRoomName(), snapshot.egressId(), filepath);
@@ -164,7 +184,6 @@ public class MeetingRecordingService {
         return projectMeetingService.getMeetingById(projectId, meetingId, userEmail);
     }
 
-    @Transactional
     public ProjectMeetingResponse stopRecording(Long projectId, Long meetingId, String userEmail) {
         Long userId = getUserId(userEmail);
         projectSecurityService.requireActiveProject(projectId);
@@ -197,7 +216,7 @@ public class MeetingRecordingService {
         if (snapshot.isTerminal()) {
             applyEgressSnapshot(snapshot);
         } else {
-            meetingRepository.transitionRecordingStatus(
+            requiresNewTx.execute(tx -> meetingRepository.transitionRecordingStatus(
                     meeting.getId(),
                     egressId,
                     MeetingRecordingStatus.PROCESSING,
@@ -205,7 +224,7 @@ public class MeetingRecordingService {
                     snapshot.backupStorageUsed(),
                     Instant.now(),
                     ACTIVE_EGRESS_STATUSES
-            );
+            ));
         }
 
         return projectMeetingService.getMeetingById(projectId, meetingId, userEmail);
@@ -214,7 +233,6 @@ public class MeetingRecordingService {
     /**
      * Best-effort stop invoked when the host ends the meeting so LiveKit Egress quota is not leaked.
      */
-    @Transactional
     public void stopRecordingIfActive(ProjectMeetingEntity meeting) {
         if (meeting == null || meeting.getEgressId() == null || meeting.getEgressId().isBlank()) {
             return;
@@ -231,7 +249,7 @@ public class MeetingRecordingService {
             if (snapshot.isTerminal()) {
                 applyEgressSnapshot(snapshot);
             } else {
-                meetingRepository.transitionRecordingStatus(
+                requiresNewTx.execute(tx -> meetingRepository.transitionRecordingStatus(
                         meeting.getId(),
                         meeting.getEgressId(),
                         MeetingRecordingStatus.PROCESSING,
@@ -239,7 +257,7 @@ public class MeetingRecordingService {
                         snapshot.backupStorageUsed(),
                         Instant.now(),
                         ACTIVE_EGRESS_STATUSES
-                );
+                ));
             }
             log.info("Auto-stopped LiveKit Egress {} on endMeeting for meeting {}", meeting.getEgressId(), meeting.getId());
         } catch (Exception e) {
@@ -248,7 +266,6 @@ public class MeetingRecordingService {
         }
     }
 
-    @Transactional
     public ProjectMeetingResponse syncRecordingStatus(Long projectId, Long meetingId, String userEmail) {
         Long userId = getUserId(userEmail);
         projectSecurityService.requireProject(projectId);
@@ -272,6 +289,18 @@ public class MeetingRecordingService {
         }
 
         return projectMeetingService.getMeetingById(projectId, meetingId, userEmail);
+    }
+
+    public void markMissingEgressFailed(Long meetingId, String egressId, String reason) {
+        requiresNewTx.execute(tx -> meetingRepository.transitionRecordingStatus(
+                meetingId,
+                egressId,
+                MeetingRecordingStatus.FAILED,
+                truncateError(reason),
+                false,
+                Instant.now(),
+                IN_FLIGHT_STATUSES
+        ));
     }
 
     @Transactional
@@ -465,9 +494,10 @@ public class MeetingRecordingService {
 
     /**
      * Verifies the server-issued uploadToken, checks the uploaded B2 object via HeadObject,
-     * deletes and rejects oversized objects, and links the recording to the meeting.
+     * deletes and rejects oversized objects, and idempotently links the recording to the meeting.
+     * Runs remote B2 I/O outside any DB transaction and uses unique B2 key lookup + REQUIRES_NEW
+     * so retries/replays never create duplicate ProjectFileEntity rows sharing one B2 key.
      */
-    @Transactional
     public ProjectMeetingResponse completeFallbackUpload(
             Long projectId,
             Long meetingId,
@@ -489,6 +519,16 @@ public class MeetingRecordingService {
         if (!egressS3StorageService.isConfigured()) {
             throw new BusinessException(HttpStatus.SERVICE_UNAVAILABLE.value(),
                     "Backblaze B2 recording storage is not configured");
+        }
+
+        // Idempotency guard: if this uploadToken/objectKey was already registered, reuse existing row cleanly.
+        Optional<ProjectFileEntity> existingFile =
+                projectFileRepository.findByProjectIdAndStorageKey(projectId, claims.objectKey());
+        if (existingFile.isPresent()) {
+            ProjectFileEntity reused = existingFile.get();
+            requiresNewTx.execute(tx -> meetingRepository.linkFallbackRecording(meetingId, reused.getId(), Instant.now()));
+            log.info("Idempotent completeFallbackUpload reused existing fileId={} for key={}", reused.getId(), claims.objectKey());
+            return projectMeetingService.getMeetingById(projectId, meetingId, userEmail);
         }
 
         EgressS3StorageService.ObjectMetadata meta;
@@ -514,39 +554,52 @@ public class MeetingRecordingService {
         }
 
         Instant now = Instant.now();
-        String bucket = egressS3StorageService.getBucket().isBlank() ? "b2-recordings" : egressS3StorageService.getBucket();
-        FileArchiveStatus initialArchiveStatus = gdriveArchiveEnabled
-                ? FileArchiveStatus.ARCHIVE_PENDING
-                : FileArchiveStatus.NONE;
+        ProjectFileEntity savedFile = findOrCreateFallbackFile(meeting, userId, claims, meta.contentLength(), now);
 
-        ProjectFileEntity savedFile = projectFileRepository.saveAndFlush(ProjectFileEntity.builder()
-                .projectId(projectId)
-                .uploaderId(userId)
-                .fileName(claims.fileName())
-                .originalName(claims.fileName())
-                .fileSize(meta.contentLength())
-                .contentType(claims.contentType())
-                .storageKey(claims.objectKey())
-                .storageBucket(bucket)
-                .storageProvider("b2")
-                .archiveStatus(initialArchiveStatus)
-                .archiveRetryCount(0)
-                .description("Fallback browser recording: " + meeting.getTitle())
-                .createdAt(now)
-                .updatedAt(now)
-                .build());
-
-        meeting.setRecordingFileId(savedFile.getId());
-        meeting.setRecordingEnabled(true);
-        meeting.setRecordingStatus(MeetingRecordingStatus.COMPLETED);
-        meeting.setRecordingError(null);
-        meeting.setBackupStorageUsed(false);
-        meetingRepository.save(meeting);
+        requiresNewTx.execute(tx -> meetingRepository.linkFallbackRecording(meetingId, savedFile.getId(), now));
 
         log.info("Completed fallback B2 recording upload: meetingId={}, fileId={}, key={}, size={}",
                 meetingId, savedFile.getId(), claims.objectKey(), meta.contentLength());
 
         return projectMeetingService.getMeetingById(projectId, meetingId, userEmail);
+    }
+
+    private ProjectFileEntity findOrCreateFallbackFile(
+            ProjectMeetingEntity meeting,
+            Long userId,
+            PresignedUploadTokenService.UploadTokenClaims claims,
+            long contentLength,
+            Instant now) {
+        String bucket = egressS3StorageService.getBucket().isBlank() ? "b2-recordings" : egressS3StorageService.getBucket();
+        FileArchiveStatus initialArchiveStatus = gdriveArchiveEnabled
+                ? FileArchiveStatus.ARCHIVE_PENDING
+                : FileArchiveStatus.NONE;
+
+        try {
+            return Objects.requireNonNull(requiresNewTx.execute(status -> projectFileRepository.saveAndFlush(
+                    ProjectFileEntity.builder()
+                            .projectId(meeting.getProjectId())
+                            .uploaderId(userId)
+                            .fileName(claims.fileName())
+                            .originalName(claims.fileName())
+                            .fileSize(contentLength)
+                            .contentType(claims.contentType())
+                            .storageKey(claims.objectKey())
+                            .storageBucket(bucket)
+                            .storageProvider("b2")
+                            .archiveStatus(initialArchiveStatus)
+                            .archiveRetryCount(0)
+                            .description("Fallback browser recording: " + meeting.getTitle())
+                            .createdAt(now)
+                            .updatedAt(now)
+                            .build()
+            )));
+        } catch (DataIntegrityViolationException raceLost) {
+            log.info("Concurrent fallback upload completion detected for key={}, reusing existing ProjectFileEntity",
+                    claims.objectKey());
+            return projectFileRepository.findByProjectIdAndStorageKey(meeting.getProjectId(), claims.objectKey())
+                    .orElseThrow(() -> raceLost);
+        }
     }
 
     private static String normalizeVideoContentType(String rawContentType) {
@@ -572,10 +625,18 @@ public class MeetingRecordingService {
     }
 
     private void handleCompletedSnapshot(ProjectMeetingEntity meeting, EgressSnapshot snapshot, Instant now) {
+        MeetingRecordingStatus currentStatus = effectiveStatus(meeting);
+        if (!RECOVERABLE_COMPLETION_STATUSES.contains(currentStatus)
+                || (currentStatus == MeetingRecordingStatus.FAILED && meeting.getRecordingFileId() != null)) {
+            log.debug("Skipping EGRESS_COMPLETE for meetingId={} already in status={} with fileId={}",
+                    meeting.getId(), currentStatus, meeting.getRecordingFileId());
+            return;
+        }
+
         String storageKey = cleanKey(snapshot.filepath());
 
-        if (snapshot.backupStorageUsed()) {
-            // Verify whether the primary B2 bucket actually received the object; if not, surface backup recovery status.
+        if (snapshot.backupStorageUsed() || currentStatus == MeetingRecordingStatus.FAILED) {
+            // Verify whether the primary B2 bucket actually received the object before completing/recovering.
             boolean presentOnB2 = false;
             if (!storageKey.isBlank() && egressS3StorageService.isConfigured()) {
                 try {
@@ -586,18 +647,20 @@ public class MeetingRecordingService {
                 }
             }
             if (!presentOnB2) {
-                String msg = buildBackupStorageErrorMessage(snapshot.egressId(), snapshot.error());
-                log.warn("Egress {} completed with backup_storage_used=true and object missing from B2: {}",
-                        snapshot.egressId(), msg);
-                meetingRepository.transitionRecordingStatus(
-                        meeting.getId(),
-                        snapshot.egressId(),
-                        MeetingRecordingStatus.FAILED,
-                        msg,
-                        true,
-                        now,
-                        IN_FLIGHT_STATUSES
-                );
+                if (snapshot.backupStorageUsed()) {
+                    String msg = buildBackupStorageErrorMessage(snapshot.egressId(), snapshot.error());
+                    log.warn("Egress {} completed with backup_storage_used=true and object missing from B2: {}",
+                            snapshot.egressId(), msg);
+                    meetingRepository.transitionRecordingStatus(
+                            meeting.getId(),
+                            snapshot.egressId(),
+                            MeetingRecordingStatus.FAILED,
+                            msg,
+                            true,
+                            now,
+                            RECOVERABLE_COMPLETION_STATUSES
+                    );
+                }
                 return;
             }
         }
@@ -631,9 +694,9 @@ public class MeetingRecordingService {
                 snapshot.egressId(),
                 MeetingRecordingStatus.COMPLETED,
                 recordingFile.getId(),
-                snapshot.backupStorageUsed(),
+                false,
                 now,
-                IN_FLIGHT_STATUSES
+                RECOVERABLE_COMPLETION_STATUSES
         );
 
         log.info("Applied EGRESS_COMPLETE: meetingId={}, egressId={}, fileId={}, rowsUpdated={}",
@@ -761,6 +824,13 @@ public class MeetingRecordingService {
             trimmed = trimmed.substring(1);
         }
         return trimmed;
+    }
+
+    private static String truncateError(String msg) {
+        if (msg == null || msg.isBlank()) {
+            return "Cloud recording error";
+        }
+        return msg.length() <= 1000 ? msg : msg.substring(0, 1000);
     }
 
     private static String buildBackupStorageErrorMessage(String egressId, String rawError) {

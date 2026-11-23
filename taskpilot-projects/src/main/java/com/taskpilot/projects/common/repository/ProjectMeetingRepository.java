@@ -38,6 +38,81 @@ public interface ProjectMeetingRepository extends JpaRepository<ProjectMeetingEn
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             UPDATE ProjectMeetingEntity m
+            SET m.recordingStatus = com.taskpilot.projects.common.enums.MeetingRecordingStatus.STARTING,
+                m.recordingEnabled = true,
+                m.egressId = null,
+                m.recordingError = null,
+                m.backupStorageUsed = false,
+                m.updatedAt = :now
+            WHERE m.id = :id
+              AND (
+                  m.recordingStatus IS NULL
+                  OR m.recordingStatus IN (
+                      com.taskpilot.projects.common.enums.MeetingRecordingStatus.IDLE,
+                      com.taskpilot.projects.common.enums.MeetingRecordingStatus.COMPLETED,
+                      com.taskpilot.projects.common.enums.MeetingRecordingStatus.FAILED
+                  )
+              )
+            """)
+    int claimRecordingStart(@Param("id") Long id, @Param("now") Instant now);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE ProjectMeetingEntity m
+            SET m.egressId = :egressId,
+                m.recordingStatus = :nextStatus,
+                m.recordingEnabled = true,
+                m.recordingError = null,
+                m.backupStorageUsed = false,
+                m.updatedAt = :now
+            WHERE m.id = :id
+              AND m.recordingStatus = com.taskpilot.projects.common.enums.MeetingRecordingStatus.STARTING
+              AND m.egressId IS NULL
+            """)
+    int attachStartedEgress(
+            @Param("id") Long id,
+            @Param("egressId") String egressId,
+            @Param("nextStatus") MeetingRecordingStatus nextStatus,
+            @Param("now") Instant now
+    );
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE ProjectMeetingEntity m
+            SET m.recordingStatus = com.taskpilot.projects.common.enums.MeetingRecordingStatus.FAILED,
+                m.recordingError = :error,
+                m.updatedAt = :now
+            WHERE m.id = :id
+              AND m.recordingStatus = com.taskpilot.projects.common.enums.MeetingRecordingStatus.STARTING
+              AND m.egressId IS NULL
+            """)
+    int releaseFailedStartClaim(
+            @Param("id") Long id,
+            @Param("error") String error,
+            @Param("now") Instant now
+    );
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE ProjectMeetingEntity m
+            SET m.recordingFileId = :fileId,
+                m.egressId = null,
+                m.recordingEnabled = true,
+                m.recordingStatus = com.taskpilot.projects.common.enums.MeetingRecordingStatus.COMPLETED,
+                m.recordingError = null,
+                m.backupStorageUsed = false,
+                m.updatedAt = :now
+            WHERE m.id = :id
+            """)
+    int linkFallbackRecording(
+            @Param("id") Long id,
+            @Param("fileId") Long fileId,
+            @Param("now") Instant now
+    );
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE ProjectMeetingEntity m
             SET m.recordingStatus = :nextStatus,
                 m.recordingFileId = :fileId,
                 m.recordingEnabled = true,

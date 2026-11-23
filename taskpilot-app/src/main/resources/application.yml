@@ -258,11 +258,13 @@ egress:
       poll-interval-ms: ${EGRESS_ARCHIVE_POLL_INTERVAL_MS:300000}
       initial-delay-ms: ${EGRESS_ARCHIVE_INITIAL_DELAY_MS:60000}
       max-retries: ${EGRESS_ARCHIVE_MAX_RETRIES:5}
+      retry-cooldown-minutes: ${EGRESS_ARCHIVE_RETRY_COOLDOWN_MINUTES:15}
       chunk-size-bytes: ${EGRESS_ARCHIVE_CHUNK_SIZE_BYTES:4194304}
       stale-archiving-minutes: ${EGRESS_ARCHIVE_STALE_MINUTES:30}
   reconciliation:
     interval-ms: ${EGRESS_RECONCILIATION_INTERVAL_MS:120000}
     initial-delay-ms: ${EGRESS_RECONCILIATION_INITIAL_DELAY_MS:30000}
+    missing-timeout-hours: ${EGRESS_RECONCILIATION_MISSING_TIMEOUT_HOURS:24}
 
 decorator:
   datasource:

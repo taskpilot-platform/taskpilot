@@ -94,12 +94,13 @@ public class ProjectFileController {
 
     @Operation(summary = "Stream project file with HTTP Range support",
             description = "Streams private media directly without heap buffering, supporting HTTP 206 Partial Content seeking and project RBAC via JWT or signed stream token")
-    @GetMapping("/{fileId}/stream")
+    @RequestMapping(value = "/{fileId}/stream", method = {RequestMethod.GET, RequestMethod.HEAD})
     public ResponseEntity<StreamingResponseBody> streamFile(
             @PathVariable Long projectId,
             @PathVariable Long fileId,
             @RequestHeader(value = HttpHeaders.RANGE, required = false) String rangeHeader,
             @RequestParam(value = "token", required = false) String streamToken,
+            @RequestParam(value = "download", required = false, defaultValue = "false") boolean download,
             Authentication authentication) {
 
         String userEmail = resolveAuthenticatedEmail(authentication, streamToken, projectId, fileId);
@@ -107,7 +108,14 @@ public class ProjectFileController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
 
-        FileStreamResource streamResource = projectFileService.streamFile(projectId, fileId, userEmail, rangeHeader);
+        FileStreamResource streamResource;
+        try {
+            streamResource = projectFileService.streamFile(projectId, fileId, userEmail, rangeHeader);
+        } catch (ProjectFileService.RangeNotSatisfiableException ex) {
+            return ResponseEntity.status(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                    .header(HttpHeaders.CONTENT_RANGE, "bytes */" + ex.getTotalSize())
+                    .build();
+        }
 
         MediaType mediaType = MediaType.APPLICATION_OCTET_STREAM;
         if (streamResource.contentType() != null && !streamResource.contentType().isBlank()) {
@@ -118,6 +126,7 @@ public class ProjectFileController {
         }
 
         String encodedFilename = URLEncoder.encode(streamResource.fileName(), StandardCharsets.UTF_8).replace("+", "%20");
+        String dispositionType = download ? "attachment" : "inline";
         StreamingResponseBody body = outputStream -> {
             try (InputStream inputStream = streamResource.streamOpener().open()) {
                 inputStream.transferTo(outputStream);
@@ -128,7 +137,7 @@ public class ProjectFileController {
                 .status(streamResource.partial() ? HttpStatus.PARTIAL_CONTENT : HttpStatus.OK)
                 .contentType(mediaType)
                 .header(HttpHeaders.ACCEPT_RANGES, "bytes")
-                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename*=UTF-8''" + encodedFilename);
+                .header(HttpHeaders.CONTENT_DISPOSITION, dispositionType + "; filename*=UTF-8''" + encodedFilename);
 
         if (streamResource.totalSize() > 0) {
             builder.contentLength(streamResource.contentLength());
@@ -139,6 +148,15 @@ public class ProjectFileController {
         }
 
         return builder.body(body);
+    }
+
+    ResponseEntity<StreamingResponseBody> streamFile(
+            Long projectId,
+            Long fileId,
+            String rangeHeader,
+            String streamToken,
+            Authentication authentication) {
+        return streamFile(projectId, fileId, rangeHeader, streamToken, false, authentication);
     }
 
     private String resolveAuthenticatedEmail(Authentication authentication, String streamToken, Long projectId, Long fileId) {
@@ -170,8 +188,16 @@ public class ProjectFileController {
             @PathVariable Long projectId,
             @PathVariable Long fileId,
             Authentication authentication) {
-        boolean archived = recordingArchiveWorker != null
-                && recordingArchiveWorker.archiveFileNow(projectId, fileId, authentication.getName());
-        return ApiResponse.ok(archived ? "File archived to private Google Drive" : "Archive did not complete", archived);
+        if (recordingArchiveWorker == null) {
+            throw new com.taskpilot.infrastructure.exception.BusinessException(
+                    HttpStatus.SERVICE_UNAVAILABLE.value(), "Archive worker is not available");
+        }
+        boolean archived = recordingArchiveWorker.archiveFileNow(projectId, fileId, authentication.getName());
+        if (!archived) {
+            throw new com.taskpilot.infrastructure.exception.BusinessException(
+                    HttpStatus.BAD_GATEWAY.value(),
+                    "Archive transfer did not complete; check archive_error or retry shortly");
+        }
+        return ApiResponse.ok("File archived to private Google Drive", true);
     }
 }

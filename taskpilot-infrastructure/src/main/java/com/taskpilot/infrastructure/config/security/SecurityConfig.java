@@ -85,6 +85,7 @@ public class SecurityConfig {
                                                 .permitAll()
                                                 .requestMatchers(HttpMethod.POST, "/api/v1/webhooks/livekit").permitAll()
                                                 .requestMatchers(HttpMethod.GET, "/api/v1/projects/*/files/*/stream").permitAll()
+                                                .requestMatchers(HttpMethod.HEAD, "/api/v1/projects/*/files/*/stream").permitAll()
                                                 .requestMatchers("/v3/api-docs/**", "/swagger-ui/**",
                                                                 "/swagger-ui.html")
                                                 .permitAll()

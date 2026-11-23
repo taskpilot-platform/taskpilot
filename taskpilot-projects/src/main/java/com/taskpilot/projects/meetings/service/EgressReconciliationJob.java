@@ -3,13 +3,16 @@ package com.taskpilot.projects.meetings.service;
 import com.taskpilot.projects.common.entity.ProjectMeetingEntity;
 import com.taskpilot.projects.common.enums.MeetingRecordingStatus;
 import com.taskpilot.projects.common.repository.ProjectMeetingRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -19,7 +22,6 @@ import java.util.List;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class EgressReconciliationJob {
 
     private static final List<MeetingRecordingStatus> RECONCILABLE_STATUSES = List.of(
@@ -31,6 +33,26 @@ public class EgressReconciliationJob {
     private final ProjectMeetingRepository meetingRepository;
     private final LiveKitEgressClientAdapter egressClientAdapter;
     private final MeetingRecordingService meetingRecordingService;
+    private final long missingTimeoutHours;
+
+    public EgressReconciliationJob(
+            ProjectMeetingRepository meetingRepository,
+            LiveKitEgressClientAdapter egressClientAdapter,
+            MeetingRecordingService meetingRecordingService) {
+        this(meetingRepository, egressClientAdapter, meetingRecordingService, 24L);
+    }
+
+    @Autowired
+    public EgressReconciliationJob(
+            ProjectMeetingRepository meetingRepository,
+            LiveKitEgressClientAdapter egressClientAdapter,
+            MeetingRecordingService meetingRecordingService,
+            @Value("${egress.reconciliation.missing-timeout-hours:24}") long missingTimeoutHours) {
+        this.meetingRepository = meetingRepository;
+        this.egressClientAdapter = egressClientAdapter;
+        this.meetingRecordingService = meetingRecordingService;
+        this.missingTimeoutHours = Math.max(1L, missingTimeoutHours);
+    }
 
     @EventListener(ApplicationReadyEvent.class)
     public void reconcileOnStartup() {
@@ -70,8 +92,21 @@ public class EgressReconciliationJob {
             try {
                 List<EgressSnapshot> snapshots = egressClientAdapter.listEgress(null, egressId);
                 if (snapshots.isEmpty()) {
-                    log.warn("Reconciliation found no LiveKit Egress record for meetingId={}, egressId={}",
-                            meeting.getId(), egressId);
+                    Instant lastTouched = meeting.getUpdatedAt() != null ? meeting.getUpdatedAt() : meeting.getCreatedAt();
+                    Instant expireBefore = Instant.now().minus(Duration.ofHours(missingTimeoutHours));
+                    if (lastTouched != null && lastTouched.isBefore(expireBefore)) {
+                        log.warn("Egress {} for meeting {} not found in LiveKit after {}h; marking recording FAILED",
+                                egressId, meeting.getId(), missingTimeoutHours);
+                        meetingRecordingService.markMissingEgressFailed(
+                                meeting.getId(),
+                                egressId,
+                                "LiveKit Egress record " + egressId + " was no longer found after " + missingTimeoutHours + " hours"
+                        );
+                        reconciled++;
+                    } else {
+                        log.warn("Reconciliation found no LiveKit Egress record for meetingId={}, egressId={}",
+                                meeting.getId(), egressId);
+                    }
                     continue;
                 }
                 meetingRecordingService.applyEgressSnapshot(snapshots.get(0));

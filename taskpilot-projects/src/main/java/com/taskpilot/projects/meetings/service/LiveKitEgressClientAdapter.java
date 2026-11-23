@@ -129,9 +129,23 @@ public class LiveKitEgressClientAdapter {
         if (authorizationHeader == null || authorizationHeader.isBlank()) {
             throw new SecurityException("Missing Authorization header on LiveKit webhook");
         }
-        LivekitWebhook.WebhookEvent event = getWebhookReceiver().receive(rawBody, authorizationHeader);
-        EgressSnapshot snapshot = event.hasEgressInfo() ? toSnapshot(event.getEgressInfo()) : null;
-        return new ParsedWebhookEvent(event.getEvent(), snapshot);
+        try {
+            LivekitWebhook.WebhookEvent event = getWebhookReceiver().receive(rawBody, authorizationHeader);
+            EgressSnapshot snapshot = event.hasEgressInfo() ? toSnapshot(event.getEgressInfo()) : null;
+            return new ParsedWebhookEvent(event.getEvent(), snapshot);
+        } catch (SecurityException e) {
+            throw e;
+        } catch (IllegalArgumentException e) {
+            throw new SecurityException("Invalid LiveKit webhook signature or JWT: " + e.getMessage(), e);
+        } catch (RuntimeException e) {
+            // LiveKit SDK's WebhookReceiver throws com.auth0.jwt.exceptions.JWTVerificationException (runtime dep)
+            // on bad signature, wrong secret, malformed JWT, or expired token -> surface as SecurityException (401).
+            String exClass = e.getClass().getName();
+            if (exClass.startsWith("com.auth0.jwt.")) {
+                throw new SecurityException("Invalid LiveKit webhook JWT: " + e.getMessage(), e);
+            }
+            throw e;
+        }
     }
 
     EgressSnapshot toSnapshot(LivekitEgress.EgressInfo info) {

@@ -252,6 +252,8 @@ public class ProjectMeetingService {
             // Best-effort stop active cloud Egress recording so LiveKit Cloud minutes are not leaked
             if (meetingRecordingService != null) {
                 meetingRecordingService.stopRecordingIfActive(meeting);
+                // Re-fetch because stopRecordingIfActive updates recordingStatus/recordingFileId via modifying JPQL
+                meeting = meetingRepository.findByIdAndProjectId(meetingId, projectId).orElse(meeting);
             }
         }
 
@@ -277,6 +279,9 @@ public class ProjectMeetingService {
         // Recordings are uploaded and linked right as or after the meeting ends.
         meeting.setRecordingFileId(recordingFileId);
         meeting.setRecordingEnabled(true);
+        meeting.setRecordingStatus(MeetingRecordingStatus.COMPLETED);
+        meeting.setRecordingError(null);
+        meeting.setBackupStorageUsed(false);
         return mapToResponse(meetingRepository.save(meeting), userId);
     }
 

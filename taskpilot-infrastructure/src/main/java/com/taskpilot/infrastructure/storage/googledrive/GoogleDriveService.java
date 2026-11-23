@@ -48,10 +48,12 @@ public class GoogleDriveService {
             Drive drive,
             @Value("${google.drive.folder-id:}") String folderId,
             @Value("${google.drive.client-id:}") String clientId,
+            @Value("${google.drive.client-secret:}") String clientSecret,
             @Value("${google.drive.refresh-token:}") String refreshToken) {
         this.drive = drive;
         this.defaultFolderId = folderId != null ? folderId.trim() : "";
         this.credentialsConfigured = clientId != null && !clientId.isBlank()
+                && clientSecret != null && !clientSecret.isBlank()
                 && refreshToken != null && !refreshToken.isBlank();
     }
 
