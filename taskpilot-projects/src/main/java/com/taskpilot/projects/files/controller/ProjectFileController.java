@@ -6,9 +6,11 @@ import com.taskpilot.projects.files.dto.FileDownloadResource;
 import com.taskpilot.projects.files.dto.FileStreamResource;
 import com.taskpilot.projects.files.dto.ProjectFileResponse;
 import com.taskpilot.projects.files.service.ProjectFileService;
+import com.taskpilot.projects.files.service.RecordingArchiveWorker;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.core.io.Resource;
 import org.springframework.data.domain.Page;
@@ -36,6 +38,13 @@ public class ProjectFileController {
 
     private final ProjectFileService projectFileService;
     private final FileStreamTokenService fileStreamTokenService;
+
+    private RecordingArchiveWorker recordingArchiveWorker;
+
+    @Autowired(required = false)
+    public void setRecordingArchiveWorker(RecordingArchiveWorker recordingArchiveWorker) {
+        this.recordingArchiveWorker = recordingArchiveWorker;
+    }
 
     @Operation(summary = "Upload a file to project", description = "Upload a file into project storage (up to 50MB)")
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -152,5 +161,17 @@ public class ProjectFileController {
             Authentication authentication) {
         projectFileService.deleteFile(projectId, fileId, authentication.getName());
         return ApiResponse.ok("File deleted successfully", null);
+    }
+
+    @Operation(summary = "Archive B2 recording to private Google Drive 5TB immediately",
+            description = "Streams hot B2 file directly to private Google Drive 5TB with MD5+size verification before deleting from B2")
+    @PostMapping("/{fileId}/archive-now")
+    public ApiResponse<Boolean> archiveFileNow(
+            @PathVariable Long projectId,
+            @PathVariable Long fileId,
+            Authentication authentication) {
+        boolean archived = recordingArchiveWorker != null
+                && recordingArchiveWorker.archiveFileNow(projectId, fileId, authentication.getName());
+        return ApiResponse.ok(archived ? "File archived to private Google Drive" : "Archive did not complete", archived);
     }
 }

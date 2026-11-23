@@ -14,6 +14,7 @@ public class GoogleDriveFileDto {
     private String name;
     private String mimeType;
     private Long size;
+    private String md5Checksum;
     private String webViewLink;
     private String webContentLink;
 }
