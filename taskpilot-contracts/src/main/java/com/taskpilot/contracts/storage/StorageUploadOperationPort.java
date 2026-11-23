@@ -1,5 +1,6 @@
 package com.taskpilot.contracts.storage;
 
+import java.time.Instant;
 import java.util.UUID;
 
 /**
@@ -27,6 +28,16 @@ public interface StorageUploadOperationPort {
             String errorCode,
             String errorMessage
     );
+
+    default void compensateFailedUpload(
+            UUID operationId,
+            StorageObjectLocator locator,
+            String errorCode,
+            String errorMessage,
+            Instant cleanupNotBefore
+    ) {
+        compensateFailedUpload(operationId, locator, errorCode, errorMessage);
+    }
 
     void markAborted(UUID operationId, String errorCode, String errorMessage);
 }

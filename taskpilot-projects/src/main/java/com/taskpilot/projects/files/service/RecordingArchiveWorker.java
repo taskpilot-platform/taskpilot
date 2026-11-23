@@ -1,5 +1,9 @@
 package com.taskpilot.projects.files.service;
 
+import com.taskpilot.contracts.storage.StorageCleanupPort;
+import com.taskpilot.contracts.storage.StorageCleanupRequest;
+import com.taskpilot.contracts.storage.StorageObjectLocator;
+import com.taskpilot.contracts.storage.StorageProviderKind;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.infrastructure.observability.TaskPilotMetrics;
 import com.taskpilot.infrastructure.storage.EgressS3StorageService;
@@ -61,6 +65,12 @@ public class RecordingArchiveWorker {
     private final EgressS3StorageService egressS3StorageService;
     private final GoogleDriveService googleDriveService;
     private final TransactionTemplate requiresNewTx;
+    private StorageCleanupPort storageCleanupPort;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setStorageCleanupPort(StorageCleanupPort storageCleanupPort) {
+        this.storageCleanupPort = storageCleanupPort;
+    }
 
     private final boolean enabled;
     private final long archiveAfterDays;
@@ -290,38 +300,55 @@ public class RecordingArchiveWorker {
                         expectedSize, uploadResult.streamedBytes(), driveSize, computedMd5, driveMd5
                 );
                 log.error("FileId={} archive verification mismatch: {}", fileId, mismatch);
-                safeDeleteDriveOrphan(uploadedDriveFileId);
+                safeDeleteDriveOrphan(uploadedDriveFileId, file.getProjectId(), fileId);
                 recordArchiveFailure(fileId, mismatch);
                 metrics.recordArchiveTransfer("integrity_mismatch", 0L, System.currentTimeMillis() - startedAt);
                 return false;
             }
 
             final String verifiedDriveId = uploadedDriveFileId;
-            Integer updated = requiresNewTx.execute(tx ->
-                    projectFileRepository.completeArchiveToGoogleDrive(
-                            fileId,
-                            verifiedDriveId,
-                            expectedSize,
-                            computedMd5,
-                            Instant.now()
-                    )
-            );
+            final String hotB2Bucket = (file.getStorageBucket() != null && !file.getStorageBucket().isBlank())
+                    ? file.getStorageBucket()
+                    : egressS3StorageService.getBucket();
+            Integer updated = requiresNewTx.execute(tx -> {
+                Integer rows = projectFileRepository.completeArchiveToGoogleDrive(
+                        fileId,
+                        verifiedDriveId,
+                        expectedSize,
+                        computedMd5,
+                        Instant.now()
+                );
+                if (rows != null && rows > 0 && storageCleanupPort != null
+                        && hotB2Bucket != null && !hotB2Bucket.isBlank()
+                        && b2Key != null && !b2Key.isBlank()) {
+                    storageCleanupPort.enqueueCleanup(new StorageCleanupRequest(
+                            new StorageObjectLocator(StorageProviderKind.B2, hotB2Bucket, b2Key),
+                            "RECORDING_ARCHIVE_HOT_COPY",
+                            String.valueOf(fileId),
+                            file.getProjectId(),
+                            null
+                    ));
+                }
+                return rows;
+            });
             if (updated == null || updated == 0) {
                 log.warn("FileId={} DB completion update affected 0 rows; keeping B2 object intact", fileId);
-                safeDeleteDriveOrphan(verifiedDriveId);
+                safeDeleteDriveOrphan(verifiedDriveId, file.getProjectId(), fileId);
                 metrics.recordArchiveTransfer("failed", 0L, System.currentTimeMillis() - startedAt);
                 return false;
             }
 
-            // Only delete from Backblaze B2 AFTER MD5+size verification AND DB commit succeeded.
-            // Once committed, the Drive copy is live and must NEVER be deleted if B2 cleanup throws.
+            // Once committed, the Drive copy is live and must NEVER be deleted if B2 cleanup fails.
+            // When StorageCleanupPort is wired, durable worker deletes hot B2 copy outside this transaction.
             uploadedDriveFileId = null;
-            try {
-                egressS3StorageService.deleteFileOrThrow(b2Key);
-            } catch (Exception b2CleanupEx) {
-                metrics.recordArchiveTransfer("b2_cleanup_failed", 0L, -1L);
-                log.warn("Archived fileId={} to private Google Drive ({}), but failed to delete hot B2 copy ({}): {}",
-                        fileId, verifiedDriveId, b2Key, b2CleanupEx.getMessage());
+            if (storageCleanupPort == null) {
+                try {
+                    egressS3StorageService.deleteFileOrThrow(b2Key);
+                } catch (Exception b2CleanupEx) {
+                    metrics.recordArchiveTransfer("b2_cleanup_failed", 0L, -1L);
+                    log.warn("Archived fileId={} to private Google Drive ({}), but failed to delete hot B2 copy ({}): {}",
+                            fileId, verifiedDriveId, b2Key, b2CleanupEx.getMessage());
+                }
             }
 
             metrics.recordArchiveTransfer("success", expectedSize, System.currentTimeMillis() - startedAt);
@@ -331,7 +358,7 @@ public class RecordingArchiveWorker {
         } catch (Exception e) {
             log.error("Failed archiving fileId={} from B2 to Google Drive: {}", fileId, e.getMessage(), e);
             if (uploadedDriveFileId != null) {
-                safeDeleteDriveOrphan(uploadedDriveFileId);
+                safeDeleteDriveOrphan(uploadedDriveFileId, file.getProjectId(), fileId);
             }
             recordArchiveFailure(fileId, truncateError(e.getMessage()));
             metrics.recordArchiveTransfer("failed", 0L, System.currentTimeMillis() - startedAt);
@@ -356,11 +383,40 @@ public class RecordingArchiveWorker {
         }
     }
 
-    private void safeDeleteDriveOrphan(String driveFileId) {
+    private void safeDeleteDriveOrphan(String driveFileId, Long projectId, Long fileId) {
+        if (driveFileId == null || driveFileId.isBlank()) {
+            return;
+        }
         try {
-            googleDriveService.deleteFile(driveFileId);
+            if (storageCleanupPort != null) {
+                var result = googleDriveService.deleteObject(driveFileId);
+                if (result == null || !result.isSuccess()) {
+                    storageCleanupPort.enqueueCleanup(new StorageCleanupRequest(
+                            new StorageObjectLocator(StorageProviderKind.GOOGLE_DRIVE, "googledrive", driveFileId),
+                            "RECORDING_ARCHIVE_DRIVE_ORPHAN",
+                            fileId != null ? String.valueOf(fileId) : null,
+                            projectId,
+                            null
+                    ));
+                }
+            } else {
+                googleDriveService.deleteFile(driveFileId);
+            }
         } catch (Exception cleanupEx) {
             log.warn("Could not clean up orphan Google Drive file {}: {}", driveFileId, cleanupEx.getMessage());
+            if (storageCleanupPort != null) {
+                try {
+                    storageCleanupPort.enqueueCleanup(new StorageCleanupRequest(
+                            new StorageObjectLocator(StorageProviderKind.GOOGLE_DRIVE, "googledrive", driveFileId),
+                            "RECORDING_ARCHIVE_DRIVE_ORPHAN",
+                            fileId != null ? String.valueOf(fileId) : null,
+                            projectId,
+                            null
+                    ));
+                } catch (Exception enqueueEx) {
+                    log.error("Could not enqueue orphan Drive cleanup for {}: {}", driveFileId, enqueueEx.getMessage());
+                }
+            }
         }
     }
 

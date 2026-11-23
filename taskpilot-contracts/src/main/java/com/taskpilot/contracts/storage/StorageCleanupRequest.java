@@ -1,5 +1,6 @@
 package com.taskpilot.contracts.storage;
 
+import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -11,8 +12,19 @@ public record StorageCleanupRequest(
         String sourceType,
         String sourceId,
         Long projectId,
-        UUID uploadOperationId
+        UUID uploadOperationId,
+        Instant notBefore
 ) {
+    public StorageCleanupRequest(
+            StorageObjectLocator locator,
+            String sourceType,
+            String sourceId,
+            Long projectId,
+            UUID uploadOperationId
+    ) {
+        this(locator, sourceType, sourceId, projectId, uploadOperationId, null);
+    }
+
     public StorageCleanupRequest {
         Objects.requireNonNull(locator, "locator must not be null");
         if (sourceType == null || sourceType.isBlank()) {

@@ -103,12 +103,13 @@ public class StorageCleanupService implements StorageCleanupPort {
             }
             StorageObjectLocator locator = request.locator();
             String dedupeKey = sha256Hex(locator.dedupeKey());
+            Timestamp scheduledAt = request.notBefore() != null ? Timestamp.from(request.notBefore()) : null;
             jdbcTemplate.update("""
                     INSERT INTO public.storage_cleanup_jobs (
                         dedupe_key, provider, bucket, object_key, operation,
                         source_type, source_id, project_id, upload_operation_id,
                         status, attempts, max_attempts, next_attempt_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, 'DELETE_OBJECT', ?, ?, ?, ?, 'PENDING', 0, ?, NOW(), NOW(), NOW())
+                    ) VALUES (?, ?, ?, ?, 'DELETE_OBJECT', ?, ?, ?, ?, 'PENDING', 0, ?, COALESCE(?, NOW()), NOW(), NOW())
                     ON CONFLICT (dedupe_key) WHERE status IN ('PENDING', 'IN_PROGRESS')
                     DO NOTHING
                     """,
@@ -120,7 +121,8 @@ public class StorageCleanupService implements StorageCleanupPort {
                     request.sourceId(),
                     request.projectId(),
                     request.uploadOperationId(),
-                    maxAttempts
+                    maxAttempts,
+                    scheduledAt
             );
         }
     }

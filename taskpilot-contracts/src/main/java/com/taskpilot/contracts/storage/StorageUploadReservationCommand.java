@@ -1,5 +1,6 @@
 package com.taskpilot.contracts.storage;
 
+import java.time.Duration;
 import java.util.Objects;
 
 /**
@@ -14,8 +15,24 @@ public record StorageUploadReservationCommand(
         String plannedObjectKey,
         String originalFilename,
         String contentType,
-        long expectedSize
+        long expectedSize,
+        Duration leaseDuration
 ) {
+    public StorageUploadReservationCommand(
+            long ownerUserId,
+            long projectId,
+            StorageTargetDomain targetDomain,
+            StorageProviderKind provider,
+            String bucket,
+            String plannedObjectKey,
+            String originalFilename,
+            String contentType,
+            long expectedSize
+    ) {
+        this(ownerUserId, projectId, targetDomain, provider, bucket, plannedObjectKey,
+                originalFilename, contentType, expectedSize, null);
+    }
+
     public StorageUploadReservationCommand {
         Objects.requireNonNull(targetDomain, "targetDomain must not be null");
         Objects.requireNonNull(provider, "provider must not be null");
@@ -27,6 +44,9 @@ public record StorageUploadReservationCommand(
         }
         if (expectedSize < 0) {
             throw new IllegalArgumentException("expectedSize must be non-negative");
+        }
+        if (leaseDuration != null && (leaseDuration.isZero() || leaseDuration.isNegative())) {
+            throw new IllegalArgumentException("leaseDuration must be positive when provided");
         }
         bucket = bucket.trim();
         plannedObjectKey = plannedObjectKey != null && !plannedObjectKey.isBlank() ? plannedObjectKey.trim() : null;

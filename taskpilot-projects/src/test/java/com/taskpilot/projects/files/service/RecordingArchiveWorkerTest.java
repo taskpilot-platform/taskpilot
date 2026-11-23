@@ -1,8 +1,13 @@
 package com.taskpilot.projects.files.service;
 
+import com.taskpilot.contracts.storage.StorageCleanupPort;
+import com.taskpilot.contracts.storage.StorageCleanupRequest;
+import com.taskpilot.contracts.storage.StorageObjectLocator;
+import com.taskpilot.contracts.storage.StorageProviderKind;
 import com.taskpilot.infrastructure.storage.EgressS3StorageService;
 import com.taskpilot.infrastructure.storage.googledrive.GoogleDriveFileDto;
 import com.taskpilot.infrastructure.storage.googledrive.GoogleDriveService;
+import com.taskpilot.infrastructure.storage.range.StorageDeleteResult;
 import com.taskpilot.projects.common.entity.ProjectFileEntity;
 import com.taskpilot.projects.common.enums.FileArchiveStatus;
 import com.taskpilot.projects.common.repository.ProjectFileRepository;
@@ -234,5 +239,85 @@ class RecordingArchiveWorkerTest {
 
         assertThat(worker.isRetryBackoffElapsed(tooSoon, now)).isFalse();
         assertThat(worker.isRetryBackoffElapsed(ready, now)).isTrue();
+    }
+
+    @Test
+    void archiveSingleFile_enqueuesDurableB2CleanupInCommitTransactionAndSkipsWhenCommitFails() throws Exception {
+        StorageCleanupPort cleanupPort = org.mockito.Mockito.mock(StorageCleanupPort.class);
+        worker.setStorageCleanupPort(cleanupPort);
+
+        ProjectFileEntity file = ProjectFileEntity.builder()
+                .id(81L).projectId(10L).originalName("meeting-81.mp4").contentType("video/mp4")
+                .storageProvider("b2").storageBucket("b2-hot-bucket")
+                .storageKey("recordings/project-10/meeting-81.mp4")
+                .archiveStatus(FileArchiveStatus.ARCHIVE_PENDING).build();
+
+        byte[] payload = "durable-archive-bytes".getBytes(StandardCharsets.UTF_8);
+        String md5 = "abcdef1234567890abcdef1234567890";
+
+        when(projectFileRepository.claimForArchiving(eq(81L), anyCollection(), any())).thenReturn(1);
+        when(egressS3StorageService.headObject("recordings/project-10/meeting-81.mp4"))
+                .thenReturn(new EgressS3StorageService.ObjectMetadata(payload.length, "video/mp4", "etag"));
+        when(egressS3StorageService.downloadFile("recordings/project-10/meeting-81.mp4"))
+                .thenReturn(new ByteArrayInputStream(payload));
+        when(googleDriveService.uploadPrivateStreamWithMd5(any(), any(), any(), eq((long) payload.length), isNull(), anyInt()))
+                .thenReturn(new GoogleDriveService.StreamedUploadResult(
+                        GoogleDriveFileDto.builder().fileId("drive-live-81").size((long) payload.length).md5Checksum(md5).build(),
+                        md5, payload.length
+                ));
+        when(projectFileRepository.completeArchiveToGoogleDrive(
+                eq(81L), eq("drive-live-81"), eq((long) payload.length), eq(md5), any()))
+                .thenReturn(1);
+
+        boolean ok = worker.archiveSingleFile(file, List.of(FileArchiveStatus.ARCHIVE_PENDING));
+
+        assertThat(ok).isTrue();
+        var reqCap = org.mockito.ArgumentCaptor.forClass(StorageCleanupRequest.class);
+        verify(cleanupPort).enqueueCleanup(reqCap.capture());
+        assertThat(reqCap.getValue().locator())
+                .isEqualTo(new StorageObjectLocator(StorageProviderKind.B2, "b2-hot-bucket", "recordings/project-10/meeting-81.mp4"));
+        verify(egressS3StorageService, never()).deleteFileOrThrow(any());
+        verify(googleDriveService, never()).deleteFile("drive-live-81");
+    }
+
+    @Test
+    void archiveSingleFile_dbCompletionAffectsZeroRows_neverEnqueuesB2CleanupAndEnqueuesDriveOrphanIfDeleteFails() throws Exception {
+        StorageCleanupPort cleanupPort = org.mockito.Mockito.mock(StorageCleanupPort.class);
+        worker.setStorageCleanupPort(cleanupPort);
+
+        ProjectFileEntity file = ProjectFileEntity.builder()
+                .id(82L).projectId(10L).originalName("meeting-82.mp4").contentType("video/mp4")
+                .storageProvider("b2").storageBucket("b2-hot-bucket")
+                .storageKey("recordings/project-10/meeting-82.mp4")
+                .archiveStatus(FileArchiveStatus.ARCHIVE_PENDING).build();
+
+        byte[] payload = "rollback-archive-bytes".getBytes(StandardCharsets.UTF_8);
+        String md5 = "11112222333344445555666677778888";
+
+        when(projectFileRepository.claimForArchiving(eq(82L), anyCollection(), any())).thenReturn(1);
+        when(egressS3StorageService.headObject("recordings/project-10/meeting-82.mp4"))
+                .thenReturn(new EgressS3StorageService.ObjectMetadata(payload.length, "video/mp4", "etag"));
+        when(egressS3StorageService.downloadFile("recordings/project-10/meeting-82.mp4"))
+                .thenReturn(new ByteArrayInputStream(payload));
+        when(googleDriveService.uploadPrivateStreamWithMd5(any(), any(), any(), eq((long) payload.length), isNull(), anyInt()))
+                .thenReturn(new GoogleDriveService.StreamedUploadResult(
+                        GoogleDriveFileDto.builder().fileId("drive-orphan-82").size((long) payload.length).md5Checksum(md5).build(),
+                        md5, payload.length
+                ));
+        when(projectFileRepository.completeArchiveToGoogleDrive(
+                eq(82L), eq("drive-orphan-82"), eq((long) payload.length), eq(md5), any()))
+                .thenReturn(0);
+        when(googleDriveService.deleteObject("drive-orphan-82"))
+                .thenReturn(StorageDeleteResult.retryableFailure("DRIVE_HTTP_503", "Drive unavailable"));
+
+        boolean ok = worker.archiveSingleFile(file, List.of(FileArchiveStatus.ARCHIVE_PENDING));
+
+        assertThat(ok).isFalse();
+        var reqCap = org.mockito.ArgumentCaptor.forClass(StorageCleanupRequest.class);
+        verify(cleanupPort).enqueueCleanup(reqCap.capture());
+        // Only the Drive orphan is enqueued for cleanup — NEVER the live B2 primary copy!
+        assertThat(reqCap.getValue().locator().provider()).isEqualTo(StorageProviderKind.GOOGLE_DRIVE);
+        assertThat(reqCap.getValue().locator().objectKey()).isEqualTo("drive-orphan-82");
+        verify(egressS3StorageService, never()).deleteFileOrThrow(any());
     }
 }

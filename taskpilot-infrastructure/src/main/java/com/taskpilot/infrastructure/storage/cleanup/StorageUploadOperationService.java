@@ -70,6 +70,11 @@ public class StorageUploadOperationService implements StorageUploadOperationPort
     public StorageUploadOperationDto reserve(StorageUploadReservationCommand command) {
         return executeRequiresNew(() -> {
             Instant now = Instant.now();
+            Duration effectiveLease = (command.leaseDuration() != null
+                    && !command.leaseDuration().isZero()
+                    && !command.leaseDuration().isNegative())
+                    ? command.leaseDuration()
+                    : defaultLeaseDuration;
             StorageUploadOperationEntity entity = StorageUploadOperationEntity.builder()
                     .operationId(UUID.randomUUID())
                     .ownerUserId(command.ownerUserId())
@@ -82,7 +87,7 @@ public class StorageUploadOperationService implements StorageUploadOperationPort
                     .contentType(truncate(command.contentType(), 255))
                     .expectedSize(command.expectedSize())
                     .status(StorageUploadOperationStatus.RESERVED)
-                    .leaseUntil(now.plus(defaultLeaseDuration))
+                    .leaseUntil(now.plus(effectiveLease))
                     .createdAt(now)
                     .updatedAt(now)
                     .build();
@@ -102,7 +107,10 @@ public class StorageUploadOperationService implements StorageUploadOperationPort
                 throw new IllegalStateException("Upload operation is no longer writable");
             }
             entity.setProviderObjectKey(providerObjectKey);
-            entity.setLeaseUntil(Instant.now().plus(defaultLeaseDuration));
+            Instant defaultNextLease = Instant.now().plus(defaultLeaseDuration);
+            if (entity.getLeaseUntil() == null || entity.getLeaseUntil().isBefore(defaultNextLease)) {
+                entity.setLeaseUntil(defaultNextLease);
+            }
             entity.setStatus(StorageUploadOperationStatus.PROVIDER_WRITTEN);
             entity.setUpdatedAt(Instant.now());
             return toDto(repository.saveAndFlush(entity));
@@ -158,6 +166,17 @@ public class StorageUploadOperationService implements StorageUploadOperationPort
             String errorCode,
             String errorMessage
     ) {
+        compensateFailedUpload(operationId, locator, errorCode, errorMessage, null);
+    }
+
+    @Override
+    public void compensateFailedUpload(
+            UUID operationId,
+            StorageObjectLocator locator,
+            String errorCode,
+            String errorMessage,
+            Instant cleanupNotBefore
+    ) {
         executeRequiresNew(() -> {
             StorageUploadOperationEntity entity = operationId != null
                     ? repository.findByIdForUpdate(operationId).orElse(null)
@@ -182,7 +201,8 @@ public class StorageUploadOperationService implements StorageUploadOperationPort
                         "UPLOAD_COMPENSATION",
                         operationId != null ? operationId.toString() : null,
                         projectId,
-                        operationId
+                        operationId,
+                        cleanupNotBefore
                 ));
                 if (entity != null) {
                     entity.setStatus(StorageUploadOperationStatus.COMPENSATION_QUEUED);
@@ -336,10 +356,10 @@ public class StorageUploadOperationService implements StorageUploadOperationPort
         if (entity.getProviderObjectKey() != null && !entity.getProviderObjectKey().isBlank()) {
             return new StorageObjectLocator(entity.getProvider(), entity.getBucket(), entity.getProviderObjectKey());
         }
-        if (entity.getProvider() == StorageProviderKind.S3
+        if ((entity.getProvider() == StorageProviderKind.S3 || entity.getProvider() == StorageProviderKind.B2)
                 && entity.getPlannedObjectKey() != null
                 && !entity.getPlannedObjectKey().isBlank()) {
-            return new StorageObjectLocator(StorageProviderKind.S3, entity.getBucket(), entity.getPlannedObjectKey());
+            return new StorageObjectLocator(entity.getProvider(), entity.getBucket(), entity.getPlannedObjectKey());
         }
         return null;
     }
