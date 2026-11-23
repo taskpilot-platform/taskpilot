@@ -165,11 +165,27 @@ public class RecordingArchiveWorker {
 
         int archivedCount = 0;
         for (ProjectFileEntity file : candidates) {
+            if (!isRetryBackoffElapsed(file, now)) {
+                continue;
+            }
             if (archiveSingleFile(file, CLAIMABLE_STATUSES)) {
                 archivedCount++;
             }
         }
         return archivedCount;
+    }
+
+    boolean isRetryBackoffElapsed(ProjectFileEntity file, Instant now) {
+        if (file.getArchiveStatus() != FileArchiveStatus.ARCHIVE_FAILED) {
+            return true;
+        }
+        int retries = file.getArchiveRetryCount() != null ? file.getArchiveRetryCount() : 0;
+        if (retries <= 1 || file.getUpdatedAt() == null) {
+            return true;
+        }
+        // Exponential backoff: base * 2^(retries - 1), capped at 24 hours
+        long backoffMinutes = Math.min(24L * 60L, retryCooldownMinutes << Math.min(6, retries - 1));
+        return !file.getUpdatedAt().plus(Duration.ofMinutes(backoffMinutes)).isAfter(now);
     }
 
     /**

@@ -83,6 +83,27 @@ public class MeetingRecordingService {
     private final TransactionTemplate requiresNewTx;
     private final boolean gdriveArchiveEnabled;
     private final long maxFallbackFileSizeBytes;
+    private final long uploadTokenGraceMinutes;
+
+    public MeetingRecordingService(
+            ProjectMeetingRepository meetingRepository,
+            ProjectFileRepository projectFileRepository,
+            ProjectMemberRepository projectMemberRepository,
+            ProjectSecurityService projectSecurityService,
+            ProjectMeetingService projectMeetingService,
+            LiveKitEgressClientAdapter egressClientAdapter,
+            EgressS3StorageService egressS3StorageService,
+            FileStreamTokenService fileStreamTokenService,
+            PresignedUploadTokenService presignedUploadTokenService,
+            UserIdentityPort userIdentityPort,
+            PlatformTransactionManager transactionManager,
+            boolean gdriveArchiveEnabled,
+            long maxFallbackFileSizeBytes) {
+        this(meetingRepository, projectFileRepository, projectMemberRepository, projectSecurityService,
+                projectMeetingService, egressClientAdapter, egressS3StorageService, fileStreamTokenService,
+                presignedUploadTokenService, userIdentityPort, transactionManager,
+                gdriveArchiveEnabled, maxFallbackFileSizeBytes, 60L);
+    }
 
     @Autowired
     public MeetingRecordingService(
@@ -98,7 +119,8 @@ public class MeetingRecordingService {
             UserIdentityPort userIdentityPort,
             PlatformTransactionManager transactionManager,
             @Value("${egress.archive.gdrive.enabled:true}") boolean gdriveArchiveEnabled,
-            @Value("${egress.fallback.max-file-size-bytes:1073741824}") long maxFallbackFileSizeBytes) {
+            @Value("${egress.fallback.max-file-size-bytes:1073741824}") long maxFallbackFileSizeBytes,
+            @Value("${egress.fallback.upload-token-grace-minutes:60}") long uploadTokenGraceMinutes) {
         this.meetingRepository = meetingRepository;
         this.projectFileRepository = projectFileRepository;
         this.projectMemberRepository = projectMemberRepository;
@@ -111,6 +133,7 @@ public class MeetingRecordingService {
         this.userIdentityPort = userIdentityPort;
         this.gdriveArchiveEnabled = gdriveArchiveEnabled;
         this.maxFallbackFileSizeBytes = Math.max(1024L * 1024L, maxFallbackFileSizeBytes);
+        this.uploadTokenGraceMinutes = Math.max(0L, uploadTokenGraceMinutes);
         this.requiresNewTx = new TransactionTemplate(transactionManager);
         this.requiresNewTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
@@ -303,7 +326,32 @@ public class MeetingRecordingService {
         ));
     }
 
-    @Transactional
+    public void recoverStartingClaim(Long meetingId, EgressSnapshot snapshot) {
+        if (snapshot == null || snapshot.egressId() == null || snapshot.egressId().isBlank()) {
+            return;
+        }
+        MeetingRecordingStatus initialStatus = "EGRESS_ACTIVE".equals(snapshot.status())
+                ? MeetingRecordingStatus.RECORDING
+                : MeetingRecordingStatus.STARTING;
+        Integer attached = requiresNewTx.execute(tx -> meetingRepository.attachStartedEgress(
+                meetingId,
+                snapshot.egressId(),
+                initialStatus,
+                Instant.now()
+        ));
+        if (attached != null && attached > 0) {
+            applyEgressSnapshot(snapshot);
+        }
+    }
+
+    public void releaseStaleStartingClaim(Long meetingId, String reason) {
+        requiresNewTx.execute(tx -> meetingRepository.releaseFailedStartClaim(
+                meetingId,
+                truncateError(reason),
+                Instant.now()
+        ));
+    }
+
     public void handleWebhook(String rawBody, String authorizationHeader) {
         LiveKitEgressClientAdapter.ParsedWebhookEvent parsed =
                 egressClientAdapter.receiveWebhook(rawBody, authorizationHeader);
@@ -318,9 +366,11 @@ public class MeetingRecordingService {
     }
 
     /**
-     * Race-safe, idempotent state transition shared by webhooks, startup/periodic reconciliation, and manual sync.
+     * Race-safe, idempotent state transition shared by webhooks, startup/periodic reconciliation,
+     * stopRecording, and manual sync. Uses explicit {@code requiresNewTx} for all modifying JPQL
+     * queries so internal callers never bypass Spring's transactional proxy and remote B2 I/O never
+     * holds a DB transaction open.
      */
-    @Transactional
     public void applyEgressSnapshot(EgressSnapshot snapshot) {
         if (snapshot == null || snapshot.egressId() == null || snapshot.egressId().isBlank()) {
             return;
@@ -336,7 +386,7 @@ public class MeetingRecordingService {
         Instant now = Instant.now();
 
         switch (snapshot.status()) {
-            case "EGRESS_STARTING" -> meetingRepository.transitionRecordingStatus(
+            case "EGRESS_STARTING" -> requiresNewTx.execute(tx -> meetingRepository.transitionRecordingStatus(
                     meeting.getId(),
                     snapshot.egressId(),
                     MeetingRecordingStatus.STARTING,
@@ -344,8 +394,8 @@ public class MeetingRecordingService {
                     snapshot.backupStorageUsed(),
                     now,
                     List.of(MeetingRecordingStatus.IDLE)
-            );
-            case "EGRESS_ACTIVE" -> meetingRepository.transitionRecordingStatus(
+            ));
+            case "EGRESS_ACTIVE" -> requiresNewTx.execute(tx -> meetingRepository.transitionRecordingStatus(
                     meeting.getId(),
                     snapshot.egressId(),
                     MeetingRecordingStatus.RECORDING,
@@ -353,8 +403,8 @@ public class MeetingRecordingService {
                     snapshot.backupStorageUsed(),
                     now,
                     List.of(MeetingRecordingStatus.IDLE, MeetingRecordingStatus.STARTING)
-            );
-            case "EGRESS_ENDING" -> meetingRepository.transitionRecordingStatus(
+            ));
+            case "EGRESS_ENDING" -> requiresNewTx.execute(tx -> meetingRepository.transitionRecordingStatus(
                     meeting.getId(),
                     snapshot.egressId(),
                     MeetingRecordingStatus.PROCESSING,
@@ -362,7 +412,7 @@ public class MeetingRecordingService {
                     snapshot.backupStorageUsed(),
                     now,
                     List.of(MeetingRecordingStatus.STARTING, MeetingRecordingStatus.RECORDING)
-            );
+            ));
             case "EGRESS_COMPLETE" -> handleCompletedSnapshot(meeting, snapshot, now);
             case "EGRESS_FAILED", "EGRESS_ABORTED", "EGRESS_LIMIT_REACHED" -> handleFailedSnapshot(meeting, snapshot, now);
             default -> log.warn("Unhandled LiveKit Egress status '{}' for egressId={}", snapshot.status(), snapshot.egressId());
@@ -453,6 +503,14 @@ public class MeetingRecordingService {
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Meeting not found"));
         requireHostOrManager(meeting, projectId, userId);
 
+        MeetingRecordingStatus currentStatus = effectiveStatus(meeting);
+        if (currentStatus == MeetingRecordingStatus.STARTING
+                || currentStatus == MeetingRecordingStatus.RECORDING
+                || currentStatus == MeetingRecordingStatus.PROCESSING) {
+            throw new BusinessException(HttpStatus.CONFLICT.value(),
+                    "Cannot start fallback upload while a cloud recording is in progress (status=" + currentStatus + ")");
+        }
+
         if (!egressS3StorageService.isConfigured()) {
             throw new BusinessException(HttpStatus.SERVICE_UNAVAILABLE.value(),
                     "Backblaze B2 recording storage is not configured");
@@ -472,6 +530,10 @@ public class MeetingRecordingService {
         EgressS3StorageService.PresignedUrlResult presigned =
                 egressS3StorageService.generatePresignedPutUrl(objectKey, canonicalContentType);
 
+        // Completion uploadToken outlives the short presigned PUT start URL by uploadTokenGraceMinutes
+        // so large recordings (e.g. 1 GB on slow uplinks) never fail at complete-upload after PUT finishes.
+        java.time.Duration uploadTokenTtl = egressS3StorageService.getPresignPutTtl()
+                .plusMinutes(uploadTokenGraceMinutes);
         String uploadToken = presignedUploadTokenService.issueToken(
                 projectId,
                 meetingId,
@@ -479,7 +541,7 @@ public class MeetingRecordingService {
                 objectKey,
                 canonicalContentType,
                 safeFileName,
-                egressS3StorageService.getPresignPutTtl()
+                uploadTokenTtl
         );
 
         return PresignRecordingUploadResponse.builder()
@@ -511,6 +573,14 @@ public class MeetingRecordingService {
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Meeting not found"));
         requireHostOrManager(meeting, projectId, userId);
 
+        MeetingRecordingStatus currentStatus = effectiveStatus(meeting);
+        if (currentStatus == MeetingRecordingStatus.STARTING
+                || currentStatus == MeetingRecordingStatus.RECORDING
+                || currentStatus == MeetingRecordingStatus.PROCESSING) {
+            throw new BusinessException(HttpStatus.CONFLICT.value(),
+                    "Cannot link fallback recording while a cloud recording is in progress (status=" + currentStatus + ")");
+        }
+
         PresignedUploadTokenService.UploadTokenClaims claims = presignedUploadTokenService
                 .verifyToken(request.uploadToken(), projectId, meetingId, userId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST.value(),
@@ -526,7 +596,12 @@ public class MeetingRecordingService {
                 projectFileRepository.findByProjectIdAndStorageKey(projectId, claims.objectKey());
         if (existingFile.isPresent()) {
             ProjectFileEntity reused = existingFile.get();
-            requiresNewTx.execute(tx -> meetingRepository.linkFallbackRecording(meetingId, reused.getId(), Instant.now()));
+            Integer linked = requiresNewTx.execute(tx ->
+                    meetingRepository.linkFallbackRecording(meetingId, reused.getId(), Instant.now()));
+            if (linked == null || linked == 0) {
+                throw new BusinessException(HttpStatus.CONFLICT.value(),
+                        "Cannot link fallback recording while a cloud recording is in progress");
+            }
             log.info("Idempotent completeFallbackUpload reused existing fileId={} for key={}", reused.getId(), claims.objectKey());
             return projectMeetingService.getMeetingById(projectId, meetingId, userEmail);
         }
@@ -534,9 +609,12 @@ public class MeetingRecordingService {
         EgressS3StorageService.ObjectMetadata meta;
         try {
             meta = egressS3StorageService.headObject(claims.objectKey());
-        } catch (IOException e) {
+        } catch (EgressS3StorageService.ObjectNotFoundException e) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
                     "Uploaded recording object was not found in Backblaze B2");
+        } catch (IOException e) {
+            throw new BusinessException(HttpStatus.SERVICE_UNAVAILABLE.value(),
+                    "Could not verify uploaded recording in Backblaze B2; please retry");
         }
 
         if (meta.contentLength() <= 0) {
@@ -556,7 +634,12 @@ public class MeetingRecordingService {
         Instant now = Instant.now();
         ProjectFileEntity savedFile = findOrCreateFallbackFile(meeting, userId, claims, meta.contentLength(), now);
 
-        requiresNewTx.execute(tx -> meetingRepository.linkFallbackRecording(meetingId, savedFile.getId(), now));
+        Integer linked = requiresNewTx.execute(tx ->
+                meetingRepository.linkFallbackRecording(meetingId, savedFile.getId(), now));
+        if (linked == null || linked == 0) {
+            throw new BusinessException(HttpStatus.CONFLICT.value(),
+                    "Cannot link fallback recording because a cloud recording became active");
+        }
 
         log.info("Completed fallback B2 recording upload: meetingId={}, fileId={}, key={}, size={}",
                 meetingId, savedFile.getId(), claims.objectKey(), meta.contentLength());
@@ -637,13 +720,18 @@ public class MeetingRecordingService {
 
         if (snapshot.backupStorageUsed() || currentStatus == MeetingRecordingStatus.FAILED) {
             // Verify whether the primary B2 bucket actually received the object before completing/recovering.
+            // Distinguish definitive 404 (ObjectNotFoundException) from transient B2 network/5xx errors.
             boolean presentOnB2 = false;
             if (!storageKey.isBlank() && egressS3StorageService.isConfigured()) {
                 try {
                     EgressS3StorageService.ObjectMetadata meta = egressS3StorageService.headObject(storageKey);
                     presentOnB2 = meta.contentLength() > 0;
-                } catch (IOException ignored) {
+                } catch (EgressS3StorageService.ObjectNotFoundException notFound) {
                     presentOnB2 = false;
+                } catch (IOException transientErr) {
+                    log.warn("Transient B2 headObject error checking egress {} (key={}); deferring transition to reconciliation: {}",
+                            snapshot.egressId(), storageKey, transientErr.getMessage());
+                    return;
                 }
             }
             if (!presentOnB2) {
@@ -651,7 +739,7 @@ public class MeetingRecordingService {
                     String msg = buildBackupStorageErrorMessage(snapshot.egressId(), snapshot.error());
                     log.warn("Egress {} completed with backup_storage_used=true and object missing from B2: {}",
                             snapshot.egressId(), msg);
-                    meetingRepository.transitionRecordingStatus(
+                    requiresNewTx.execute(tx -> meetingRepository.transitionRecordingStatus(
                             meeting.getId(),
                             snapshot.egressId(),
                             MeetingRecordingStatus.FAILED,
@@ -659,14 +747,14 @@ public class MeetingRecordingService {
                             true,
                             now,
                             RECOVERABLE_COMPLETION_STATUSES
-                    );
+                    ));
                 }
                 return;
             }
         }
 
         if (storageKey.isBlank()) {
-            meetingRepository.transitionRecordingStatus(
+            requiresNewTx.execute(tx -> meetingRepository.transitionRecordingStatus(
                     meeting.getId(),
                     snapshot.egressId(),
                     MeetingRecordingStatus.FAILED,
@@ -674,7 +762,7 @@ public class MeetingRecordingService {
                     snapshot.backupStorageUsed(),
                     now,
                     IN_FLIGHT_STATUSES
-            );
+            ));
             return;
         }
 
@@ -689,7 +777,7 @@ public class MeetingRecordingService {
 
         ProjectFileEntity recordingFile = findOrCreateRecordingFile(meeting, snapshot.egressId(), storageKey, Math.max(0L, fileSize), now);
 
-        int updated = meetingRepository.transitionRecordingCompleted(
+        Integer updated = requiresNewTx.execute(tx -> meetingRepository.transitionRecordingCompleted(
                 meeting.getId(),
                 snapshot.egressId(),
                 MeetingRecordingStatus.COMPLETED,
@@ -697,7 +785,7 @@ public class MeetingRecordingService {
                 false,
                 now,
                 RECOVERABLE_COMPLETION_STATUSES
-        );
+        ));
 
         log.info("Applied EGRESS_COMPLETE: meetingId={}, egressId={}, fileId={}, rowsUpdated={}",
                 meeting.getId(), snapshot.egressId(), recordingFile.getId(), updated);
@@ -717,7 +805,7 @@ public class MeetingRecordingService {
             log.error("Egress {} failed for meeting {}: {}", snapshot.egressId(), meeting.getId(), errorMessage);
         }
 
-        meetingRepository.transitionRecordingStatus(
+        requiresNewTx.execute(tx -> meetingRepository.transitionRecordingStatus(
                 meeting.getId(),
                 snapshot.egressId(),
                 MeetingRecordingStatus.FAILED,
@@ -725,7 +813,7 @@ public class MeetingRecordingService {
                 snapshot.backupStorageUsed(),
                 now,
                 IN_FLIGHT_STATUSES
-        );
+        ));
     }
 
     /**

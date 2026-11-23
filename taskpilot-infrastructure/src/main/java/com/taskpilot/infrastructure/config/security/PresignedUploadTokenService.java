@@ -26,7 +26,7 @@ public class PresignedUploadTokenService {
 
     private static final String TOKEN_TYPE = "B2_RECORDING_UPLOAD";
     private static final String KEY_DOMAIN = ":taskpilot-b2-upload-v1";
-    private static final Duration MAX_TTL = Duration.ofMinutes(30);
+    private static final Duration MAX_TTL = Duration.ofMinutes(120);
 
     public record UploadTokenClaims(
             Long projectId,

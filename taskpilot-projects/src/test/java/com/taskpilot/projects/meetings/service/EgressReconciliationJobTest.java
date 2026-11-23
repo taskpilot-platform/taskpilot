@@ -15,9 +15,11 @@ import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -35,7 +37,9 @@ class EgressReconciliationJobTest {
 
     @org.junit.jupiter.api.BeforeEach
     void setUp() {
-        reconciliationJob = new EgressReconciliationJob(meetingRepository, egressClientAdapter, meetingRecordingService, 24L);
+        reconciliationJob = new EgressReconciliationJob(meetingRepository, egressClientAdapter, meetingRecordingService, 24L, 120L);
+        lenient().when(meetingRepository.findByRecordingStatusAndEgressIdIsNullAndUpdatedAtBefore(
+                eq(MeetingRecordingStatus.STARTING), any(Instant.class))).thenReturn(List.of());
     }
 
     @Test
@@ -79,5 +83,35 @@ class EgressReconciliationJobTest {
 
         assertThat(count).isEqualTo(1);
         verify(meetingRecordingService).markMissingEgressFailed(eq(12L), eq("EG_VANISHED"), contains("no longer found"));
+    }
+
+    @Test
+    void reconcileInFlightRecordings_recoversOrReleasesStaleStartingClaimWithNullEgressId() throws IOException {
+        ProjectMeetingEntity crashedWithLiveEgress = ProjectMeetingEntity.builder()
+                .id(20L).projectId(2L).roomName("tp-proj-2-m-20")
+                .egressId(null).recordingStatus(MeetingRecordingStatus.STARTING)
+                .updatedAt(Instant.now().minusSeconds(300)).build();
+        ProjectMeetingEntity crashedWithoutEgress = ProjectMeetingEntity.builder()
+                .id(21L).projectId(2L).roomName("tp-proj-2-m-21")
+                .egressId(null).recordingStatus(MeetingRecordingStatus.STARTING)
+                .updatedAt(Instant.now().minusSeconds(300)).build();
+
+        EgressSnapshot found = new EgressSnapshot(
+                "EG_ORPHAN_20", "tp-proj-2-m-20", "EGRESS_ACTIVE", "", false, "", 0L, 0L
+        );
+
+        when(egressClientAdapter.isConfigured()).thenReturn(true);
+        when(meetingRepository.findByRecordingStatusInAndEgressIdIsNotNull(anyCollection())).thenReturn(List.of());
+        when(meetingRepository.findByRecordingStatusAndEgressIdIsNullAndUpdatedAtBefore(
+                eq(MeetingRecordingStatus.STARTING), any(Instant.class)))
+                .thenReturn(List.of(crashedWithLiveEgress, crashedWithoutEgress));
+        when(egressClientAdapter.listEgress("tp-proj-2-m-20", null)).thenReturn(List.of(found));
+        when(egressClientAdapter.listEgress("tp-proj-2-m-21", null)).thenReturn(List.of());
+
+        int count = reconciliationJob.reconcileInFlightRecordings();
+
+        assertThat(count).isEqualTo(2);
+        verify(meetingRecordingService).recoverStartingClaim(20L, found);
+        verify(meetingRecordingService).releaseStaleStartingClaim(eq(21L), contains("server restart"));
     }
 }

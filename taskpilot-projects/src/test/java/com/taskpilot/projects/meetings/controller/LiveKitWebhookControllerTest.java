@@ -61,4 +61,17 @@ class LiveKitWebhookControllerTest {
                         .content(rawPayload))
                 .andExpect(status().isUnauthorized());
     }
+
+    @Test
+    void returns503WhenLiveKitNotConfigured() throws Exception {
+        String rawPayload = "{\"event\":\"egress_ended\"}";
+        doThrow(new IllegalStateException("LiveKit API credentials or URL are not configured"))
+                .when(meetingRecordingService).handleWebhook(rawPayload, "some-jwt");
+
+        mockMvc.perform(post("/api/v1/webhooks/livekit")
+                        .contentType("application/webhook+json")
+                        .header("Authorization", "some-jwt")
+                        .content(rawPayload))
+                .andExpect(status().isServiceUnavailable());
+    }
 }

@@ -16,7 +16,9 @@ import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
+import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
@@ -43,6 +45,16 @@ public class EgressS3StorageService {
     public record PresignedUrlResult(String url, Instant expiresAt) {}
 
     public record ObjectMetadata(long contentLength, String contentType, String eTag) {}
+
+    /**
+     * Signals that the S3/B2 object definitively does not exist (HTTP 404 / NoSuchKey),
+     * as opposed to a transient network/5xx IOException.
+     */
+    public static class ObjectNotFoundException extends IOException {
+        public ObjectNotFoundException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
 
     @Getter
     private final boolean enabled;
@@ -211,6 +223,13 @@ public class EgressS3StorageService {
                     head.contentType(),
                     head.eTag()
             );
+        } catch (NoSuchKeyException e) {
+            throw new ObjectNotFoundException("Object not found in B2: bucket=" + bucket + ", key=" + cleanedKey, e);
+        } catch (S3Exception e) {
+            if (e.statusCode() == 404) {
+                throw new ObjectNotFoundException("Object not found in B2 (404): bucket=" + bucket + ", key=" + cleanedKey, e);
+            }
+            throw new IOException("Transient S3 error stating object in B2: bucket=" + bucket + ", key=" + cleanedKey + ": " + e.getMessage(), e);
         } catch (Exception e) {
             throw new IOException("Failed to stat object in B2: bucket=" + bucket + ", key=" + cleanedKey + ": " + e.getMessage(), e);
         }

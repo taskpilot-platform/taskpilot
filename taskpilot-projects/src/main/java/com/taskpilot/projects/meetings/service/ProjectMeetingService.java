@@ -238,14 +238,15 @@ public class ProjectMeetingService {
         }
 
         if (meeting.getStatus() != ProjectMeetingStatus.ENDED) {
+            Instant now = Instant.now();
+            // Targeted update touches ONLY status/endedAt/updatedAt so a concurrent webhook updating recordingStatus is never clobbered
+            meetingRepository.markMeetingEnded(meetingId, now, now);
             meeting.setStatus(ProjectMeetingStatus.ENDED);
-            meeting.setEndedAt(Instant.now());
-            meetingRepository.save(meeting);
+            meeting.setEndedAt(now);
 
             // Close all active participants
             List<ProjectMeetingParticipantEntity> activeParticipants =
                     participantRepository.findByMeetingIdAndLeftAtIsNullOrderByJoinedAtAsc(meetingId);
-            Instant now = Instant.now();
             activeParticipants.forEach(p -> p.setLeftAt(now));
             participantRepository.saveAll(activeParticipants);
 

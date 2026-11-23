@@ -220,4 +220,23 @@ class RecordingArchiveWorkerTest {
         verify(googleDriveService, never()).deleteFile("drive-live-80");
         verify(projectFileRepository, never()).markArchiveFailed(anyLong(), any(), any());
     }
+
+    @Test
+    void isRetryBackoffElapsed_appliesExponentialCooldownForArchiveFailed() {
+        Instant now = Instant.now();
+        // retryCount=3 -> 15 * 2^(3-1) = 60 minutes backoff
+        ProjectFileEntity tooSoon = ProjectFileEntity.builder()
+                .archiveStatus(FileArchiveStatus.ARCHIVE_FAILED)
+                .archiveRetryCount(3)
+                .updatedAt(now.minusSeconds(30 * 60))
+                .build();
+        ProjectFileEntity ready = ProjectFileEntity.builder()
+                .archiveStatus(FileArchiveStatus.ARCHIVE_FAILED)
+                .archiveRetryCount(3)
+                .updatedAt(now.minusSeconds(65 * 60))
+                .build();
+
+        assertThat(worker.isRetryBackoffElapsed(tooSoon, now)).isFalse();
+        assertThat(worker.isRetryBackoffElapsed(ready, now)).isTrue();
+    }
 }

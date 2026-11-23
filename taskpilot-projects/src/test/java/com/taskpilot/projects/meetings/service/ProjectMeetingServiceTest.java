@@ -183,7 +183,7 @@ class ProjectMeetingServiceTest {
         assertNotNull(response);
         assertEquals(ProjectMeetingStatus.ENDED, meeting.getStatus());
         assertNotNull(meeting.getEndedAt());
-        verify(meetingRepository).save(meeting);
+        verify(meetingRepository).markMeetingEnded(eq(meetingId), any(Instant.class), any(Instant.class));
         verify(participantRepository).saveAll(anyList());
     }
 

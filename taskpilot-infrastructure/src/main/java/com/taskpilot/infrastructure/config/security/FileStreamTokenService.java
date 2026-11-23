@@ -26,7 +26,7 @@ public class FileStreamTokenService {
 
     private static final String TOKEN_TYPE = "FILE_STREAM";
     private static final String KEY_DOMAIN = ":taskpilot-file-stream-v1";
-    private static final Duration DEFAULT_TTL = Duration.ofMinutes(30);
+    private static final Duration DEFAULT_TTL = Duration.ofHours(2);
 
     public record StreamTokenClaims(String userEmail, Long projectId, Long fileId, Instant expiresAt) {}
 

@@ -34,12 +34,21 @@ public class EgressReconciliationJob {
     private final LiveKitEgressClientAdapter egressClientAdapter;
     private final MeetingRecordingService meetingRecordingService;
     private final long missingTimeoutHours;
+    private final long startingClaimTimeoutSeconds;
 
     public EgressReconciliationJob(
             ProjectMeetingRepository meetingRepository,
             LiveKitEgressClientAdapter egressClientAdapter,
             MeetingRecordingService meetingRecordingService) {
-        this(meetingRepository, egressClientAdapter, meetingRecordingService, 24L);
+        this(meetingRepository, egressClientAdapter, meetingRecordingService, 24L, 120L);
+    }
+
+    public EgressReconciliationJob(
+            ProjectMeetingRepository meetingRepository,
+            LiveKitEgressClientAdapter egressClientAdapter,
+            MeetingRecordingService meetingRecordingService,
+            long missingTimeoutHours) {
+        this(meetingRepository, egressClientAdapter, meetingRecordingService, missingTimeoutHours, 120L);
     }
 
     @Autowired
@@ -47,11 +56,13 @@ public class EgressReconciliationJob {
             ProjectMeetingRepository meetingRepository,
             LiveKitEgressClientAdapter egressClientAdapter,
             MeetingRecordingService meetingRecordingService,
-            @Value("${egress.reconciliation.missing-timeout-hours:24}") long missingTimeoutHours) {
+            @Value("${egress.reconciliation.missing-timeout-hours:24}") long missingTimeoutHours,
+            @Value("${egress.reconciliation.starting-claim-timeout-seconds:120}") long startingClaimTimeoutSeconds) {
         this.meetingRepository = meetingRepository;
         this.egressClientAdapter = egressClientAdapter;
         this.meetingRecordingService = meetingRecordingService;
         this.missingTimeoutHours = Math.max(1L, missingTimeoutHours);
+        this.startingClaimTimeoutSeconds = Math.max(15L, startingClaimTimeoutSeconds);
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -78,10 +89,6 @@ public class EgressReconciliationJob {
 
         List<ProjectMeetingEntity> stuckMeetings =
                 meetingRepository.findByRecordingStatusInAndEgressIdIsNotNull(RECONCILABLE_STATUSES);
-
-        if (stuckMeetings.isEmpty()) {
-            return 0;
-        }
 
         int reconciled = 0;
         for (ProjectMeetingEntity meeting : stuckMeetings) {
@@ -116,6 +123,45 @@ public class EgressReconciliationJob {
                         egressId, meeting.getId(), e.getMessage());
             }
         }
+
+        // Recover meetings that crashed mid-RPC after claimRecordingStart (STARTING with egress_id IS NULL)
+        Instant staleClaimCutoff = Instant.now().minusSeconds(startingClaimTimeoutSeconds);
+        List<ProjectMeetingEntity> orphanedClaims = meetingRepository
+                .findByRecordingStatusAndEgressIdIsNullAndUpdatedAtBefore(
+                        MeetingRecordingStatus.STARTING, staleClaimCutoff);
+        for (ProjectMeetingEntity orphan : orphanedClaims) {
+            try {
+                List<EgressSnapshot> byRoom = orphan.getRoomName() != null && !orphan.getRoomName().isBlank()
+                        ? egressClientAdapter.listEgress(orphan.getRoomName(), null)
+                        : List.of();
+                if (!byRoom.isEmpty()) {
+                    EgressSnapshot recovered = pickBestRoomSnapshot(byRoom);
+                    log.info("Recovered orphaned STARTING claim for meeting {} by attaching LiveKit Egress {}",
+                            orphan.getId(), recovered.egressId());
+                    meetingRecordingService.recoverStartingClaim(orphan.getId(), recovered);
+                } else {
+                    log.warn("Releasing stale STARTING claim (egress_id=null) for meeting {} after {}s",
+                            orphan.getId(), startingClaimTimeoutSeconds);
+                    meetingRecordingService.releaseStaleStartingClaim(
+                            orphan.getId(),
+                            "Cloud recording start did not complete before server restart; please try recording again"
+                    );
+                }
+                reconciled++;
+            } catch (Exception e) {
+                log.warn("Failed to recover stale STARTING claim for meeting {}: {}", orphan.getId(), e.getMessage());
+            }
+        }
+
         return reconciled;
+    }
+
+    private static EgressSnapshot pickBestRoomSnapshot(List<EgressSnapshot> snapshots) {
+        return snapshots.stream()
+                .filter(s -> "EGRESS_ACTIVE".equals(s.status())
+                        || "EGRESS_STARTING".equals(s.status())
+                        || "EGRESS_ENDING".equals(s.status()))
+                .findFirst()
+                .orElse(snapshots.get(snapshots.size() - 1));
     }
 }

@@ -29,6 +29,26 @@ public interface ProjectMeetingRepository extends JpaRepository<ProjectMeetingEn
 
     List<ProjectMeetingEntity> findByRecordingStatusInAndEgressIdIsNotNull(Collection<MeetingRecordingStatus> statuses);
 
+    List<ProjectMeetingEntity> findByRecordingStatusAndEgressIdIsNullAndUpdatedAtBefore(
+            MeetingRecordingStatus status,
+            Instant updatedBefore
+    );
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE ProjectMeetingEntity m
+            SET m.status = com.taskpilot.projects.common.enums.ProjectMeetingStatus.ENDED,
+                m.endedAt = :endedAt,
+                m.updatedAt = :now
+            WHERE m.id = :id
+              AND m.status <> com.taskpilot.projects.common.enums.ProjectMeetingStatus.ENDED
+            """)
+    int markMeetingEnded(
+            @Param("id") Long id,
+            @Param("endedAt") Instant endedAt,
+            @Param("now") Instant now
+    );
+
     Optional<ProjectMeetingEntity> findFirstByProjectIdAndStatusOrderByStartedAtDesc(Long projectId, ProjectMeetingStatus status);
 
     long countByProjectIdAndStatus(Long projectId, ProjectMeetingStatus status);
@@ -103,6 +123,14 @@ public interface ProjectMeetingRepository extends JpaRepository<ProjectMeetingEn
                 m.backupStorageUsed = false,
                 m.updatedAt = :now
             WHERE m.id = :id
+              AND (
+                  m.recordingStatus IS NULL
+                  OR m.recordingStatus NOT IN (
+                      com.taskpilot.projects.common.enums.MeetingRecordingStatus.STARTING,
+                      com.taskpilot.projects.common.enums.MeetingRecordingStatus.RECORDING,
+                      com.taskpilot.projects.common.enums.MeetingRecordingStatus.PROCESSING
+                  )
+              )
             """)
     int linkFallbackRecording(
             @Param("id") Long id,

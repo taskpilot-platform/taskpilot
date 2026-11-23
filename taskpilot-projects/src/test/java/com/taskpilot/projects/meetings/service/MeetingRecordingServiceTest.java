@@ -329,12 +329,18 @@ class MeetingRecordingServiceTest {
         when(meetingRepository.findByEgressId("EG_REC")).thenReturn(Optional.of(failedMeeting));
         when(egressS3StorageService.isConfigured()).thenReturn(true);
 
-        // First call: B2 object missing -> MUST NOT create an unlinked ProjectFileEntity.
-        // Second call: B2 object present -> recovers cleanly to COMPLETED.
+        // First call: B2 object definitively 404 -> MUST NOT create an unlinked ProjectFileEntity.
+        // Second call: B2 transient network error -> defers cleanly without creating file or flipping FAILED.
+        // Third call: B2 object present -> recovers cleanly to COMPLETED.
         when(egressS3StorageService.headObject("recordings/project-10/m-9.mp4"))
-                .thenThrow(new IOException("404 Not Found"))
+                .thenThrow(new EgressS3StorageService.ObjectNotFoundException("404 Not Found", null))
+                .thenThrow(new IOException("Connection reset"))
                 .thenReturn(new EgressS3StorageService.ObjectMetadata(5000L, "video/mp4", "etag"));
 
+        service.applyEgressSnapshot(new EgressSnapshot(
+                "EG_REC", "room-9", "EGRESS_COMPLETE", "", false,
+                "recordings/project-10/m-9.mp4", 5000L, 1000L
+        ));
         service.applyEgressSnapshot(new EgressSnapshot(
                 "EG_REC", "room-9", "EGRESS_COMPLETE", "", false,
                 "recordings/project-10/m-9.mp4", 5000L, 1000L
@@ -358,5 +364,34 @@ class MeetingRecordingServiceTest {
 
         verify(meetingRepository).transitionRecordingCompleted(
                 eq(9L), eq("EG_REC"), eq(MeetingRecordingStatus.COMPLETED), eq(909L), eq(false), any(), anyCollection());
+    }
+
+    @Test
+    void fallbackUpload_rejectedWith409WhenCloudEgressIsActiveAndTokenOutlivesPutUrl() {
+        ProjectMeetingEntity activeEgressMeeting = ProjectMeetingEntity.builder()
+                .id(15L).projectId(10L).hostId(100L).title("Active Cloud Rec")
+                .egressId("EG_LIVE").recordingStatus(MeetingRecordingStatus.RECORDING).build();
+        when(meetingRepository.findByIdAndProjectId(15L, 10L)).thenReturn(Optional.of(activeEgressMeeting));
+
+        assertThatThrownBy(() -> service.presignFallbackUpload(
+                10L, 15L, "host@taskpilot.io", new PresignRecordingUploadRequest("video/webm", "fb.webm")))
+                .isInstanceOf(BusinessException.class)
+                .extracting("status")
+                .isEqualTo(409);
+
+        // For an idle meeting, uploadToken expiry MUST exceed the 20-minute presigned PUT URL expiry (+60m grace)
+        ProjectMeetingEntity idleMeeting = ProjectMeetingEntity.builder()
+                .id(16L).projectId(10L).hostId(100L).title("Large Fallback")
+                .recordingStatus(MeetingRecordingStatus.IDLE).build();
+        when(meetingRepository.findByIdAndProjectId(16L, 10L)).thenReturn(Optional.of(idleMeeting));
+        when(egressS3StorageService.isConfigured()).thenReturn(true);
+        Instant putExpiry = Instant.now().plus(Duration.ofMinutes(20));
+        when(egressS3StorageService.generatePresignedPutUrl(any(), eq("video/webm")))
+                .thenReturn(new EgressS3StorageService.PresignedUrlResult("https://b2.example/put", putExpiry));
+
+        PresignRecordingUploadResponse presigned = service.presignFallbackUpload(
+                10L, 16L, "host@taskpilot.io", new PresignRecordingUploadRequest("video/webm", "large.webm"));
+        var claims = presignedUploadTokenService.verifyToken(presigned.uploadToken(), 10L, 16L, 100L).orElseThrow();
+        assertThat(claims.expiresAt()).isAfter(putExpiry.plus(Duration.ofMinutes(55)));
     }
 }

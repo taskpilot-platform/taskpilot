@@ -12,6 +12,10 @@ spring:
   threads:
     virtual:
       enabled: true
+  task:
+    scheduling:
+      pool:
+        size: ${SPRING_TASK_SCHEDULING_POOL_SIZE:4}
   servlet:
     multipart:
       enabled: true
@@ -262,6 +266,7 @@ egress:
     presign-put-ttl-minutes: ${EGRESS_S3_PRESIGN_PUT_TTL_MINUTES:20}
   fallback:
     max-file-size-bytes: ${EGRESS_FALLBACK_MAX_FILE_SIZE_BYTES:1073741824}
+    upload-token-grace-minutes: ${EGRESS_FALLBACK_UPLOAD_TOKEN_GRACE_MINUTES:60}
   archive:
     gdrive:
       enabled: ${EGRESS_ARCHIVE_GDRIVE_ENABLED:true}
@@ -276,6 +281,7 @@ egress:
     interval-ms: ${EGRESS_RECONCILIATION_INTERVAL_MS:120000}
     initial-delay-ms: ${EGRESS_RECONCILIATION_INITIAL_DELAY_MS:30000}
     missing-timeout-hours: ${EGRESS_RECONCILIATION_MISSING_TIMEOUT_HOURS:24}
+    starting-claim-timeout-seconds: ${EGRESS_RECONCILIATION_STARTING_CLAIM_TIMEOUT_SECONDS:120}
 
 decorator:
   datasource:

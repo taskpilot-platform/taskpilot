@@ -50,6 +50,9 @@ public class LiveKitWebhookController {
         } catch (IllegalArgumentException e) {
             log.warn("Rejected invalid LiveKit webhook: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid webhook payload or signature");
+        } catch (IllegalStateException e) {
+            log.warn("LiveKit webhook rejected because LiveKit is not configured: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body("LiveKit webhook service is not configured");
         } catch (Exception e) {
             log.error("Error processing LiveKit webhook: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Webhook processing error");
