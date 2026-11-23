@@ -139,7 +139,7 @@ public class ProjectMeetingController {
             @PathVariable Long meetingId,
             Authentication authentication) {
         return ApiResponse.ok("Cloud recording started successfully",
-                meetingRecordingService.startRecording(projectId, meetingId, authentication.getName()));
+                meetingRecordingService.startRecording(projectId, meetingId, CurrentActorResolver.userId(authentication)));
     }
 
     @Operation(summary = "Stop cloud Egress recording", description = "Stop active LiveKit Cloud Egress recording (Host or Project Manager only)")
@@ -149,7 +149,7 @@ public class ProjectMeetingController {
             @PathVariable Long meetingId,
             Authentication authentication) {
         return ApiResponse.ok("Cloud recording stopped successfully",
-                meetingRecordingService.stopRecording(projectId, meetingId, authentication.getName()));
+                meetingRecordingService.stopRecording(projectId, meetingId, CurrentActorResolver.userId(authentication)));
     }
 
     @Operation(summary = "Synchronize cloud recording status", description = "Query LiveKit ListEgress to recover status if webhook was missed")
@@ -159,17 +159,17 @@ public class ProjectMeetingController {
             @PathVariable Long meetingId,
             Authentication authentication) {
         return ApiResponse.ok("Recording status synchronized successfully",
-                meetingRecordingService.syncRecordingStatus(projectId, meetingId, authentication.getName()));
+                meetingRecordingService.syncRecordingStatus(projectId, meetingId, CurrentActorResolver.userId(authentication)));
     }
 
-    @Operation(summary = "Get recording playback URL", description = "Returns direct B2 presigned GET URL or backend Range-streaming proxy URL based on storage provider")
+    @Operation(summary = "Get recording playback URL", description = "Returns authenticated backend Range-streaming proxy URL with project/file-scoped stream token and live RBAC revocation checks")
     @GetMapping("/{meetingId}/recording/playback-url")
     public ApiResponse<MeetingRecordingPlaybackResponse> getRecordingPlaybackUrl(
             @PathVariable Long projectId,
             @PathVariable Long meetingId,
             Authentication authentication) {
         return ApiResponse.ok("Recording playback URL retrieved successfully",
-                meetingRecordingService.getPlaybackUrl(projectId, meetingId, authentication.getName()));
+                meetingRecordingService.getPlaybackUrl(projectId, meetingId, CurrentActorResolver.userId(authentication)));
     }
 
     @Operation(summary = "Request presigned B2 PUT URL for fallback browser recording",
@@ -181,7 +181,7 @@ public class ProjectMeetingController {
             Authentication authentication,
             @Valid @RequestBody PresignRecordingUploadRequest request) {
         return ApiResponse.ok("Presigned recording upload URL generated",
-                meetingRecordingService.presignFallbackUpload(projectId, meetingId, authentication.getName(), request));
+                meetingRecordingService.presignFallbackUpload(projectId, meetingId, CurrentActorResolver.userId(authentication), request));
     }
 
     @Operation(summary = "Complete fallback browser recording upload",
@@ -193,7 +193,7 @@ public class ProjectMeetingController {
             Authentication authentication,
             @Valid @RequestBody CompleteRecordingUploadRequest request) {
         return ApiResponse.ok("Fallback recording completed and linked successfully",
-                meetingRecordingService.completeFallbackUpload(projectId, meetingId, authentication.getName(), request));
+                meetingRecordingService.completeFallbackUpload(projectId, meetingId, CurrentActorResolver.userId(authentication), request));
     }
 
     @Operation(summary = "List meeting participants", description = "Get participants who joined the meeting")

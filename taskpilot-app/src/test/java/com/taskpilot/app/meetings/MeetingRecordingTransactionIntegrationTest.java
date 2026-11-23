@@ -44,6 +44,9 @@ class MeetingRecordingTransactionIntegrationTest {
         String url = postgres.getJdbcUrl();
         String[] args = {
                 "--spring.profiles.active=dev",
+                "--application.security.jwt.secret-key=taskpilot-egress-integration-test-key-0123456789abcdef0123456789abcdef",
+                "--application.security.jwt.issuer=taskpilot",
+                "--application.security.jwt.audience=taskpilot-api",
                 "--server.port=0",
                 "--server.address=127.0.0.1",
                 "--spring.datasource.url=" + url,

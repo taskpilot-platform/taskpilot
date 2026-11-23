@@ -4,7 +4,6 @@ import com.taskpilot.contracts.user.dto.CurrentActor;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
-import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.entity.ProjectMeetingEntity;
 import com.taskpilot.projects.common.entity.ProjectMeetingParticipantEntity;
 import com.taskpilot.projects.common.entity.ProjectMemberEntity;
@@ -181,12 +180,20 @@ public class ProjectMeetingService {
         roomLifecycle.leave(projectId, meetingId, userId, participantSid);
     }
 
+    public void reconcileVerifiedRoomEvent(String roomName) {
+        roomLifecycle.reconcileRoomFromProvider(roomName);
+    }
+
     public void confirmAttendance(Long projectId, Long meetingId, Long userId, String participantSid) {
         roomLifecycle.confirmAttendance(projectId, meetingId, userId, participantSid);
     }
 
     public ProjectMeetingResponse endMeeting(Long projectId, Long meetingId, Long userId) {
         roomLifecycle.requestEnd(projectId, meetingId, userId);
+        if (meetingRecordingService != null) {
+            meetingRepository.findByIdAndProjectId(meetingId, projectId)
+                    .ifPresent(meetingRecordingService::stopRecordingIfActive);
+        }
         return getMeetingById(projectId, meetingId, userId);
     }
 

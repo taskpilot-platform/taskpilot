@@ -1,6 +1,5 @@
 package com.taskpilot.projects.meetings.service;
 
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.infrastructure.config.security.FileStreamTokenService;
 import com.taskpilot.infrastructure.config.security.PresignedUploadTokenService;
 import com.taskpilot.infrastructure.exception.BusinessException;
@@ -80,7 +79,6 @@ public class MeetingRecordingService {
     private final EgressS3StorageService egressS3StorageService;
     private final FileStreamTokenService fileStreamTokenService;
     private final PresignedUploadTokenService presignedUploadTokenService;
-    private final UserIdentityPort userIdentityPort;
     private final TransactionTemplate requiresNewTx;
     private final boolean gdriveArchiveEnabled;
     private final long maxFallbackFileSizeBytes;
@@ -102,13 +100,12 @@ public class MeetingRecordingService {
             EgressS3StorageService egressS3StorageService,
             FileStreamTokenService fileStreamTokenService,
             PresignedUploadTokenService presignedUploadTokenService,
-            UserIdentityPort userIdentityPort,
             PlatformTransactionManager transactionManager,
             boolean gdriveArchiveEnabled,
             long maxFallbackFileSizeBytes) {
         this(meetingRepository, projectFileRepository, projectMemberRepository, projectSecurityService,
                 projectMeetingService, egressClientAdapter, egressS3StorageService, fileStreamTokenService,
-                presignedUploadTokenService, userIdentityPort, transactionManager,
+                presignedUploadTokenService, transactionManager,
                 gdriveArchiveEnabled, maxFallbackFileSizeBytes, 60L);
     }
 
@@ -123,7 +120,6 @@ public class MeetingRecordingService {
             EgressS3StorageService egressS3StorageService,
             FileStreamTokenService fileStreamTokenService,
             PresignedUploadTokenService presignedUploadTokenService,
-            UserIdentityPort userIdentityPort,
             PlatformTransactionManager transactionManager,
             @Value("${egress.archive.gdrive.enabled:true}") boolean gdriveArchiveEnabled,
             @Value("${egress.fallback.max-file-size-bytes:1073741824}") long maxFallbackFileSizeBytes,
@@ -137,7 +133,6 @@ public class MeetingRecordingService {
         this.egressS3StorageService = egressS3StorageService;
         this.fileStreamTokenService = fileStreamTokenService;
         this.presignedUploadTokenService = presignedUploadTokenService;
-        this.userIdentityPort = userIdentityPort;
         this.gdriveArchiveEnabled = gdriveArchiveEnabled;
         this.maxFallbackFileSizeBytes = Math.max(1024L * 1024L, maxFallbackFileSizeBytes);
         this.uploadTokenGraceMinutes = Math.max(0L, uploadTokenGraceMinutes);
@@ -145,8 +140,7 @@ public class MeetingRecordingService {
         this.requiresNewTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
-    public ProjectMeetingResponse startRecording(Long projectId, Long meetingId, String userEmail) {
-        Long userId = getUserId(userEmail);
+    public ProjectMeetingResponse startRecording(Long projectId, Long meetingId, Long userId) {
         projectSecurityService.requireActiveProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -155,7 +149,7 @@ public class MeetingRecordingService {
 
         requireHostOrManager(meeting, projectId, userId);
 
-        if (meeting.getStatus() == ProjectMeetingStatus.ENDED) {
+        if (meeting.getStatus() == ProjectMeetingStatus.ENDED || meeting.getStatus() == ProjectMeetingStatus.ENDING) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Cannot start recording on an ended meeting");
         }
 
@@ -220,11 +214,10 @@ public class MeetingRecordingService {
         log.info("Started LiveKit RoomComposite Egress: meetingId={}, room={}, egressId={}, targetKey={}",
                 meetingId, meeting.getRoomName(), snapshot.egressId(), filepath);
 
-        return projectMeetingService.getMeetingById(projectId, meetingId, userEmail);
+        return projectMeetingService.getMeetingById(projectId, meetingId, userId);
     }
 
-    public ProjectMeetingResponse stopRecording(Long projectId, Long meetingId, String userEmail) {
-        Long userId = getUserId(userEmail);
+    public ProjectMeetingResponse stopRecording(Long projectId, Long meetingId, Long userId) {
         projectSecurityService.requireActiveProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -240,7 +233,7 @@ public class MeetingRecordingService {
 
         MeetingRecordingStatus current = effectiveStatus(meeting);
         if (!ACTIVE_EGRESS_STATUSES.contains(current)) {
-            return projectMeetingService.getMeetingById(projectId, meetingId, userEmail);
+            return projectMeetingService.getMeetingById(projectId, meetingId, userId);
         }
 
         EgressSnapshot snapshot;
@@ -266,7 +259,7 @@ public class MeetingRecordingService {
             ));
         }
 
-        return projectMeetingService.getMeetingById(projectId, meetingId, userEmail);
+        return projectMeetingService.getMeetingById(projectId, meetingId, userId);
     }
 
     /**
@@ -305,8 +298,7 @@ public class MeetingRecordingService {
         }
     }
 
-    public ProjectMeetingResponse syncRecordingStatus(Long projectId, Long meetingId, String userEmail) {
-        Long userId = getUserId(userEmail);
+    public ProjectMeetingResponse syncRecordingStatus(Long projectId, Long meetingId, Long userId) {
         projectSecurityService.requireProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -327,7 +319,7 @@ public class MeetingRecordingService {
             }
         }
 
-        return projectMeetingService.getMeetingById(projectId, meetingId, userEmail);
+        return projectMeetingService.getMeetingById(projectId, meetingId, userId);
     }
 
     public void markMissingEgressFailed(Long meetingId, String egressId, String reason) {
@@ -380,6 +372,12 @@ public class MeetingRecordingService {
 
             if (parsed.egressSnapshot() != null) {
                 applyEgressSnapshot(parsed.egressSnapshot());
+            }
+            if (java.util.Set.of("room_started", "room_finished", "participant_joined", "participant_left")
+                    .contains(parsed.eventName())
+                    && parsed.roomName() != null && parsed.roomName().startsWith("tp-proj-")
+                    && parsed.roomName().length() <= 128) {
+                projectMeetingService.reconcileVerifiedRoomEvent(parsed.roomName());
             }
         });
     }
@@ -439,8 +437,7 @@ public class MeetingRecordingService {
     }
 
     @Transactional(readOnly = true)
-    public MeetingRecordingPlaybackResponse getPlaybackUrl(Long projectId, Long meetingId, String userEmail) {
-        Long userId = getUserId(userEmail);
+    public MeetingRecordingPlaybackResponse getPlaybackUrl(Long projectId, Long meetingId, Long userId) {
         projectSecurityService.requireProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -467,26 +464,17 @@ public class MeetingRecordingService {
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Recording file not found"));
 
         String provider = resolveProvider(file);
-        String playbackUrl;
-        Instant expiresAt;
-
-        if ("b2".equals(provider)) {
-            if (!egressS3StorageService.isConfigured()) {
-                throw new BusinessException(HttpStatus.SERVICE_UNAVAILABLE.value(),
-                        "Backblaze B2 storage is not configured to generate playback URL");
-            }
-            EgressS3StorageService.PresignedUrlResult presigned =
-                    egressS3StorageService.generatePresignedGetUrl(file.getStorageKey());
-            playbackUrl = presigned.url();
-            expiresAt = presigned.expiresAt();
-        } else {
-            // gdrive or s3: return backend Range-capable proxy URL with short-lived project-scoped stream token
-            FileStreamTokenService.IssuedStreamToken issued =
-                    fileStreamTokenService.issueToken(userEmail, projectId, file.getId());
-            playbackUrl = "/api/v1/projects/" + projectId + "/files/" + file.getId()
-                    + "/stream?token=" + issued.token();
-            expiresAt = issued.expiresAt();
+        if ("b2".equals(provider) && !egressS3StorageService.isConfigured()) {
+            throw new BusinessException(HttpStatus.SERVICE_UNAVAILABLE.value(),
+                    "Backblaze B2 storage is not configured to serve recording playback");
         }
+        // Always serve playback through the authenticated backend Range-streaming proxy (b2, gdrive, s3)
+        // so project membership, account lifecycle, and token_version revocations take effect on subsequent requests.
+        FileStreamTokenService.IssuedStreamToken issued =
+                fileStreamTokenService.issueToken(userId, projectId, file.getId());
+        String playbackUrl = "/api/v1/projects/" + projectId + "/files/" + file.getId()
+                + "/stream?token=" + issued.token();
+        Instant expiresAt = issued.expiresAt();
 
         return MeetingRecordingPlaybackResponse.builder()
                 .url(playbackUrl)
@@ -512,9 +500,8 @@ public class MeetingRecordingService {
     public PresignRecordingUploadResponse presignFallbackUpload(
             Long projectId,
             Long meetingId,
-            String userEmail,
+            Long userId,
             PresignRecordingUploadRequest request) {
-        Long userId = getUserId(userEmail);
         projectSecurityService.requireActiveProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -582,9 +569,8 @@ public class MeetingRecordingService {
     public ProjectMeetingResponse completeFallbackUpload(
             Long projectId,
             Long meetingId,
-            String userEmail,
+            Long userId,
             CompleteRecordingUploadRequest request) {
-        Long userId = getUserId(userEmail);
         projectSecurityService.requireActiveProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -622,7 +608,7 @@ public class MeetingRecordingService {
                         "Cannot link fallback recording while a cloud recording is in progress");
             }
             log.info("Idempotent completeFallbackUpload reused existing fileId={} for key={}", reused.getId(), claims.objectKey());
-            return projectMeetingService.getMeetingById(projectId, meetingId, userEmail);
+            return projectMeetingService.getMeetingById(projectId, meetingId, userId);
         }
 
         EgressS3StorageService.ObjectMetadata meta;
@@ -664,7 +650,7 @@ public class MeetingRecordingService {
         log.info("Completed fallback B2 recording upload: meetingId={}, fileId={}, key={}, size={}",
                 meetingId, savedFile.getId(), claims.objectKey(), meta.contentLength());
 
-        return projectMeetingService.getMeetingById(projectId, meetingId, userEmail);
+        return projectMeetingService.getMeetingById(projectId, meetingId, userId);
     }
 
     private ProjectFileEntity findOrCreateFallbackFile(
@@ -905,11 +891,6 @@ public class MeetingRecordingService {
         }
     }
 
-    private Long getUserId(String email) {
-        return userIdentityPort.findByEmail(email)
-                .map(u -> u.id())
-                .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"));
-    }
 
     private static MeetingRecordingStatus effectiveStatus(ProjectMeetingEntity meeting) {
         return meeting.getRecordingStatus() != null ? meeting.getRecordingStatus() : MeetingRecordingStatus.IDLE;

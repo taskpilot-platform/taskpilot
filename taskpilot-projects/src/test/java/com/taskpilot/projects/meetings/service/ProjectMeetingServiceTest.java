@@ -55,7 +55,7 @@ class ProjectMeetingServiceTest {
     @Mock
     private MeetingRoomLifecycle roomLifecycle;
     @Mock
-    private MeetingRecordingService recordingService;
+    private ClientMeetingRecordingService recordingService;
 
     @InjectMocks
     private ProjectMeetingService projectMeetingService;
@@ -148,7 +148,10 @@ class ProjectMeetingServiceTest {
                 .status(ProjectMeetingStatus.ENDING).build();
         when(meetingRepository.findByIdAndProjectId(meetingId, projectId)).thenReturn(Optional.of(pending));
 
+        MeetingRecordingService cloudRecordings = mock(MeetingRecordingService.class);
+        projectMeetingService.setMeetingRecordingService(cloudRecordings);
         var response = projectMeetingService.endMeeting(projectId, meetingId, userId);
+        verify(cloudRecordings).stopRecordingIfActive(pending);
 
         verify(roomLifecycle).requestEnd(projectId, meetingId, userId);
         assertEquals(ProjectMeetingStatus.ENDING, response.status());

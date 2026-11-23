@@ -73,6 +73,10 @@ public interface ProjectMeetingRepository extends JpaRepository<ProjectMeetingEn
                 m.backupStorageUsed = false,
                 m.updatedAt = :now
             WHERE m.id = :id
+              AND m.status NOT IN (
+                  com.taskpilot.projects.common.enums.ProjectMeetingStatus.ENDING,
+                  com.taskpilot.projects.common.enums.ProjectMeetingStatus.ENDED
+              )
               AND (
                   m.recordingStatus IS NULL
                   OR m.recordingStatus IN (

@@ -1,7 +1,5 @@
 package com.taskpilot.projects.meetings.service;
 
-import com.taskpilot.contracts.user.dto.UserIdentityDto;
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.infrastructure.config.security.FileStreamTokenService;
 import com.taskpilot.infrastructure.config.security.PresignedUploadTokenService;
 import com.taskpilot.infrastructure.exception.BusinessException;
@@ -66,8 +64,6 @@ class MeetingRecordingServiceTest {
     @Mock
     private FileStreamTokenService fileStreamTokenService;
     @Mock
-    private UserIdentityPort userIdentityPort;
-    @Mock
     private PlatformTransactionManager transactionManager;
 
     private PresignedUploadTokenService presignedUploadTokenService;
@@ -77,8 +73,6 @@ class MeetingRecordingServiceTest {
     @BeforeEach
     void setUp() {
         lenient().when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
-        lenient().when(userIdentityPort.findByEmail("host@taskpilot.io"))
-                .thenReturn(Optional.of(new UserIdentityDto(100L, "host@taskpilot.io")));
         lenient().when(egressS3StorageService.getBucket()).thenReturn("taskpilot-recordings-2026");
         lenient().when(egressS3StorageService.getPresignPutTtl()).thenReturn(Duration.ofMinutes(20));
 
@@ -96,11 +90,33 @@ class MeetingRecordingServiceTest {
                 egressS3StorageService,
                 fileStreamTokenService,
                 presignedUploadTokenService,
-                userIdentityPort,
                 transactionManager,
                 true,
                 10L * 1024L * 1024L // 10 MB cap in test to assert oversize rejection & delete
         );
+    }
+
+    @Test
+    void verifiedRoomEventAlsoReconcilesAttendanceThroughTheCloudWebhookEndpoint() {
+        when(egressClientAdapter.receiveWebhook("room-body", "signed-header")).thenReturn(
+                new LiveKitEgressClientAdapter.ParsedWebhookEvent("room_finished", "tp-proj-10-room", null));
+
+        service.handleWebhook("room-body", "signed-header");
+
+        verify(projectMeetingService).reconcileVerifiedRoomEvent("tp-proj-10-room");
+    }
+
+    @Test
+    void startRecording_rejectsMeetingWhoseProviderTerminationIsPending() throws IOException {
+        ProjectMeetingEntity meeting = ProjectMeetingEntity.builder()
+                .id(5L).projectId(10L).hostId(100L).title("Ending")
+                .roomName("ending-room").status(ProjectMeetingStatus.ENDING).build();
+        when(meetingRepository.findByIdAndProjectId(5L, 10L)).thenReturn(Optional.of(meeting));
+
+        assertThatThrownBy(() -> service.startRecording(10L, 5L, 100L))
+                .isInstanceOf(BusinessException.class);
+        verify(meetingRepository, never()).claimRecordingStart(any(), any());
+        verify(egressClientAdapter, never()).startRoomCompositeEgress(any(), any(), any());
     }
 
     @Test
@@ -118,10 +134,10 @@ class MeetingRecordingServiceTest {
                 .thenReturn(new EgressSnapshot("EG_001", "tp-proj-10-m-abc", "EGRESS_ACTIVE", "", false, "", 0L, 0L));
         when(meetingRepository.attachStartedEgress(eq(5L), eq("EG_001"), eq(MeetingRecordingStatus.RECORDING), any()))
                 .thenReturn(1);
-        when(projectMeetingService.getMeetingById(10L, 5L, "host@taskpilot.io"))
+        when(projectMeetingService.getMeetingById(10L, 5L, 100L))
                 .thenReturn(ProjectMeetingResponse.builder().id(5L).egressId("EG_001").recordingStatus(MeetingRecordingStatus.RECORDING).build());
 
-        ProjectMeetingResponse res = service.startRecording(10L, 5L, "host@taskpilot.io");
+        ProjectMeetingResponse res = service.startRecording(10L, 5L, 100L);
 
         assertThat(res.egressId()).isEqualTo("EG_001");
         verify(meetingRepository).claimRecordingStart(eq(5L), any());
@@ -140,7 +156,7 @@ class MeetingRecordingServiceTest {
         when(egressS3StorageService.isConfigured()).thenReturn(true);
         when(meetingRepository.claimRecordingStart(eq(5L), any())).thenReturn(0);
 
-        assertThatThrownBy(() -> service.startRecording(10L, 5L, "host@taskpilot.io"))
+        assertThatThrownBy(() -> service.startRecording(10L, 5L, 100L))
                 .isInstanceOf(BusinessException.class)
                 .extracting("status")
                 .isEqualTo(409);
@@ -238,12 +254,16 @@ class MeetingRecordingServiceTest {
         when(projectFileRepository.findByIdAndProjectId(55L, 10L)).thenReturn(Optional.of(b2File));
         when(egressS3StorageService.isConfigured()).thenReturn(true);
         Instant exp = Instant.now().plusSeconds(3600);
-        when(egressS3StorageService.generatePresignedGetUrl("recordings/project-10/meeting.mp4"))
-                .thenReturn(new EgressS3StorageService.PresignedUrlResult("https://b2.example/presigned", exp));
+        when(fileStreamTokenService.issueToken(100L, 10L, 55L))
+                .thenReturn(new FileStreamTokenService.IssuedStreamToken("signed-b2-stream-jwt", exp));
 
-        MeetingRecordingPlaybackResponse b2Res = service.getPlaybackUrl(10L, 5L, "host@taskpilot.io");
+        MeetingRecordingPlaybackResponse b2Res = service.getPlaybackUrl(10L, 5L, 100L);
         assertThat(b2Res.provider()).isEqualTo("b2");
-        assertThat(b2Res.url()).isEqualTo("https://b2.example/presigned");
+        assertThat(b2Res.url()).isEqualTo("/api/v1/projects/10/files/55/stream?token=signed-b2-stream-jwt");
+        assertThat(b2Res.requiresAuthHeader()).isFalse();
+        assertThat(b2Res.expiresAt()).isEqualTo(exp);
+        verify(egressS3StorageService, never()).generatePresignedGetUrl(any());
+        verify(egressS3StorageService, never()).generatePresignedGetUrl(any(), any());
 
         ProjectMeetingEntity gdMeeting = ProjectMeetingEntity.builder()
                 .id(6L).projectId(10L).recordingFileId(66L).recordingStatus(MeetingRecordingStatus.COMPLETED).build();
@@ -253,12 +273,32 @@ class MeetingRecordingServiceTest {
 
         when(meetingRepository.findByIdAndProjectId(6L, 10L)).thenReturn(Optional.of(gdMeeting));
         when(projectFileRepository.findByIdAndProjectId(66L, 10L)).thenReturn(Optional.of(gdFile));
-        when(fileStreamTokenService.issueToken("host@taskpilot.io", 10L, 66L))
+        when(fileStreamTokenService.issueToken(100L, 10L, 66L))
                 .thenReturn(new FileStreamTokenService.IssuedStreamToken("signed-stream-jwt", exp));
 
-        MeetingRecordingPlaybackResponse gdRes = service.getPlaybackUrl(10L, 6L, "host@taskpilot.io");
+        MeetingRecordingPlaybackResponse gdRes = service.getPlaybackUrl(10L, 6L, 100L);
         assertThat(gdRes.provider()).isEqualTo("gdrive");
         assertThat(gdRes.url()).isEqualTo("/api/v1/projects/10/files/66/stream?token=signed-stream-jwt");
+    }
+
+    @Test
+    void getPlaybackUrl_b2UnavailableFailsClosedWithoutDirectPresignedUrl() {
+        ProjectMeetingEntity b2Meeting = ProjectMeetingEntity.builder()
+                .id(5L).projectId(10L).recordingFileId(55L).recordingStatus(MeetingRecordingStatus.COMPLETED).build();
+        ProjectFileEntity b2File = ProjectFileEntity.builder()
+                .id(55L).projectId(10L).originalName("meeting.mp4").contentType("video/mp4")
+                .fileSize(1000L).storageProvider("b2").storageKey("recordings/project-10/meeting.mp4").build();
+
+        when(meetingRepository.findByIdAndProjectId(5L, 10L)).thenReturn(Optional.of(b2Meeting));
+        when(projectFileRepository.findByIdAndProjectId(55L, 10L)).thenReturn(Optional.of(b2File));
+        when(egressS3StorageService.isConfigured()).thenReturn(false);
+
+        assertThatThrownBy(() -> service.getPlaybackUrl(10L, 5L, 100L))
+                .isInstanceOf(BusinessException.class)
+                .extracting("status")
+                .isEqualTo(503);
+        verify(egressS3StorageService, never()).generatePresignedGetUrl(any());
+        verify(fileStreamTokenService, never()).issueToken(any(Long.class), any(), any());
     }
 
     @Test
@@ -273,7 +313,7 @@ class MeetingRecordingServiceTest {
                 .thenReturn(new EgressS3StorageService.PresignedUrlResult("https://b2.example/put-url", exp));
 
         PresignRecordingUploadResponse presigned = service.presignFallbackUpload(
-                10L, 5L, "host@taskpilot.io",
+                10L, 5L, 100L,
                 new PresignRecordingUploadRequest("video/webm;codecs=vp8,opus", "demo.webm")
         );
 
@@ -286,7 +326,7 @@ class MeetingRecordingServiceTest {
                 .thenReturn(new EgressS3StorageService.ObjectMetadata(25L * 1024L * 1024L, "video/webm", "etag1"));
 
         assertThatThrownBy(() -> service.completeFallbackUpload(
-                10L, 5L, "host@taskpilot.io", new CompleteRecordingUploadRequest(presigned.uploadToken(), 60L)))
+                10L, 5L, 100L, new CompleteRecordingUploadRequest(presigned.uploadToken(), 60L)))
                 .isInstanceOf(BusinessException.class)
                 .extracting("status")
                 .isEqualTo(413);
@@ -300,11 +340,11 @@ class MeetingRecordingServiceTest {
         ProjectFileEntity createdFile = ProjectFileEntity.builder().id(701L).projectId(10L).storageProvider("b2").build();
         when(projectFileRepository.saveAndFlush(any(ProjectFileEntity.class))).thenReturn(createdFile);
         when(meetingRepository.linkFallbackRecording(eq(5L), eq(701L), any())).thenReturn(1);
-        when(projectMeetingService.getMeetingById(10L, 5L, "host@taskpilot.io"))
+        when(projectMeetingService.getMeetingById(10L, 5L, 100L))
                 .thenReturn(ProjectMeetingResponse.builder().id(5L).recordingFileId(701L).recordingStatus(MeetingRecordingStatus.COMPLETED).build());
 
         ProjectMeetingResponse completed = service.completeFallbackUpload(
-                10L, 5L, "host@taskpilot.io", new CompleteRecordingUploadRequest(presigned.uploadToken(), 60L));
+                10L, 5L, 100L, new CompleteRecordingUploadRequest(presigned.uploadToken(), 60L));
 
         assertThat(completed.recordingFileId()).isEqualTo(701L);
         verify(meetingRepository).linkFallbackRecording(eq(5L), eq(701L), any());
@@ -314,7 +354,7 @@ class MeetingRecordingServiceTest {
                 .thenReturn(Optional.of(createdFile));
 
         ProjectMeetingResponse replayed = service.completeFallbackUpload(
-                10L, 5L, "host@taskpilot.io", new CompleteRecordingUploadRequest(presigned.uploadToken(), 60L));
+                10L, 5L, 100L, new CompleteRecordingUploadRequest(presigned.uploadToken(), 60L));
 
         assertThat(replayed.recordingFileId()).isEqualTo(701L);
         verify(projectFileRepository, times(1)).saveAndFlush(any(ProjectFileEntity.class));
@@ -374,7 +414,7 @@ class MeetingRecordingServiceTest {
         when(meetingRepository.findByIdAndProjectId(15L, 10L)).thenReturn(Optional.of(activeEgressMeeting));
 
         assertThatThrownBy(() -> service.presignFallbackUpload(
-                10L, 15L, "host@taskpilot.io", new PresignRecordingUploadRequest("video/webm", "fb.webm")))
+                10L, 15L, 100L, new PresignRecordingUploadRequest("video/webm", "fb.webm")))
                 .isInstanceOf(BusinessException.class)
                 .extracting("status")
                 .isEqualTo(409);
@@ -390,7 +430,7 @@ class MeetingRecordingServiceTest {
                 .thenReturn(new EgressS3StorageService.PresignedUrlResult("https://b2.example/put", putExpiry));
 
         PresignRecordingUploadResponse presigned = service.presignFallbackUpload(
-                10L, 16L, "host@taskpilot.io", new PresignRecordingUploadRequest("video/webm", "large.webm"));
+                10L, 16L, 100L, new PresignRecordingUploadRequest("video/webm", "large.webm"));
         var claims = presignedUploadTokenService.verifyToken(presigned.uploadToken(), 10L, 16L, 100L).orElseThrow();
         assertThat(claims.expiresAt()).isAfter(putExpiry.plus(Duration.ofMinutes(55)));
     }
