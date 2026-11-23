@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
 @Service
@@ -41,6 +42,7 @@ public class ClientMeetingRecordingService {
     private static final long CAPTURE_DEADLINE_SECONDS = 10 * 60;
     private static final long UPLOAD_DEADLINE_SECONDS = 3 * 60;
     private static final String SAMPLE_SHA256 = "560a6e704000aa1035f92419b72b4f59aacd7d307fea059410be4e4eef892cf6";
+    private static final Pattern LEGACY_RECORDING_SUFFIX = Pattern.compile("[0-9]+\\.(webm|mp4)");
 
     public record RecordingView(UUID id, State state, long version, Long fileId, Long durationMs, String mimeType,
                                 Instant createdAt, Origin origin, Coverage coverage) {}
@@ -132,7 +134,7 @@ public class ClientMeetingRecordingService {
 
         String extension = extension(mimeType);
         String expectedName = "meeting_" + meetingId + "_rec_" + id + "." + extension;
-        VerifiedFile verified = verifyFile(projectId, fileId, userId, Pattern.compile(Pattern.quote(expectedName)));
+        VerifiedFile verified = verifyFile(projectId, fileId, userId, expectedName::equals);
         if (verified.bytes() != byteLength || !verified.mimeType().equalsIgnoreCase(mimeType)
                 || !verified.checksum().equalsIgnoreCase(checksum)) {
             throw new BusinessException(422, "Recording metadata does not match the saved file");
@@ -156,8 +158,10 @@ public class ClientMeetingRecordingService {
                 Objects.equals(lockForRecorder(projectId, meetingId, userId).getRecordingFileId(), fileId)));
         if (alreadyLinked) return;
 
+        String legacyPrefix = "meeting_" + meetingId + "_rec_";
         VerifiedFile file = verifyFile(projectId, fileId, userId,
-                Pattern.compile("meeting_" + meetingId + "_rec_[0-9]+[.](webm|mp4)"));
+                name -> name != null && name.startsWith(legacyPrefix)
+                        && LEGACY_RECORDING_SUFFIX.matcher(name.substring(legacyPrefix.length())).matches());
         UUID id = UUID.nameUUIDFromBytes(("legacy-recording:" + projectId + ":" + meetingId + ":" + fileId)
                 .getBytes(StandardCharsets.UTF_8));
         transactions.executeWithoutResult(transaction -> {
@@ -178,9 +182,9 @@ public class ClientMeetingRecordingService {
         recordings.expire(Instant.now(), State.INTERRUPTED);
     }
 
-    private VerifiedFile verifyFile(Long projectId, Long fileId, Long userId, Pattern expectedName) {
+    private VerifiedFile verifyFile(Long projectId, Long fileId, Long userId, Predicate<String> expectedName) {
         ProjectFileEntity file = requireFile(projectId, fileId);
-        if (!Objects.equals(file.getUploaderId(), userId) || !expectedName.matcher(file.getOriginalName()).matches()) {
+        if (!Objects.equals(file.getUploaderId(), userId) || !expectedName.test(file.getOriginalName())) {
             throw new BusinessException(403, "This file does not belong to this recording");
         }
         if (file.getFileSize() <= 0 || file.getFileSize() > MAX_BYTES) {

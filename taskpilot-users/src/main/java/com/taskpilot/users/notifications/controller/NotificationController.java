@@ -59,16 +59,23 @@ public class NotificationController {
             return notificationService.streamMyNotifications(context);
         } catch (BusinessException ex) {
             if (!response.isCommitted()) {
-                response.setStatus(ex.getStatus());
+                int status = ex.getStatus();
+                response.setStatus(status);
                 response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-                String escapedMsg = (ex.getMessage() != null ? ex.getMessage() : "Unauthorized")
-                        .replace("\\", "\\\\")
-                        .replace("\"", "\\\"");
-                response.getWriter().write("{\"status\":" + ex.getStatus() + ",\"message\":\"" + escapedMsg + "\"}");
+                response.getWriter().write("{\"status\":" + status + ",\"message\":\"" + safeSseErrorMessage(status) + "\"}");
                 response.getWriter().flush();
             }
             return null;
         }
+    }
+
+    private static String safeSseErrorMessage(int status) {
+        return switch (status) {
+            case 401 -> "Unauthorized";
+            case 403 -> "Access denied";
+            case 404 -> "Resource not found";
+            default -> "Request rejected";
+        };
     }
 
     @Operation(summary = "Get notification detail by ID")
