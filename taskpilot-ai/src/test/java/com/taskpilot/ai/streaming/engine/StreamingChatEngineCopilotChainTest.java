@@ -692,6 +692,7 @@ class StreamingChatEngineCopilotChainTest {
             AtomicReference<ConfirmationRequiredDto> createdConfirmation = new AtomicReference<>();
             AtomicBoolean slowToolFinished = new AtomicBoolean(false);
             AtomicInteger slowToolInterruptsObserved = new AtomicInteger(0);
+            java.util.concurrent.CountDownLatch slowToolInterrupted = new java.util.concurrent.CountDownLatch(1);
             java.util.concurrent.CountDownLatch slowToolStarted = new java.util.concurrent.CountDownLatch(1);
             java.util.concurrent.CountDownLatch releaseSlowTool = new java.util.concurrent.CountDownLatch(1);
 
@@ -749,6 +750,7 @@ class StreamingChatEngineCopilotChainTest {
                                 }
                             } catch (InterruptedException ignored) {
                                 slowToolInterruptsObserved.incrementAndGet();
+                                slowToolInterrupted.countDown();
                             }
                         }
                         slowToolFinished.set(true);
@@ -797,6 +799,10 @@ class StreamingChatEngineCopilotChainTest {
 
             int sendsAtClose = safeSendCount.get();
             int completesAtClose = safeCompleteCount.get();
+
+            // The scope timeout and SSE timer run independently. Await the actual cancellation
+            // before releasing the tool, so a faster SSE timer cannot hide the interrupt.
+            assertThat(slowToolInterrupted.await(3, TimeUnit.SECONDS)).isTrue();
 
             // 3. Now release the uninterruptible tool so StructuredTaskScope.close() finishes late
             releaseSlowTool.countDown();
