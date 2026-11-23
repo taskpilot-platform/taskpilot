@@ -2,6 +2,7 @@ package com.taskpilot.projects.meetings.service;
 
 import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.infrastructure.config.security.FileStreamTokenService;
+import com.taskpilot.infrastructure.config.security.PresignedUploadTokenService;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.infrastructure.storage.EgressS3StorageService;
 import com.taskpilot.projects.common.entity.ProjectFileEntity;
@@ -14,9 +15,13 @@ import com.taskpilot.projects.common.repository.ProjectFileRepository;
 import com.taskpilot.projects.common.repository.ProjectMeetingRepository;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
 import com.taskpilot.projects.common.service.ProjectSecurityService;
+import com.taskpilot.projects.meetings.dto.CompleteRecordingUploadRequest;
 import com.taskpilot.projects.meetings.dto.MeetingRecordingPlaybackResponse;
+import com.taskpilot.projects.meetings.dto.PresignRecordingUploadRequest;
+import com.taskpilot.projects.meetings.dto.PresignRecordingUploadResponse;
 import com.taskpilot.projects.meetings.dto.ProjectMeetingResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -29,8 +34,11 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -48,6 +56,12 @@ public class MeetingRecordingService {
             MeetingRecordingStatus.PROCESSING
     );
 
+    private static final Map<String, String> ALLOWED_FALLBACK_CONTENT_TYPES = Map.of(
+            "video/webm", ".webm",
+            "video/mp4", ".mp4",
+            "video/x-matroska", ".mkv"
+    );
+
     private final ProjectMeetingRepository meetingRepository;
     private final ProjectFileRepository projectFileRepository;
     private final ProjectMemberRepository projectMemberRepository;
@@ -56,10 +70,13 @@ public class MeetingRecordingService {
     private final LiveKitEgressClientAdapter egressClientAdapter;
     private final EgressS3StorageService egressS3StorageService;
     private final FileStreamTokenService fileStreamTokenService;
+    private final PresignedUploadTokenService presignedUploadTokenService;
     private final UserIdentityPort userIdentityPort;
     private final TransactionTemplate requiresNewTx;
     private final boolean gdriveArchiveEnabled;
+    private final long maxFallbackFileSizeBytes;
 
+    @Autowired
     public MeetingRecordingService(
             ProjectMeetingRepository meetingRepository,
             ProjectFileRepository projectFileRepository,
@@ -69,9 +86,11 @@ public class MeetingRecordingService {
             LiveKitEgressClientAdapter egressClientAdapter,
             EgressS3StorageService egressS3StorageService,
             FileStreamTokenService fileStreamTokenService,
+            PresignedUploadTokenService presignedUploadTokenService,
             UserIdentityPort userIdentityPort,
             PlatformTransactionManager transactionManager,
-            @Value("${egress.archive.gdrive.enabled:true}") boolean gdriveArchiveEnabled) {
+            @Value("${egress.archive.gdrive.enabled:true}") boolean gdriveArchiveEnabled,
+            @Value("${egress.fallback.max-file-size-bytes:1073741824}") long maxFallbackFileSizeBytes) {
         this.meetingRepository = meetingRepository;
         this.projectFileRepository = projectFileRepository;
         this.projectMemberRepository = projectMemberRepository;
@@ -80,8 +99,10 @@ public class MeetingRecordingService {
         this.egressClientAdapter = egressClientAdapter;
         this.egressS3StorageService = egressS3StorageService;
         this.fileStreamTokenService = fileStreamTokenService;
+        this.presignedUploadTokenService = presignedUploadTokenService;
         this.userIdentityPort = userIdentityPort;
         this.gdriveArchiveEnabled = gdriveArchiveEnabled;
+        this.maxFallbackFileSizeBytes = Math.max(1024L * 1024L, maxFallbackFileSizeBytes);
         this.requiresNewTx = new TransactionTemplate(transactionManager);
         this.requiresNewTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
@@ -383,6 +404,171 @@ public class MeetingRecordingService {
                 .backupStorageUsed(backupUsed)
                 .recordingError(meeting.getRecordingError())
                 .build();
+    }
+
+    /**
+     * Tier 3 (client fallback): issues a short-lived Backblaze B2 presigned PUT URL locked to
+     * a server-generated object key under {@code recordings/{projectId}/{meetingId}/} and exact Content-Type.
+     */
+    @Transactional(readOnly = true)
+    public PresignRecordingUploadResponse presignFallbackUpload(
+            Long projectId,
+            Long meetingId,
+            String userEmail,
+            PresignRecordingUploadRequest request) {
+        Long userId = getUserId(userEmail);
+        projectSecurityService.requireActiveProject(projectId);
+        projectSecurityService.validateMember(projectId, userId);
+
+        ProjectMeetingEntity meeting = meetingRepository.findByIdAndProjectId(meetingId, projectId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Meeting not found"));
+        requireHostOrManager(meeting, projectId, userId);
+
+        if (!egressS3StorageService.isConfigured()) {
+            throw new BusinessException(HttpStatus.SERVICE_UNAVAILABLE.value(),
+                    "Backblaze B2 recording storage is not configured");
+        }
+
+        String canonicalContentType = normalizeVideoContentType(request.contentType());
+        String ext = ALLOWED_FALLBACK_CONTENT_TYPES.get(canonicalContentType);
+        if (ext == null) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                    "Unsupported recording Content-Type: " + request.contentType()
+                            + ". Allowed: video/webm, video/mp4, video/x-matroska");
+        }
+
+        String objectKey = "recordings/" + projectId + "/" + meetingId + "/" + UUID.randomUUID() + ext;
+        String safeFileName = sanitizeFallbackFileName(request.fileName(), meetingId, ext);
+
+        EgressS3StorageService.PresignedUrlResult presigned =
+                egressS3StorageService.generatePresignedPutUrl(objectKey, canonicalContentType);
+
+        String uploadToken = presignedUploadTokenService.issueToken(
+                projectId,
+                meetingId,
+                userId,
+                objectKey,
+                canonicalContentType,
+                safeFileName,
+                egressS3StorageService.getPresignPutTtl()
+        );
+
+        return PresignRecordingUploadResponse.builder()
+                .uploadUrl(presigned.url())
+                .uploadToken(uploadToken)
+                .contentType(canonicalContentType)
+                .fileName(safeFileName)
+                .maxFileSizeBytes(maxFallbackFileSizeBytes)
+                .expiresAt(presigned.expiresAt())
+                .build();
+    }
+
+    /**
+     * Verifies the server-issued uploadToken, checks the uploaded B2 object via HeadObject,
+     * deletes and rejects oversized objects, and links the recording to the meeting.
+     */
+    @Transactional
+    public ProjectMeetingResponse completeFallbackUpload(
+            Long projectId,
+            Long meetingId,
+            String userEmail,
+            CompleteRecordingUploadRequest request) {
+        Long userId = getUserId(userEmail);
+        projectSecurityService.requireActiveProject(projectId);
+        projectSecurityService.validateMember(projectId, userId);
+
+        ProjectMeetingEntity meeting = meetingRepository.findByIdAndProjectId(meetingId, projectId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Meeting not found"));
+        requireHostOrManager(meeting, projectId, userId);
+
+        PresignedUploadTokenService.UploadTokenClaims claims = presignedUploadTokenService
+                .verifyToken(request.uploadToken(), projectId, meetingId, userId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                        "Invalid or expired recording upload token"));
+
+        if (!egressS3StorageService.isConfigured()) {
+            throw new BusinessException(HttpStatus.SERVICE_UNAVAILABLE.value(),
+                    "Backblaze B2 recording storage is not configured");
+        }
+
+        EgressS3StorageService.ObjectMetadata meta;
+        try {
+            meta = egressS3StorageService.headObject(claims.objectKey());
+        } catch (IOException e) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                    "Uploaded recording object was not found in Backblaze B2");
+        }
+
+        if (meta.contentLength() <= 0) {
+            egressS3StorageService.deleteFile(claims.objectKey());
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                    "Uploaded recording file is empty and was removed");
+        }
+
+        if (meta.contentLength() > maxFallbackFileSizeBytes) {
+            egressS3StorageService.deleteFile(claims.objectKey());
+            log.warn("Deleted oversized client fallback recording from B2: key={}, size={}, limit={}",
+                    claims.objectKey(), meta.contentLength(), maxFallbackFileSizeBytes);
+            throw new BusinessException(HttpStatus.PAYLOAD_TOO_LARGE.value(),
+                    "Recording exceeds maximum allowed size of " + (maxFallbackFileSizeBytes / (1024 * 1024)) + " MB");
+        }
+
+        Instant now = Instant.now();
+        String bucket = egressS3StorageService.getBucket().isBlank() ? "b2-recordings" : egressS3StorageService.getBucket();
+        FileArchiveStatus initialArchiveStatus = gdriveArchiveEnabled
+                ? FileArchiveStatus.ARCHIVE_PENDING
+                : FileArchiveStatus.NONE;
+
+        ProjectFileEntity savedFile = projectFileRepository.saveAndFlush(ProjectFileEntity.builder()
+                .projectId(projectId)
+                .uploaderId(userId)
+                .fileName(claims.fileName())
+                .originalName(claims.fileName())
+                .fileSize(meta.contentLength())
+                .contentType(claims.contentType())
+                .storageKey(claims.objectKey())
+                .storageBucket(bucket)
+                .storageProvider("b2")
+                .archiveStatus(initialArchiveStatus)
+                .archiveRetryCount(0)
+                .description("Fallback browser recording: " + meeting.getTitle())
+                .createdAt(now)
+                .updatedAt(now)
+                .build());
+
+        meeting.setRecordingFileId(savedFile.getId());
+        meeting.setRecordingEnabled(true);
+        meeting.setRecordingStatus(MeetingRecordingStatus.COMPLETED);
+        meeting.setRecordingError(null);
+        meeting.setBackupStorageUsed(false);
+        meetingRepository.save(meeting);
+
+        log.info("Completed fallback B2 recording upload: meetingId={}, fileId={}, key={}, size={}",
+                meetingId, savedFile.getId(), claims.objectKey(), meta.contentLength());
+
+        return projectMeetingService.getMeetingById(projectId, meetingId, userEmail);
+    }
+
+    private static String normalizeVideoContentType(String rawContentType) {
+        if (rawContentType == null) {
+            return "";
+        }
+        String base = rawContentType.trim().toLowerCase(Locale.ROOT);
+        int semi = base.indexOf(';');
+        if (semi >= 0) {
+            base = base.substring(0, semi).trim();
+        }
+        return base;
+    }
+
+    private static String sanitizeFallbackFileName(String rawName, Long meetingId, String ext) {
+        if (rawName != null && !rawName.isBlank()) {
+            String cleaned = rawName.trim().replaceAll("[^a-zA-Z0-9._-]", "_");
+            if (!cleaned.isBlank() && cleaned.length() <= 180) {
+                return cleaned.endsWith(ext) ? cleaned : (cleaned + ext);
+            }
+        }
+        return "meeting_" + meetingId + "_fallback_" + Instant.now().getEpochSecond() + ext;
     }
 
     private void handleCompletedSnapshot(ProjectMeetingEntity meeting, EgressSnapshot snapshot, Instant now) {

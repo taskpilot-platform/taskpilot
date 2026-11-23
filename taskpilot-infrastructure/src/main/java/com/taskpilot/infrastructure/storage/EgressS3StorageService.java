@@ -16,9 +16,12 @@ import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
+import software.amazon.awssdk.services.s3.presigner.model.PresignedPutObjectRequest;
+import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -56,9 +59,23 @@ public class EgressS3StorageService {
     private final String secretKey;
     @Getter
     private final Duration presignGetTtl;
+    @Getter
+    private final Duration presignPutTtl;
 
     private volatile S3Client s3Client;
     private volatile S3Presigner s3Presigner;
+
+    public EgressS3StorageService(
+            boolean enabled,
+            boolean validateOnStartup,
+            String endpoint,
+            String region,
+            String bucket,
+            String accessKey,
+            String secretKey,
+            long presignGetTtlMinutes) {
+        this(enabled, validateOnStartup, endpoint, region, bucket, accessKey, secretKey, presignGetTtlMinutes, 20L);
+    }
 
     @Autowired
     public EgressS3StorageService(
@@ -69,7 +86,8 @@ public class EgressS3StorageService {
             @Value("${egress.s3.bucket:}") String bucket,
             @Value("${egress.s3.access-key:}") String accessKey,
             @Value("${egress.s3.secret-key:}") String secretKey,
-            @Value("${egress.s3.presign-get-ttl-minutes:60}") long presignGetTtlMinutes) {
+            @Value("${egress.s3.presign-get-ttl-minutes:60}") long presignGetTtlMinutes,
+            @Value("${egress.s3.presign-put-ttl-minutes:20}") long presignPutTtlMinutes) {
         this.enabled = enabled;
         this.validateOnStartup = validateOnStartup;
         this.endpoint = trimOrEmpty(endpoint);
@@ -78,6 +96,7 @@ public class EgressS3StorageService {
         this.accessKey = trimOrEmpty(accessKey);
         this.secretKey = trimOrEmpty(secretKey);
         this.presignGetTtl = Duration.ofMinutes(Math.max(1, presignGetTtlMinutes));
+        this.presignPutTtl = Duration.ofMinutes(Math.max(1, Math.min(30, presignPutTtlMinutes)));
     }
 
     @PostConstruct
@@ -145,6 +164,38 @@ public class EgressS3StorageService {
 
     public PresignedUrlResult generatePresignedGetUrl(String key) {
         return generatePresignedGetUrl(key, presignGetTtl);
+    }
+
+    /**
+     * Generates a short-lived presigned PUT URL bound to an exact object key and Content-Type.
+     */
+    public PresignedUrlResult generatePresignedPutUrl(String key, String contentType, Duration ttl) {
+        ensureConfigured();
+        String cleanedKey = cleanKey(key);
+        Duration effectiveTtl = (ttl != null && !ttl.isZero() && !ttl.isNegative()) ? ttl : presignPutTtl;
+        if (effectiveTtl.compareTo(Duration.ofMinutes(30)) > 0) {
+            effectiveTtl = Duration.ofMinutes(30);
+        }
+
+        PutObjectRequest.Builder putBuilder = PutObjectRequest.builder()
+                .bucket(bucket)
+                .key(cleanedKey);
+        if (contentType != null && !contentType.isBlank()) {
+            putBuilder.contentType(contentType.trim());
+        }
+
+        PutObjectPresignRequest presignRequest = PutObjectPresignRequest.builder()
+                .signatureDuration(effectiveTtl)
+                .putObjectRequest(putBuilder.build())
+                .build();
+
+        PresignedPutObjectRequest presigned = getPresigner().presignPutObject(presignRequest);
+        Instant expiresAt = presigned.expiration() != null ? presigned.expiration() : Instant.now().plus(effectiveTtl);
+        return new PresignedUrlResult(presigned.url().toString(), expiresAt);
+    }
+
+    public PresignedUrlResult generatePresignedPutUrl(String key, String contentType) {
+        return generatePresignedPutUrl(key, contentType, presignPutTtl);
     }
 
     public ObjectMetadata headObject(String key) throws IOException {

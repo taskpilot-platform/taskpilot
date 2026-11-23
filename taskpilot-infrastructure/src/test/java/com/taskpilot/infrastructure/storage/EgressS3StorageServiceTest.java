@@ -57,6 +57,16 @@ class EgressS3StorageServiceTest {
                     .contains("X-Amz-Algorithm=AWS4-HMAC-SHA256")
                     .contains("X-Amz-Signature=");
             assertThat(result.expiresAt()).isNotNull();
+
+            EgressS3StorageService.PresignedUrlResult putResult = service.generatePresignedPutUrl(
+                    "recordings/10/5/abc.webm",
+                    "video/webm",
+                    Duration.ofMinutes(20)
+            );
+            assertThat(putResult.url())
+                    .startsWith("https://s3.us-east-005.backblazeb2.com/taskpilot-recordings-2026/recordings/10/5/abc.webm")
+                    .contains("X-Amz-Algorithm=AWS4-HMAC-SHA256")
+                    .contains("X-Amz-SignedHeaders=content-type%3Bhost");
         } finally {
             service.close();
         }
