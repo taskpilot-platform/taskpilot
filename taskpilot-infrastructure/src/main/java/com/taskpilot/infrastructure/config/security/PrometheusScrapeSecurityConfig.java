@@ -41,7 +41,6 @@ public class PrometheusScrapeSecurityConfig {
             @Value("${taskpilot.monitoring.scrape-password:}") String scrapePassword) throws Exception {
 
         http.securityMatcher("/actuator/prometheus")
-                .csrf(AbstractHttpConfigurer::disable)
                 .cors(AbstractHttpConfigurer::disable)
                 .formLogin(AbstractHttpConfigurer::disable)
                 .logout(AbstractHttpConfigurer::disable)
