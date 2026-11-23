@@ -20,7 +20,7 @@ CREATE TABLE public.storage_upload_operations (
     created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     CONSTRAINT chk_storage_upload_ops_domain CHECK (target_domain IN ('PROJECT_FILE', 'RAG_DOCUMENT')),
-    CONSTRAINT chk_storage_upload_ops_provider CHECK (provider IN ('S3', 'GOOGLE_DRIVE')),
+    CONSTRAINT chk_storage_upload_ops_provider CHECK (provider IN ('S3', 'GOOGLE_DRIVE', 'B2')),
     CONSTRAINT chk_storage_upload_ops_status CHECK (
         status IN ('RESERVED', 'PROVIDER_WRITTEN', 'ATTACHED', 'COMPENSATION_QUEUED', 'ABORTED')
     ),
@@ -65,7 +65,7 @@ CREATE TABLE public.storage_cleanup_jobs (
     completed_at        TIMESTAMPTZ  NULL,
     created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    CONSTRAINT chk_storage_cleanup_jobs_provider CHECK (provider IN ('S3', 'GOOGLE_DRIVE')),
+    CONSTRAINT chk_storage_cleanup_jobs_provider CHECK (provider IN ('S3', 'GOOGLE_DRIVE', 'B2')),
     CONSTRAINT chk_storage_cleanup_jobs_operation CHECK (operation IN ('DELETE_OBJECT')),
     CONSTRAINT chk_storage_cleanup_jobs_status CHECK (status IN ('PENDING', 'IN_PROGRESS', 'SUCCEEDED', 'DEAD_LETTER')),
     CONSTRAINT chk_storage_cleanup_jobs_attempts CHECK (attempts >= 0 AND max_attempts > 0)

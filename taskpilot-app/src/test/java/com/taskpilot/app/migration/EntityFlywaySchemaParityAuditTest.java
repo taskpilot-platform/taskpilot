@@ -108,7 +108,7 @@ class EntityFlywaySchemaParityAuditTest {
     }
 
     @Test
-    @DisplayName("Verify active reconciled Flyway SQL migration scripts exist, are ordered, and include V44")
+    @DisplayName("Verify active reconciled Flyway SQL migration scripts exist, are ordered, and include V43-V52")
     void testFlywayMigrationsExistAndOrdered() throws Exception {
         Path migrationDir = Paths.get("src/main/resources/db/reconciled");
         if (!Files.exists(migrationDir)) {
@@ -127,10 +127,14 @@ class EntityFlywaySchemaParityAuditTest {
         assertThat(sqlFiles).isNotEmpty();
         assertTrue(sqlFiles.stream().anyMatch(p -> p.getFileName().toString().startsWith("V41__")),
                 "Reconciled baseline V41 must exist");
-        assertTrue(sqlFiles.stream().anyMatch(p -> p.getFileName().toString().startsWith("V44__")),
-                "Migration V44__stable_principal_session_authority.sql must exist in db/reconciled");
-        assertTrue(sqlFiles.stream().anyMatch(p -> p.getFileName().toString().startsWith("V45__")),
-                "Migration V45__p2_account_lifecycle_credentials_invitations.sql must exist in db/reconciled");
+        assertTrue(sqlFiles.stream().anyMatch(p -> p.getFileName().toString().equals("V43__add_egress_recording_and_storage_lifecycle.sql")),
+                "Accepted main migration V43__add_egress_recording_and_storage_lifecycle.sql must exist in db/reconciled");
+        assertTrue(sqlFiles.stream().anyMatch(p -> p.getFileName().toString().equals("V45__stable_principal_session_authority.sql")),
+                "Migration V45__stable_principal_session_authority.sql must exist in db/reconciled");
+        assertTrue(sqlFiles.stream().anyMatch(p -> p.getFileName().toString().equals("V46__p2_account_lifecycle_credentials_invitations.sql")),
+                "Migration V46__p2_account_lifecycle_credentials_invitations.sql must exist in db/reconciled");
+        assertTrue(sqlFiles.stream().anyMatch(p -> p.getFileName().toString().equals("V52__p8_adaptive_snapshots_decisions_outcomes.sql")),
+                "Migration V52__p8_adaptive_snapshots_decisions_outcomes.sql must exist in db/reconciled");
     }
 
     @Test

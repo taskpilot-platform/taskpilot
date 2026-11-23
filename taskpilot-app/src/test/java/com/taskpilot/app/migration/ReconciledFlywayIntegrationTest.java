@@ -64,6 +64,75 @@ class ReconciledFlywayIntegrationTest {
     }
 
     @Test
+    void acceptedV42UpgradesThroughV43ToLatestWithoutChangingChecksumsOrExistingData() throws Exception {
+        String url = database("reconciled_v42_upgrade");
+        flywayAtTarget(url, "flyway_schema_history_v2", "42").migrate();
+        String v42Checksum;
+        try (var connection = DriverManager.getConnection(url, "test", "test");
+             var statement = connection.createStatement()) {
+            v42Checksum = scalar(connection,
+                    "SELECT checksum FROM taskpilot_migrations.flyway_schema_history_v2 WHERE version='42'");
+            statement.execute("INSERT INTO public.users(id,email,full_name) VALUES (8002,'existing-v42@example.invalid','Existing V42 User')");
+        }
+
+        var upgraded = flyway(url, "flyway_schema_history_v2");
+        int pending = upgraded.info().pending().length;
+        assertThat(pending).isEqualTo(10); // V43 (main Egress) + V44..V52 (remediation)
+        assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(pending);
+        assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
+        assertThat(upgraded.migrate().migrationsExecuted).isZero();
+        try (var connection = DriverManager.getConnection(url, "test", "test")) {
+            assertThat(scalar(connection,
+                    "SELECT checksum FROM taskpilot_migrations.flyway_schema_history_v2 WHERE version='42'"))
+                    .isEqualTo(v42Checksum);
+            assertThat(scalar(connection,
+                    "SELECT max(version::int) FROM taskpilot_migrations.flyway_schema_history_v2 WHERE success"))
+                    .isEqualTo("52");
+            assertThat(scalar(connection, "SELECT email FROM public.users WHERE id=8002"))
+                    .isEqualTo("existing-v42@example.invalid");
+            assertThat(scalar(connection,
+                    "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='project_meetings' AND column_name='egress_id'"))
+                    .isEqualTo("1");
+            assertThat(scalar(connection, "SELECT to_regclass('public.adaptive_reviewed_outcomes')::text"))
+                    .isEqualTo("adaptive_reviewed_outcomes");
+        }
+    }
+
+    @Test
+    void acceptedEgressV43UpgradesWithoutChangingItsChecksumOrExistingData() throws Exception {
+        String url = database("egress_v43_upgrade");
+        flywayAtTarget(url, "flyway_schema_history_v2", "43").migrate();
+        String acceptedChecksum;
+        try (var connection = DriverManager.getConnection(url, "test", "test");
+             var statement = connection.createStatement()) {
+            acceptedChecksum = scalar(connection,
+                    "SELECT checksum FROM taskpilot_migrations.flyway_schema_history_v2 WHERE version='43'");
+            statement.execute("INSERT INTO public.users(id,email,full_name) VALUES (8001,'existing-egress@example.invalid','Existing Egress User')");
+        }
+
+        var upgraded = flyway(url, "flyway_schema_history_v2");
+        int pending = upgraded.info().pending().length;
+        assertThat(pending).isPositive();
+        assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(pending);
+        assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
+        assertThat(upgraded.migrate().migrationsExecuted).isZero();
+        try (var connection = DriverManager.getConnection(url, "test", "test")) {
+            assertThat(scalar(connection,
+                    "SELECT checksum FROM taskpilot_migrations.flyway_schema_history_v2 WHERE version='43'"))
+                    .isEqualTo(acceptedChecksum);
+            assertThat(scalar(connection, "SELECT email FROM public.users WHERE id=8001"))
+                    .isEqualTo("existing-egress@example.invalid");
+            assertThat(scalar(connection, "SELECT to_regclass('public.task_submissions')::text"))
+                    .isEqualTo("task_submissions");
+            assertThat(scalar(connection, "SELECT to_regclass('public.adaptive_reviewed_outcomes')::text"))
+                    .isEqualTo("adaptive_reviewed_outcomes");
+            assertThat(scalar(connection,
+                    "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='project_meetings' AND column_name='egress_id'"))
+                    .isEqualTo("1");
+        }
+    }
+
+    @Test
     void freshDatabaseContainsFullSchemaSettingsAndProtectedHistory() throws Exception {
         String url = database("recovery_fresh");
         try (var c = DriverManager.getConnection(url, "test", "test"); var s = c.createStatement()) {

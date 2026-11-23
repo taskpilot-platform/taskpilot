@@ -937,25 +937,31 @@ class SprintLifecyclePostgresIntegrationTest {
         // Zero DB writes happened
         assertThat(taskRepository.findActiveById(trapped.path("id").asLong()).orElseThrow().getSprintId()).isEqualTo(sClosed);
 
-        // Real Flyway V48 -> V49 upgrade check on separate isolated DB inside same PG17 container
-        String upgradeDb = "upgrade_v48_v49_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        // Real Flyway V49 -> V50 (sprint closure / tombstones / project purge) upgrade check on isolated DB
+        String upgradeDb = "upgrade_v49_v50_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
         try (Connection c = DriverManager.getConnection(
                 postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
              Statement s = c.createStatement()) {
             s.execute("CREATE DATABASE " + upgradeDb);
         }
         String upgradeUrl = postgres.getJdbcUrl().replace("/taskpilot", "/" + upgradeDb);
-        Flyway v48 = MigrationDatabaseConfiguration
-                .configure(Flyway.configure().dataSource(upgradeUrl, postgres.getUsername(), postgres.getPassword()))
-                .target("48")
-                .load();
-        v48.migrate();
-        Flyway v49 = MigrationDatabaseConfiguration
+        Flyway preSprintClosure = MigrationDatabaseConfiguration
                 .configure(Flyway.configure().dataSource(upgradeUrl, postgres.getUsername(), postgres.getPassword()))
                 .target("49")
                 .load();
-        assertThat(v49.migrate().migrationsExecuted).isEqualTo(1);
-        assertThat(v49.validateWithResult().validationSuccessful).isTrue();
+        preSprintClosure.migrate();
+        Flyway withSprintClosure = MigrationDatabaseConfiguration
+                .configure(Flyway.configure().dataSource(upgradeUrl, postgres.getUsername(), postgres.getPassword()))
+                .target("50")
+                .load();
+        assertThat(withSprintClosure.migrate().migrationsExecuted).isEqualTo(1);
+        assertThat(withSprintClosure.validateWithResult().validationSuccessful).isTrue();
+        try (Connection c = DriverManager.getConnection(upgradeUrl, postgres.getUsername(), postgres.getPassword());
+             Statement s = c.createStatement();
+             var rs = s.executeQuery("SELECT to_regclass('public.sprint_closure_snapshots')::text")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString(1)).isEqualTo("sprint_closure_snapshots");
+        }
     }
 
     @Test

@@ -190,18 +190,19 @@ class P4StorageLifecycleIntegrationTest {
             s.execute("CREATE DATABASE p4_upgrade_probe");
         }
         String upgradeUrl = "jdbc:postgresql://" + postgres.getHost() + ":" + postgres.getMappedPort(5432) + "/p4_upgrade_probe";
-        Flyway toV45 = MigrationDatabaseConfiguration.configure(
-                Flyway.configure().dataSource(upgradeUrl, "test", "test")
-        ).target("45").load();
-        assertThat(toV45.migrate().migrationsExecuted).isEqualTo(5);
-
-        Flyway toLatest = MigrationDatabaseConfiguration.configure(
+        // V43 is accepted Egress migration on main; pre-storage-cleanup is V46 and storage cleanup is V47.
+        Flyway toPreStorageCleanup = MigrationDatabaseConfiguration.configure(
                 Flyway.configure().dataSource(upgradeUrl, "test", "test")
         ).target("46").load();
-        assertThat(toLatest.migrate().migrationsExecuted).isEqualTo(1);
-        assertThat(toLatest.validateWithResult().validationSuccessful).isTrue();
+        assertThat(toPreStorageCleanup.migrate().migrationsExecuted).isEqualTo(6);
 
-        // Validate Hibernate mapping of new V46 entities (and core file/document entities) against the upgraded PG17 schema
+        Flyway toStorageCleanup = MigrationDatabaseConfiguration.configure(
+                Flyway.configure().dataSource(upgradeUrl, "test", "test")
+        ).target("47").load();
+        assertThat(toStorageCleanup.migrate().migrationsExecuted).isEqualTo(1);
+        assertThat(toStorageCleanup.validateWithResult().validationSuccessful).isTrue();
+
+        // Validate Hibernate mapping of new storage cleanup entities (and core file/document entities) against the upgraded PG17 schema
         var registry = new org.hibernate.boot.registry.StandardServiceRegistryBuilder()
                 .applySetting("hibernate.connection.url", upgradeUrl)
                 .applySetting("hibernate.connection.username", "test")

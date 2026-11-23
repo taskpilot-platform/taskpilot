@@ -1424,7 +1424,7 @@
           "aConfirmedSessionReplacesTheOldSessionAndAStaleLeaveCannotCloseIt",
           "providerFailureLeavesDurableEndingAndNotFoundCompletesItOnRetry"
         ],
-        "com.taskpilot.projects.meetings.service.MeetingRecordingServiceTest": [
+        "com.taskpilot.projects.meetings.service.ClientMeetingRecordingServiceTest": [
           "aForeignUploaderCannotAttachALegitimateProjectFile",
           "aRepeatedFinalizationReturnsTheCommittedReceiptButDoesNotAcceptADifferentFile",
           "memberHistoryContainsReadyFilesAndOmitsAnotherRecordersPendingClip",

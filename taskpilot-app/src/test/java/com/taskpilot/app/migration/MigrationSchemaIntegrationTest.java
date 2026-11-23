@@ -54,9 +54,9 @@ class MigrationSchemaIntegrationTest {
             statement.execute("CREATE DATABASE " + database);
         }
         String url = "jdbc:postgresql://" + postgres.getHost() + ":" + postgres.getMappedPort(5432) + "/" + database;
-        var v49 = MigrationDatabaseConfiguration.configure(Flyway.configure().dataSource(url, "test", "test"))
-                .target("49").load();
-        v49.migrate();
+        var preP7 = MigrationDatabaseConfiguration.configure(Flyway.configure().dataSource(url, "test", "test"))
+                .target("50").load();
+        preP7.migrate();
 
         try (var connection = DriverManager.getConnection(url, "test", "test"); var statement = connection.createStatement()) {
             statement.execute("INSERT INTO public.users(id, email, full_name) VALUES (7, 'fixture@example.invalid', 'Fixture')");
@@ -105,9 +105,9 @@ class MigrationSchemaIntegrationTest {
             statement.execute("CREATE DATABASE " + database);
         }
         String url = "jdbc:postgresql://" + postgres.getHost() + ":" + postgres.getMappedPort(5432) + "/" + database;
-        var v50 = MigrationDatabaseConfiguration.configure(Flyway.configure().dataSource(url, "test", "test"))
-                .target("50").load();
-        v50.migrate();
+        var preP8 = MigrationDatabaseConfiguration.configure(Flyway.configure().dataSource(url, "test", "test"))
+                .target("51").load();
+        preP8.migrate();
 
         try (var connection = DriverManager.getConnection(url, "test", "test"); var statement = connection.createStatement()) {
             statement.execute("INSERT INTO public.users(id, email, full_name) VALUES (10, 'mgr@example.invalid', 'Manager'), (11, 'dev@example.invalid', 'Dev')");

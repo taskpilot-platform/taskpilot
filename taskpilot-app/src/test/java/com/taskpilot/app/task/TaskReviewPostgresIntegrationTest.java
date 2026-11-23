@@ -1042,11 +1042,12 @@ class TaskReviewPostgresIntegrationTest {
         }
         String upgradeUrl = "jdbc:postgresql://" + postgres.getHost() + ":" + postgres.getMappedPort(5432) + "/" + dbName;
 
-        Flyway v47 = MigrationDatabaseConfiguration
+        // V43 is accepted Egress migration on main; P5 task contracts is V48 and evaluation journal is V49.
+        Flyway preReview = MigrationDatabaseConfiguration
                 .configure(Flyway.configure().dataSource(upgradeUrl, postgres.getUsername(), postgres.getPassword()))
-                .target("47")
+                .target("48")
                 .load();
-        assertThat(v47.migrate().migrationsExecuted).isGreaterThan(0);
+        assertThat(preReview.migrate().migrationsExecuted).isGreaterThan(0);
 
         long doneTaskId;
         long reviewTaskId;
@@ -1069,13 +1070,13 @@ class TaskReviewPostgresIntegrationTest {
             }
         }
 
-        Flyway v48 = MigrationDatabaseConfiguration
+        Flyway withReviewJournal = MigrationDatabaseConfiguration
                 .configure(Flyway.configure().dataSource(upgradeUrl, postgres.getUsername(), postgres.getPassword()))
-                .target("48")
+                .target("49")
                 .load();
-        assertThat(v48.migrate().migrationsExecuted).isEqualTo(1);
-        assertThat(v48.validateWithResult().validationSuccessful).isTrue();
-        assertThat(v48.migrate().migrationsExecuted).isZero();
+        assertThat(withReviewJournal.migrate().migrationsExecuted).isEqualTo(1);
+        assertThat(withReviewJournal.validateWithResult().validationSuccessful).isTrue();
+        assertThat(withReviewJournal.migrate().migrationsExecuted).isZero();
 
         try (Connection c = DriverManager.getConnection(upgradeUrl, postgres.getUsername(), postgres.getPassword());
              Statement s = c.createStatement()) {
@@ -1109,7 +1110,7 @@ class TaskReviewPostgresIntegrationTest {
                 rs.next();
                 assertThat(rs.getInt(1)).isEqualTo(8);
             }
-            assertThat(v48.info().current().getVersion().getVersion()).isEqualTo("48");
+            assertThat(withReviewJournal.info().current().getVersion().getVersion()).isEqualTo("49");
         }
     }
 
