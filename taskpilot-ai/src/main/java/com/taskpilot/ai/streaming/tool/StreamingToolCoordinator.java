@@ -2,6 +2,7 @@ package com.taskpilot.ai.streaming.tool;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.taskpilot.ai.service.ToolCallingRegistryService;
+import com.taskpilot.ai.streaming.engine.CopilotTurnState;
 import com.taskpilot.ai.streaming.sse.AiSseTransport;
 import com.taskpilot.ai.tools.ToolExecutionContext;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
@@ -13,6 +14,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -20,6 +22,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.StructuredTaskScope;
+import java.util.function.BooleanSupplier;
 
 /**
  * Coordinates multi-threaded parallel tool execution via Virtual Threads, loop detection, and result formatting.
@@ -30,6 +33,16 @@ import java.util.concurrent.StructuredTaskScope;
 public class StreamingToolCoordinator {
 
     public record ToolLoopState(String toolName, int consecutiveCount) {}
+
+    public static class ToolDeadlineExceededException extends RuntimeException {
+        public ToolDeadlineExceededException(String message) {
+            super(message);
+        }
+
+        public ToolDeadlineExceededException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
 
     private final ToolCallingRegistryService toolCallingRegistryService;
     private final AiSseTransport sseTransport;
@@ -62,6 +75,56 @@ public class StreamingToolCoordinator {
             Long sessionId,
             String userInput,
             Collection<String> allowedTools) {
+        return executeTools(requests, emitter, toolCallSummaries, toolNames,
+                userId, sessionId, userInput, allowedTools, null);
+    }
+
+    public List<ToolExecutionResultMessage> executeTools(
+            List<ToolExecutionRequest> requests,
+            SseEmitter emitter,
+            List<Map<String, Object>> toolCallSummaries,
+            LinkedHashSet<String> toolNames,
+            Long userId,
+            Long sessionId,
+            String userInput,
+            Collection<String> allowedTools,
+            CopilotTurnState.TurnToolLedger ledger) {
+        return executeTools(requests, emitter, toolCallSummaries, toolNames,
+                userId, sessionId, userInput, allowedTools, ledger, null);
+    }
+
+    public List<ToolExecutionResultMessage> executeTools(
+            List<ToolExecutionRequest> requests,
+            SseEmitter emitter,
+            List<Map<String, Object>> toolCallSummaries,
+            LinkedHashSet<String> toolNames,
+            Long userId,
+            Long sessionId,
+            String userInput,
+            Collection<String> allowedTools,
+            CopilotTurnState.TurnToolLedger ledger,
+            Duration turnRemainingTimeout) {
+        return executeTools(requests, emitter, toolCallSummaries, toolNames,
+                userId, sessionId, userInput, allowedTools, ledger, turnRemainingTimeout, () -> false);
+    }
+
+    public List<ToolExecutionResultMessage> executeTools(
+            List<ToolExecutionRequest> requests,
+            SseEmitter emitter,
+            List<Map<String, Object>> toolCallSummaries,
+            LinkedHashSet<String> toolNames,
+            Long userId,
+            Long sessionId,
+            String userInput,
+            Collection<String> allowedTools,
+            CopilotTurnState.TurnToolLedger ledger,
+            Duration turnRemainingTimeout,
+            BooleanSupplier turnTerminated) {
+
+        BooleanSupplier isTerminated = turnTerminated != null ? turnTerminated : () -> false;
+        if (isTerminated.getAsBoolean() || (turnRemainingTimeout != null && !turnRemainingTimeout.isPositive())) {
+            throw new ToolDeadlineExceededException("Turn deadline already reached before tool execution");
+        }
 
         List<ToolExecutionRequest> normalizedRequests = new ArrayList<>();
         for (ToolExecutionRequest req : requests) {
@@ -79,42 +142,131 @@ public class StreamingToolCoordinator {
                     .build());
         }
 
-        // 1. Send all start messages sequentially
-        for (ToolExecutionRequest request : normalizedRequests) {
-            String startMsg = "Truy cập hệ thống: " + getFriendlyToolName(request.name()) + "...\n\n";
-            sseTransport.safeSend(emitter, "token", Map.of("token", startMsg), MediaType.APPLICATION_JSON);
+        // Partition into reusable (cached after mid-turn model switch) vs fresh executions
+        Map<Integer, String> reusedOutputs = new LinkedHashMap<>();
+        List<Integer> toExecuteIndices = new ArrayList<>();
+        for (int i = 0; i < normalizedRequests.size(); i++) {
+            ToolExecutionRequest request = normalizedRequests.get(i);
+            var reused = ledger != null ? ledger.reusable(request) : java.util.Optional.<String>empty();
+            if (reused.isPresent()) {
+                reusedOutputs.put(i, reused.get());
+                log.info("[CopilotChain] reuse tool={} key={}", request.name(), ledger.exactKey(request));
+            } else {
+                toExecuteIndices.add(i);
+                if (!isTerminated.getAsBoolean()) {
+                    String startMsg = "Truy cập hệ thống: " + getFriendlyToolName(request.name()) + "...\n\n";
+                    sseTransport.safeSend(emitter, "token", Map.of("token", startMsg), MediaType.APPLICATION_JSON);
+                }
+            }
         }
 
-        // 2. Launch execution tasks in parallel using Java 25 StructuredTaskScope & ScopedValue
+        // 2. Launch fresh execution tasks in parallel using Java 25 StructuredTaskScope & ScopedValue
         record ToolExecutionResult(ToolExecutionRequest request, String output, Throwable error) {}
 
-        ToolExecutionContext.Context ctx = new ToolExecutionContext.Context(userId, sessionId, userInput, allowedTools);
-        List<StructuredTaskScope.Subtask<ToolExecutionResult>> subtasks = new ArrayList<>();
-
-        try (var scope = StructuredTaskScope.open(StructuredTaskScope.Joiner.<ToolExecutionResult>awaitAll())) {
-            for (ToolExecutionRequest request : normalizedRequests) {
-                var subtask = scope.fork(() -> ToolExecutionContext.callWith(ctx, () -> {
-                    try {
-                        String output = toolCallingRegistryService.execute(request);
-                        return new ToolExecutionResult(request, output, null);
-                    } catch (Throwable t) {
-                        log.error("[executeTools] Error executing tool {}", request.name(), t);
-                        return new ToolExecutionResult(request, null, t);
-                    }
-                }));
-                subtasks.add(subtask);
+        Map<Integer, ToolExecutionResult> executedByIndex = new LinkedHashMap<>();
+        java.util.Set<Integer> publishedConfirmations = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        if (!toExecuteIndices.isEmpty()) {
+            if (isTerminated.getAsBoolean()) {
+                throw new ToolDeadlineExceededException("Turn already terminated before launching tools");
             }
-            scope.join();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.warn("[executeTools] Interrupted while executing parallel tools", e);
+            ToolExecutionContext.Context ctx = new ToolExecutionContext.Context(userId, sessionId, userInput, allowedTools);
+            List<StructuredTaskScope.Subtask<ToolExecutionResult>> subtasks = new ArrayList<>();
+
+            boolean timedOut = false;
+            StructuredTaskScope.TimeoutException timeoutEx = null;
+            try (var scope = turnRemainingTimeout != null
+                    ? StructuredTaskScope.open(
+                            StructuredTaskScope.Joiner.<ToolExecutionResult>awaitAll(),
+                            cfg -> cfg.withTimeout(turnRemainingTimeout))
+                    : StructuredTaskScope.open(StructuredTaskScope.Joiner.<ToolExecutionResult>awaitAll())) {
+                for (int idx : toExecuteIndices) {
+                    ToolExecutionRequest request = normalizedRequests.get(idx);
+                    var subtask = scope.fork(() -> ToolExecutionContext.callWith(ctx, () -> {
+                        try {
+                            String output = toolCallingRegistryService.execute(request);
+                            Map<String, Object> confirmation = confirmationParser.parseConfirmationPayload(output).orElse(null);
+                            if (confirmation != null) {
+                                // Publish proposals before waiting for unrelated tools in this batch.
+                                synchronized (toolCallSummaries) {
+                                    if (!isTerminated.getAsBoolean()) {
+                                        Map<String, Object> payload = new LinkedHashMap<>();
+                                        payload.put("name", request.name());
+                                        payload.put("arguments", request.arguments());
+                                        payload.put("result", truncate(output, 1500));
+                                        payload.put("confirmation", confirmation);
+                                        synchronized (toolNames) {
+                                            toolNames.add(request.name());
+                                        }
+                                        toolCallSummaries.add(payload);
+                                        if (ledger != null) {
+                                            ledger.record(request, output, confirmation);
+                                        }
+                                        publishedConfirmations.add(idx);
+                                        sseTransport.safeSend(emitter, "tool", payload, MediaType.APPLICATION_JSON);
+                                    }
+                                }
+                            }
+                            return new ToolExecutionResult(request, output, null);
+                        } catch (Throwable t) {
+                            log.error("[executeTools] Error executing tool {}", request.name(), t);
+                            return new ToolExecutionResult(request, null, t);
+                        }
+                    }));
+                    subtasks.add(subtask);
+                }
+                scope.join();
+            } catch (StructuredTaskScope.TimeoutException te) {
+                timedOut = true;
+                timeoutEx = te;
+                log.warn("[executeTools] Tool execution exceeded remaining turn deadline ({}ms) for session {}",
+                        turnRemainingTimeout.toMillis(), sessionId);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("[executeTools] Interrupted while executing parallel tools", e);
+            }
+
+            // If the independent turn deadline timer already closed SSE while tools were finishing/cleaning up,
+            // do not emit any late SSE events or mutate turn state.
+            if (isTerminated.getAsBoolean()) {
+                log.warn("[executeTools] Ignoring late tool completion after turn already terminated for session {}", sessionId);
+                throw new ToolDeadlineExceededException("Turn already terminated while tools were executing", timeoutEx);
+            }
+
+            if (timedOut) {
+                throw new ToolDeadlineExceededException(
+                        "Tool execution exceeded remaining turn deadline (" + turnRemainingTimeout.toMillis() + "ms)",
+                        timeoutEx);
+            }
+
+            for (int j = 0; j < toExecuteIndices.size(); j++) {
+                var subtask = subtasks.get(j);
+                ToolExecutionRequest request = normalizedRequests.get(toExecuteIndices.get(j));
+                if (subtask.state() == StructuredTaskScope.Subtask.State.SUCCESS) {
+                    executedByIndex.put(toExecuteIndices.get(j), subtask.get());
+                } else {
+                    executedByIndex.put(toExecuteIndices.get(j),
+                            new ToolExecutionResult(request, null, new InterruptedException("Tool execution did not complete")));
+                }
+            }
         }
 
         // 3. Process results sequentially in original request order
         List<ToolExecutionResultMessage> results = new ArrayList<>();
-        for (var subtask : subtasks) {
-            ToolExecutionResult execution = subtask.get();
-            ToolExecutionRequest request = execution.request();
+        for (int i = 0; i < normalizedRequests.size(); i++) {
+            if (isTerminated.getAsBoolean()) {
+                log.warn("[executeTools] Stopping tool result emission because turn terminated for session {}", sessionId);
+                throw new ToolDeadlineExceededException("Turn terminated while emitting tool results");
+            }
+            ToolExecutionRequest request = normalizedRequests.get(i);
+            if (reusedOutputs.containsKey(i)) {
+                results.add(ToolExecutionResultMessage.from(request, reusedOutputs.get(i)));
+                continue;
+            }
+            ToolExecutionResult execution = executedByIndex.get(i);
+            if (publishedConfirmations.contains(i)) {
+                results.add(ToolExecutionResultMessage.from(request, execution.output()));
+                continue;
+            }
             String output = execution.output();
             if (execution.error() != null) {
                 output = "Lỗi khi truy cập hệ thống: " + execution.error().getMessage();
@@ -127,7 +279,10 @@ public class StreamingToolCoordinator {
             eventPayload.put("name", request.name());
             eventPayload.put("arguments", request.arguments());
             eventPayload.put("result", truncate(output, 1500));
-            confirmationParser.parseConfirmationPayload(output).ifPresent(confirmation -> eventPayload.put("confirmation", confirmation));
+            Map<String, Object> parsedConfirmation = confirmationParser.parseConfirmationPayload(output).orElse(null);
+            if (parsedConfirmation != null) {
+                eventPayload.put("confirmation", parsedConfirmation);
+            }
 
             if (output != null && output.contains("\"FORM_REQUIRED\"")) {
                 try {
@@ -143,10 +298,21 @@ public class StreamingToolCoordinator {
                 confirmationParser.buildMissingAssignmentForm(request.name(), request.arguments(), output)
                         .ifPresent(form -> eventPayload.put("form", form));
             }
+            if (isTerminated.getAsBoolean()) {
+                throw new ToolDeadlineExceededException("Turn terminated before sending tool event");
+            }
             sseTransport.safeSend(emitter, "tool", eventPayload, MediaType.APPLICATION_JSON);
 
-            toolNames.add(request.name());
-            toolCallSummaries.add(eventPayload);
+            synchronized (toolNames) {
+                toolNames.add(request.name());
+            }
+            synchronized (toolCallSummaries) {
+                toolCallSummaries.add(eventPayload);
+            }
+
+            if (ledger != null && execution.error() == null) {
+                ledger.record(request, output, parsedConfirmation);
+            }
 
             results.add(ToolExecutionResultMessage.from(request, output));
         }

@@ -11,6 +11,10 @@ import com.taskpilot.ai.entity.ChatSessionEntity;
 import com.taskpilot.ai.prompt.SystemPromptBuilder;
 import com.taskpilot.ai.repository.ChatMessageRepository;
 import com.taskpilot.ai.repository.ChatSessionRepository;
+import com.taskpilot.ai.routing.CopilotStreamStatusCode;
+import com.taskpilot.ai.routing.ModelCandidate;
+import com.taskpilot.ai.routing.ModelFailureClassifier;
+import com.taskpilot.ai.routing.TurnAttemptTracker;
 import com.taskpilot.ai.service.AiLogService;
 import com.taskpilot.ai.service.ChatStreamStatusService;
 import com.taskpilot.ai.service.SessionChatMemoryService;
@@ -18,6 +22,7 @@ import com.taskpilot.ai.service.SmartRoutingService;
 import com.taskpilot.ai.service.ThinkingNarratorService;
 import dev.langchain4j.model.TokenCountEstimator;
 import com.taskpilot.ai.service.ToolCallingRegistryService;
+import com.taskpilot.ai.streaming.diagnostic.FinalizerTerminalCause;
 import com.taskpilot.ai.streaming.filter.ThoughtBlockStreamFilter;
 import com.taskpilot.ai.streaming.postprocess.SessionPostProcessor;
 import com.taskpilot.ai.streaming.sse.AiSseTransport;
@@ -47,6 +52,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.Instant;
+import java.time.InstantSource;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -122,7 +128,18 @@ public class StreamingChatEngine {
     private boolean benchmarkMockEnabled = false;
 
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-    private final ScheduledExecutorService timeoutScheduler = Executors.newScheduledThreadPool(8);
+    private ScheduledExecutorService timeoutScheduler = Executors.newScheduledThreadPool(8);
+    private InstantSource clock = InstantSource.system();
+
+    void setClockForTesting(InstantSource clock) {
+        this.clock = clock != null ? clock : InstantSource.system();
+    }
+
+    void setTimeoutSchedulerForTesting(ScheduledExecutorService scheduler) {
+        if (scheduler != null) {
+            this.timeoutScheduler = scheduler;
+        }
+    }
 
     @PreDestroy
     public void shutdown() {
@@ -180,6 +197,32 @@ public class StreamingChatEngine {
         List<Map<String, Object>> toolCallSummaries = new ArrayList<>();
         LinkedHashSet<String> toolNames = new LinkedHashSet<>();
 
+        List<ModelCandidate> chain = routingService != null ? routingService.candidateChain(requiresTools) : List.of();
+        if (chain == null) {
+            chain = List.of();
+        }
+        int maxAttempts = routingService != null ? routingService.maxModelAttempts(chain) : chain.size();
+        int deadlineSeconds = (routingService != null && routingService.turnDeadlineSeconds() > 0)
+                ? routingService.turnDeadlineSeconds()
+                : 60;
+        TurnAttemptTracker tracker = new TurnAttemptTracker(chain, maxAttempts, deadlineSeconds, clock);
+
+        CopilotTurnState turn = new CopilotTurnState(
+                emitter, emitterCompleted, session, sessionId, userId, userInput,
+                systemPrompt, startTime, clientMessageId, requiresAHP, requiresTools,
+                workingHistory, fullResponse, clientDisconnected, generatingMarked,
+                toolCallSummaries, toolNames, tracker, objectMapper);
+
+        if (model == null) {
+            terminate(turn, TurnAttemptTracker.TerminalReason.NO_CANDIDATE, modelName != null ? modelName : "none");
+            return;
+        }
+
+        ModelCandidate initialCandidate = resolveInitialCandidate(chain, model, modelName, requiresTools);
+        tracker.activate(initialCandidate);
+        turn.activeModelName.set(initialCandidate.model());
+        scheduleTurnDeadline(turn);
+
         String initialStep = requiresAHP ? "Phân tích yêu cầu về nhân sự và đề xuất phân công..." : "Chuẩn bị thực hiện yêu cầu...";
         sseTransport.safeSend(emitter, "token", Map.of("token", "<think>\n" + initialStep + "\n\n"), MediaType.APPLICATION_JSON);
 
@@ -187,7 +230,7 @@ public class StreamingChatEngine {
         final AtomicInteger stepIndex = new AtomicInteger(0);
         final ScheduledFuture<?>[] futureHolder = new ScheduledFuture<?>[1];
         futureHolder[0] = timeoutScheduler.scheduleAtFixedRate(() -> {
-            if (emitterCompleted.get() || clientDisconnected.get() || generatingMarked.get()) {
+            if (turn.isTerminated() || emitterCompleted.get() || clientDisconnected.get() || generatingMarked.get()) {
                 if (futureHolder[0] != null) {
                     futureHolder[0].cancel(false);
                 }
@@ -200,12 +243,42 @@ public class StreamingChatEngine {
             }
         }, 10, 10, TimeUnit.SECONDS);
 
-        streamRound(
-                emitter, emitterCompleted, session, sessionId, userId, userInput,
-                workingHistory, systemPrompt, model, modelName, startTime,
-                isFallbackAttempt, clientMessageId, fullResponse, clientDisconnected,
-                generatingMarked, 0, requiresAHP, requiresTools, null, 0,
-                toolCallSummaries, toolNames, retryCount, initialModelKeyAttempts);
+        streamRoundInternal(
+                turn, 0, model, initialCandidate, null, 0, retryCount, initialModelKeyAttempts,
+                TurnAttemptTracker.CallKind.NORMAL_ROUND);
+    }
+
+    private void scheduleTurnDeadline(CopilotTurnState turn) {
+        long remainingDeadlineMs = Math.max(1L, turn.tracker.remainingMillis());
+        ScheduledFuture<?> future = timeoutScheduler.schedule(() -> {
+            if (turn.isTerminated() || turn.clientDisconnected.get() || turn.emitterCompleted.get()) {
+                return;
+            }
+            String activeModel = turn.activeModelName.get();
+            log.warn("[SSE] Hard turn deadline ({}s) expired for session {} (activeModel={})",
+                    turn.tracker.getDeadlineSeconds(), turn.sessionId, activeModel);
+            turn.tracker.markLastOutcome("DEADLINE");
+            terminate(turn, TurnAttemptTracker.TerminalReason.DEADLINE, activeModel);
+        }, remainingDeadlineMs, TimeUnit.MILLISECONDS);
+        turn.turnDeadlineFuture.set(future);
+    }
+
+    private ModelCandidate resolveInitialCandidate(
+            List<ModelCandidate> chain,
+            StreamingChatModel model,
+            String modelName,
+            boolean requiresTools) {
+        String provider = routingService != null ? routingService.getModelProvider(model) : "UNKNOWN";
+        String resolvedName = (modelName != null && !modelName.isBlank())
+                ? modelName
+                : (routingService != null ? routingService.getModelName(model) : "Unknown");
+        String targetIdentity = ModelCandidate.identityOf(provider, resolvedName);
+        for (ModelCandidate candidate : chain) {
+            if (candidate.identity().equals(targetIdentity)) {
+                return candidate;
+            }
+        }
+        return new ModelCandidate(provider, resolvedName, requiresTools, ModelCandidate.Source.DEFAULT_CHAIN);
     }
 
     public void streamRound(
@@ -234,6 +307,75 @@ public class StreamingChatEngine {
             LinkedHashSet<String> toolNames,
             int retryCount,
             int modelKeyAttempts) {
+
+        List<ModelCandidate> chain = routingService != null ? routingService.candidateChain(requiresTools) : List.of();
+        if (chain == null) {
+            chain = List.of();
+        }
+        int maxAttempts = routingService != null ? routingService.maxModelAttempts(chain) : chain.size();
+        int deadlineSeconds = (routingService != null && routingService.turnDeadlineSeconds() > 0)
+                ? routingService.turnDeadlineSeconds()
+                : 60;
+        TurnAttemptTracker tracker = new TurnAttemptTracker(chain, maxAttempts, deadlineSeconds, clock);
+        CopilotTurnState turn = new CopilotTurnState(
+                emitter, emitterCompleted, session, sessionId, userId, userInput,
+                systemPrompt, startTime, clientMessageId, requiresAHP, requiresTools,
+                history, fullResponse, clientDisconnected, generatingMarked,
+                toolCallSummaries, toolNames, tracker, objectMapper);
+        if (model == null) {
+            terminate(turn, TurnAttemptTracker.TerminalReason.NO_CANDIDATE, modelName != null ? modelName : "none");
+            return;
+        }
+        ModelCandidate initialCandidate = resolveInitialCandidate(chain, model, modelName, requiresTools);
+        tracker.activate(initialCandidate);
+        turn.activeModelName.set(initialCandidate.model());
+        scheduleTurnDeadline(turn);
+        streamRoundInternal(turn, toolRound, model, initialCandidate, lastToolName, consecutiveToolExecutions,
+                retryCount, modelKeyAttempts, TurnAttemptTracker.CallKind.NORMAL_ROUND);
+    }
+
+    private void streamRoundInternal(
+            CopilotTurnState turn,
+            int toolRound,
+            StreamingChatModel model,
+            ModelCandidate candidate,
+            String lastToolName,
+            int consecutiveToolExecutions,
+            int retryCount,
+            int modelKeyAttempts,
+            TurnAttemptTracker.CallKind callKind) {
+
+        if (turn.isTerminated() || turn.emitterCompleted.get()) {
+            return;
+        }
+
+        final SseEmitter emitter = turn.emitter;
+        final AtomicBoolean emitterCompleted = turn.emitterCompleted;
+        final ChatSessionEntity session = turn.session;
+        final Long sessionId = turn.sessionId;
+        final Long userId = turn.userId;
+        final String userInput = turn.userInput;
+        final List<ChatMessage> history = turn.history;
+        final String systemPrompt = turn.systemPrompt;
+        final String modelName = candidate.model();
+        turn.activeModelName.set(modelName != null ? modelName : "");
+        final long startTime = turn.startTime;
+        final String clientMessageId = turn.clientMessageId;
+        final StringBuilder fullResponse = turn.fullResponse;
+        final AtomicBoolean clientDisconnected = turn.clientDisconnected;
+        final AtomicBoolean generatingMarked = turn.generatingMarked;
+        final boolean requiresAHP = turn.requiresAHP;
+        final boolean requiresTools = turn.requiresTools;
+        final List<Map<String, Object>> toolCallSummaries = turn.toolCallSummaries;
+        final LinkedHashSet<String> toolNames = turn.toolNames;
+
+        if (toolRound > 0 && !turn.tracker.hasTimeForNextCall()) {
+            terminate(turn, TurnAttemptTracker.TerminalReason.DEADLINE, modelName);
+            return;
+        }
+
+        turn.tracker.recordCall(candidate, modelKeyAttempts, toolRound, callKind);
+        final int roundStartLength = fullResponse.length();
 
         final boolean isGemma = modelName != null && (modelName.contains("gemma-") || modelName.contains("gemma4")) && (routingService.isGeminiModel(model) || !modelName.contains("/"));
         final boolean isGemmaModel = modelName != null && (modelName.contains("gemma-") || modelName.contains("gemma4") || modelName.toLowerCase().contains("gemma"));
@@ -279,10 +421,11 @@ public class StreamingChatEngine {
                 timeoutFallbackHandler.forceTextOnlyResponse(
                         emitter, emitterCompleted, session, sessionId, userId, userInput,
                         history, systemPrompt, model, modelName, startTime,
-                        isFallbackAttempt, clientMessageId, fullResponse,
+                        false, clientMessageId, fullResponse,
                         clientDisconnected, generatingMarked, requiresAHP,
                         toolCallSummaries, toolNames,
-                        "Based on the tool data already provided in the context above, provide your final recommendation now. Do not call any tools.");
+                        "Based on the tool data already provided in the context above, provide your final recommendation now. Do not call any tools.",
+                        turn.tracker, candidate);
                 return;
             }
         } else if (requiresTools && toolRound < MAX_TOOL_ROUNDS) {
@@ -381,40 +524,49 @@ public class StreamingChatEngine {
 
         final AtomicBoolean roundClosed = new AtomicBoolean(false);
         final AtomicBoolean firstModelSignalReceived = new AtomicBoolean(false);
-        long timeoutDelay = isGemma ? 180 : streamFirstResponseTimeoutSeconds;
+        final AtomicBoolean roundGeneratingMarked = new AtomicBoolean(false);
+        long configuredTimeout = isGemma ? 180L : streamFirstResponseTimeoutSeconds;
+        long timeoutDelay = turn.tracker.watchdogTimeoutSeconds(configuredTimeout);
 
         final ScheduledFuture<?> timeoutFuture = timeoutScheduler.schedule(() -> {
-            if (firstModelSignalReceived.get() || clientDisconnected.get() || emitterCompleted.get()) {
+            if (turn.isTerminated() || firstModelSignalReceived.get() || clientDisconnected.get() || emitterCompleted.get()) {
                 return;
             }
             if (roundClosed.compareAndSet(false, true)) {
-                handleFirstResponseTimeout(
-                        emitter, emitterCompleted, session, sessionId, userId, userInput,
-                        history, systemPrompt, model, modelName, startTime,
-                        isFallbackAttempt, clientMessageId, requiresAHP, requiresTools,
-                        retryCount, modelKeyAttempts);
+                fullResponse.setLength(roundStartLength);
+                String timeoutMsg = "Model did not produce a first streaming response within " + timeoutDelay + "s";
+                log.warn("[SSE] {} for session {} using model {}", timeoutMsg, sessionId, modelName);
+                ModelFailureClassifier.Failure failure = ModelFailureClassifier.classify(
+                        new RuntimeException(timeoutMsg), true, false, clock.instant());
+                failover(turn, toolRound, model, candidate, lastToolName, consecutiveToolExecutions,
+                        retryCount, modelKeyAttempts, failure);
             }
-        }, Math.max(1, timeoutDelay), TimeUnit.SECONDS);
+        }, Math.max(1L, timeoutDelay), TimeUnit.SECONDS);
 
         final ThoughtBlockStreamFilter streamFilter = new ThoughtBlockStreamFilter();
 
         StreamingChatResponseHandler handler = new StreamingChatResponseHandler() {
             @Override
             public void onPartialResponse(String partialResponse) {
-                if (roundClosed.get()) return;
+                if (roundClosed.get() || turn.isTerminated()) return;
                 firstModelSignalReceived.set(true);
 
                 boolean isExecutor = requiresTools && communicatorEnabled;
                 String visibleChunk = streamFilter.accept(partialResponse);
 
                 if (!isExecutor && visibleChunk != null && !visibleChunk.isEmpty()) {
+                    if (turn.isTerminated()) return;
                     if (generatingMarked.compareAndSet(false, true)) {
+                        roundGeneratingMarked.set(true);
                         sseTransport.safeSend(emitter, "token", Map.of("token", "</think>\n\n"), MediaType.APPLICATION_JSON);
+                        chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.GENERATING, modelName, null, null);
+                        sseTransport.safeSend(emitter, "phase", Phase.GENERATING.name(), null);
+                    } else if (roundGeneratingMarked.compareAndSet(false, true)) {
                         chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.GENERATING, modelName, null, null);
                         sseTransport.safeSend(emitter, "phase", Phase.GENERATING.name(), null);
                     }
                     fullResponse.append(visibleChunk);
-                    if (!clientDisconnected.get()) {
+                    if (!clientDisconnected.get() && !turn.isTerminated()) {
                         if (!sseTransport.safeSend(emitter, "token", Map.of("token", visibleChunk), MediaType.APPLICATION_JSON)) {
                             clientDisconnected.set(true);
                         }
@@ -427,14 +579,19 @@ public class StreamingChatEngine {
             @Override
             public void onCompleteResponse(ChatResponse completeResponse) {
                 firstModelSignalReceived.set(true);
-                if (!roundClosed.compareAndSet(false, true)) return;
+                if (turn.isTerminated() || !roundClosed.compareAndSet(false, true)) return;
                 timeoutFuture.cancel(false);
+                turn.tracker.markLastOutcome("ok");
 
                 boolean isExecutor = requiresTools && communicatorEnabled;
                 String flushed = streamFilter.flush();
                 if (!isExecutor && flushed != null && !flushed.isEmpty()) {
                     if (generatingMarked.compareAndSet(false, true)) {
+                        roundGeneratingMarked.set(true);
                         sseTransport.safeSend(emitter, "token", Map.of("token", "</think>\n\n"), MediaType.APPLICATION_JSON);
+                        chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.GENERATING, modelName, null, null);
+                        sseTransport.safeSend(emitter, "phase", Phase.GENERATING.name(), null);
+                    } else if (roundGeneratingMarked.compareAndSet(false, true)) {
                         chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.GENERATING, modelName, null, null);
                         sseTransport.safeSend(emitter, "phase", Phase.GENERATING.name(), null);
                     }
@@ -481,7 +638,12 @@ public class StreamingChatEngine {
 
                         if (toolRound == 0 && extractedRequests.isEmpty() && (explicitMissingTool || regexMissingTool || executionExpectedButNoToolCalled) && retryCount == 0) {
                             log.warn("[Fallback] Missing tool detected. Retrying with expanded context and tools enabled...");
-                            doStream(emitter, emitterCompleted, session, sessionId, userId, userInput, history, systemPrompt, model, modelName, startTime, isFallbackAttempt, clientMessageId, requiresAHP, true, 1);
+                            fullResponse.setLength(roundStartLength);
+                            if (roundGeneratingMarked.get()) {
+                                sseTransport.safeSend(emitter, "reset_stream", Map.of("reason", "retry_missing_tool"), MediaType.APPLICATION_JSON);
+                            }
+                            streamRoundInternal(turn, 0, model, candidate, null, 0, 1, modelKeyAttempts,
+                                    TurnAttemptTracker.CallKind.NORMAL_ROUND);
                             return;
                         }
                     }
@@ -497,14 +659,19 @@ public class StreamingChatEngine {
                         timeoutFallbackHandler.forceTextOnlyResponse(
                                 emitter, emitterCompleted, session, sessionId, userId, userInput,
                                 history, systemPrompt, model, modelName, startTime,
-                                isFallbackAttempt, clientMessageId, fullResponse,
+                                false, clientMessageId, fullResponse,
                                 clientDisconnected, generatingMarked, requiresAHP,
                                 toolCallSummaries, toolNames,
-                                "The same tool was requested too many times. Provide a final answer using the data already gathered, without calling more tools.");
+                                "The same tool was requested too many times. Provide a final answer using the data already gathered, without calling more tools.",
+                                turn.tracker, candidate, turn.terminated, turn::cancelTurnDeadline);
                         return;
                     }
 
                     if (toolRound >= MAX_TOOL_ROUNDS) {
+                        if (!turn.terminated.compareAndSet(false, true)) {
+                            return;
+                        }
+                        turn.cancelTurnDeadline();
                         chatStreamStatusService.updatePhase(sessionId, clientMessageId,
                                 Phase.FAILED, modelName, null, "Max tool rounds exceeded");
                         sseTransport.safeSend(emitter, "phase", Phase.FAILED.name(), null);
@@ -513,11 +680,47 @@ public class StreamingChatEngine {
                         return;
                     }
 
+                    if (turn.isTerminated()) {
+                        return;
+                    }
+
+                    long remainingBeforeToolsMs = turn.tracker.remainingMillis();
+                    if (remainingBeforeToolsMs <= 0) {
+                        log.warn("[SSE] Turn deadline ({}s) already reached before executing tools for session {} using model {}",
+                                turn.tracker.getDeadlineSeconds(), sessionId, modelName);
+                        turn.tracker.markLastOutcome("DEADLINE");
+                        terminate(turn, TurnAttemptTracker.TerminalReason.DEADLINE, modelName);
+                        return;
+                    }
+
                     history.add(aiMessage);
-                    List<ToolExecutionResultMessage> toolResults = toolCoordinator.executeTools(
-                            aiMessage.toolExecutionRequests(), emitter, toolCallSummaries, toolNames,
-                            userId, sessionId, userInput, currentAllowedTools);
+                    List<ToolExecutionResultMessage> toolResults;
+                    try {
+                        toolResults = toolCoordinator.executeTools(
+                                aiMessage.toolExecutionRequests(), emitter, toolCallSummaries, toolNames,
+                                userId, sessionId, userInput, currentAllowedTools, turn.ledger,
+                                java.time.Duration.ofMillis(remainingBeforeToolsMs), turn::isTerminated);
+                    } catch (StreamingToolCoordinator.ToolDeadlineExceededException tde) {
+                        if (!turn.isTerminated()) {
+                            log.warn("[SSE] Turn deadline ({}s) exceeded during tool execution for session {} using model {}: {}",
+                                    turn.tracker.getDeadlineSeconds(), sessionId, modelName, tde.getMessage());
+                            turn.tracker.markLastOutcome("DEADLINE");
+                            terminate(turn, TurnAttemptTracker.TerminalReason.DEADLINE, modelName);
+                        }
+                        return;
+                    }
+                    if (turn.isTerminated() || emitterCompleted.get()) {
+                        return;
+                    }
                     history.addAll(toolResults);
+
+                    if (!turn.tracker.hasTimeForNextCall()) {
+                        log.warn("[SSE] Turn deadline ({}s) reached right after tool execution for session {} using model {}",
+                                turn.tracker.getDeadlineSeconds(), sessionId, modelName);
+                        turn.tracker.markLastOutcome("DEADLINE");
+                        terminate(turn, TurnAttemptTracker.TerminalReason.DEADLINE, modelName);
+                        return;
+                    }
 
                     boolean hasFormRequired = false;
                     for (ToolExecutionResultMessage res : toolResults) {
@@ -526,7 +729,7 @@ public class StreamingChatEngine {
                             hasFormRequired = true;
                             try {
                                 com.fasterxml.jackson.databind.JsonNode rootNode = objectMapper.readTree(resText);
-                                if (rootNode.has("form")) {
+                                if (rootNode.has("form") && !turn.isTerminated()) {
                                     String formJson = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(rootNode.get("form"));
                                     String formMarkdown = "\n\n```taskpilot-form\n" + formJson + "\n```\n\n";
                                     sseTransport.safeSend(emitter, "token", Map.of("token", formMarkdown), MediaType.APPLICATION_JSON);
@@ -538,6 +741,10 @@ public class StreamingChatEngine {
                         }
                     }
 
+                    if (turn.isTerminated()) {
+                        return;
+                    }
+
                     if (hasFormRequired) {
                         log.info("[Form Interceptor] FORM_REQUIRED detected -> routing to forceTextOnlyResponse");
                         String allToolResultsText = toolCoordinator.formatAllToolResults(history);
@@ -545,10 +752,11 @@ public class StreamingChatEngine {
                         timeoutFallbackHandler.forceTextOnlyResponse(
                                 emitter, emitterCompleted, session, sessionId, userId, userInput,
                                 history, systemPrompt, model, modelName, startTime,
-                                isFallbackAttempt, clientMessageId, fullResponse,
+                                false, clientMessageId, fullResponse,
                                 clientDisconnected, generatingMarked, requiresAHP,
                                 toolCallSummaries, toolNames,
-                                formCommunicatorPrompt);
+                                formCommunicatorPrompt,
+                                turn.tracker, candidate, turn.terminated, turn::cancelTurnDeadline);
                         return;
                     }
 
@@ -560,14 +768,19 @@ public class StreamingChatEngine {
                         timeoutFallbackHandler.forceTextOnlyResponse(
                                 emitter, emitterCompleted, session, sessionId, userId, userInput,
                                 history, systemPrompt, model, modelName, startTime,
-                                isFallbackAttempt, clientMessageId, fullResponse,
+                                false, clientMessageId, fullResponse,
                                 clientDisconnected, generatingMarked, requiresAHP,
                                 toolCallSummaries, toolNames,
-                                "Based on the tool data already provided in the context above, provide your final strategic recommendation now. Do not call any tools.");
+                                "Based on the tool data already provided in the context above, provide your final strategic recommendation now. Do not call any tools.",
+                                turn.tracker, candidate, turn.terminated, turn::cancelTurnDeadline);
                     } else {
                         boolean isBenchmarkSession = session != null && session.getTitle() != null && session.getTitle().contains("Benchmark");
                         boolean isBenchmarkMode = isBenchmarkSession && ((userId != null && userId == 18L) || (userInput != null && (userInput.contains("Scenario") || userInput.contains("xác nhận") || userInput.contains("thao tác"))));
                         if (benchmarkMockEnabled && isBenchmarkMode) {
+                            if (!turn.terminated.compareAndSet(false, true)) {
+                                return;
+                            }
+                            turn.cancelTurnDeadline();
                             log.info("[BenchmarkOptimization] Intercepted tool call, sending mock response to client to save duration");
                             String mockResponse = toolCoordinator.generateMockAssistantResponse(toolResults);
                             sseTransport.safeSend(emitter, "token", Map.of("token", mockResponse), MediaType.APPLICATION_JSON);
@@ -604,17 +817,13 @@ public class StreamingChatEngine {
                                     emitter, sessionId, userInput, history, systemPrompt, modelName,
                                     clientMessageId, fullResponse, clientDisconnected, generatingMarked,
                                     toolResultsText, timeoutScheduler,
-                                    () -> streamRound(emitter, emitterCompleted, session, sessionId, userId, userInput,
-                                            history, systemPrompt, model, modelName, startTime, isFallbackAttempt,
-                                            clientMessageId, fullResponse, clientDisconnected, generatingMarked,
-                                            toolRound + 1, requiresAHP, requiresTools, nextToolState.toolName(),
-                                            nextToolState.consecutiveCount(), toolCallSummaries, toolNames, retryCount, modelKeyAttempts));
+                                    () -> streamRoundInternal(turn, toolRound + 1, model, candidate,
+                                            nextToolState.toolName(), nextToolState.consecutiveCount(),
+                                            retryCount, modelKeyAttempts, TurnAttemptTracker.CallKind.NORMAL_ROUND));
                         } else {
-                            streamRound(emitter, emitterCompleted, session, sessionId, userId, userInput,
-                                    history, systemPrompt, model, modelName, startTime, isFallbackAttempt,
-                                    clientMessageId, fullResponse, clientDisconnected, generatingMarked,
-                                    toolRound + 1, requiresAHP, requiresTools, nextToolState.toolName(),
-                                    nextToolState.consecutiveCount(), toolCallSummaries, toolNames, retryCount, modelKeyAttempts);
+                            streamRoundInternal(turn, toolRound + 1, model, candidate,
+                                    nextToolState.toolName(), nextToolState.consecutiveCount(),
+                                    retryCount, modelKeyAttempts, TurnAttemptTracker.CallKind.NORMAL_ROUND);
                         }
                     }
                     return;
@@ -627,6 +836,9 @@ public class StreamingChatEngine {
                 }
 
                 if (requiresTools && communicatorEnabled) {
+                    if (turn.isTerminated()) {
+                        return;
+                    }
                     log.info("[Multi-Agent] Chặng 3: Executor finished. Forwarding result to Communicator for streaming...");
                     if (session.getTitle() == null || session.getTitle().isBlank()) {
                         postProcessor.generateSessionTitleViaGemmaAsync(session, userInput, rawResponseText);
@@ -645,19 +857,28 @@ public class StreamingChatEngine {
                     timeoutFallbackHandler.forceTextOnlyResponse(
                             emitter, emitterCompleted, session, sessionId, userId, userInput,
                             history, systemPrompt, finalModel, finalModelName, startTime,
-                            isFallbackAttempt, clientMessageId, fullResponse,
+                            false, clientMessageId, fullResponse,
                             clientDisconnected, generatingMarked, requiresAHP,
                             toolCallSummaries, toolNames,
-                            promptForCommunicator);
+                            promptForCommunicator,
+                            turn.tracker, candidate, turn.terminated, turn::cancelTurnDeadline);
                     return;
                 }
+
+                if (!turn.terminated.compareAndSet(false, true)) {
+                    return;
+                }
+                turn.cancelTurnDeadline();
 
                 if (session.getTitle() == null || session.getTitle().isBlank()) {
                     postProcessor.generateSessionTitleViaGemmaAsync(session, userInput, rawResponseText);
                 }
 
+                List<Map<String, Object>> summariesSnapshot = turn.snapshotToolCallSummaries();
+                LinkedHashSet<String> toolNamesSnapshot = turn.snapshotToolNames();
+
                 String responseText = confirmationParser.appendTaskPilotBlocks(
-                        sanitizer.stripToolCallJson(sanitizer.stripThinkBlocks(rawResponseText)), toolCallSummaries);
+                        sanitizer.stripToolCallJson(sanitizer.stripThinkBlocks(rawResponseText)), summariesSnapshot);
                 String extractedReasoning = sanitizer.extractAllThinkBlocks(rawResponseText);
                 if (extractedReasoning == null || extractedReasoning.isBlank()) {
                     extractedReasoning = streamFilter.getHiddenReasoning();
@@ -679,7 +900,7 @@ public class StreamingChatEngine {
 
                 postProcessor.saveSessionMessagesAndLogsAsync(
                         session, sessionId, userId, userInput, systemPrompt, responseText,
-                        extractedReasoning, toolNames, toolCallSummaries.isEmpty() ? null : toolCallSummaries,
+                        extractedReasoning, toolNamesSnapshot, summariesSnapshot.isEmpty() ? null : summariesSnapshot,
                         modelName, estimatedTokens, durationMs, clientMessageId);
 
                 log.info("[SSE] Streaming immediate release for session {} using model {} in {}ms", sessionId, modelName, durationMs);
@@ -688,60 +909,24 @@ public class StreamingChatEngine {
             @Override
             public void onError(Throwable error) {
                 firstModelSignalReceived.set(true);
-                if (!roundClosed.compareAndSet(false, true)) return;
+                if (turn.isTerminated() || !roundClosed.compareAndSet(false, true)) return;
                 timeoutFuture.cancel(false);
 
-                if (clientDisconnected.get() || sseTransport.isClientAbort(error)) {
+                boolean isAbort = clientDisconnected.get() || sseTransport.isClientAbort(error);
+                if (isAbort) {
                     metrics.recordAiAborted(modelName);
-                    log.debug("[SSE] Client aborted stream for session {} (model {}): {}", sessionId, modelName, error.getMessage());
+                    log.debug("[SSE] Client aborted stream for session {} (model {}): {}", sessionId, modelName, error != null ? error.getMessage() : "null");
                     return;
                 }
 
-                log.error("[SSE] Model {} failed for session {}: {}", modelName, sessionId, error.getMessage());
-
-                boolean isNonRetryableModelError = isNonRetryableModelError(error);
-                if (!isNonRetryableModelError && timeoutFallbackHandler.hasRemainingKeys(model, modelKeyAttempts)) {
-                    metrics.recordAiFallback(modelName);
-                    int nextAttempt = modelKeyAttempts + 1;
-                    chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.THINKING, modelName, null, null);
-                    sseTransport.safeSend(emitter, "model", modelName + " (" + timeoutFallbackHandler.getModelKeyLabel(model, nextAttempt) + ")", null);
-                    sseTransport.safeSend(emitter, "phase", Phase.THINKING.name(), null);
-                    doStreamWithKeyAttempts(emitter, emitterCompleted, session, sessionId, userId, userInput,
-                            history, systemPrompt, model, modelName, startTime, isFallbackAttempt, clientMessageId,
-                            requiresAHP, requiresTools, retryCount, nextAttempt);
-                    return;
+                fullResponse.setLength(roundStartLength);
+                if (roundGeneratingMarked.get() && !turn.isTerminated()) {
+                    sseTransport.safeSend(emitter, "reset_stream", Map.of("reason", "model_error"), MediaType.APPLICATION_JSON);
                 }
-                if (isNonRetryableModelError) {
-                    log.warn("[SSE] Model {} failed with permanent client error: {}. Skipping key rotation and escalating to fallback.", modelName, error.getMessage());
-                }
-
-                if (!isFallbackAttempt || routingService.hasStreamingFallbackAfter(model)) {
-                    StreamingChatModel fallback = routingService.getNextStreamingFallback(model);
-                    if (fallback == model) {
-                        metrics.recordAiFailure(modelName, System.currentTimeMillis() - startTime);
-                        chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.FAILED, modelName, null, error.getMessage());
-                        sseTransport.safeSend(emitter, "phase", Phase.FAILED.name(), null);
-                        sseTransport.safeSend(emitter, "error", "AI service is currently unavailable. Please try again later.", null);
-                        sseTransport.safeComplete(emitter, emitterCompleted);
-                        return;
-                    }
-
-                    metrics.recordAiFallback(modelName);
-                    String fallbackName = routingService.getModelName(fallback);
-                    chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.THINKING, fallbackName, null, null);
-                    sseTransport.safeSend(emitter, "model", fallbackName, null);
-                    sseTransport.safeSend(emitter, "phase", Phase.THINKING.name(), null);
-
-                    doStreamWithKeyAttempts(emitter, emitterCompleted, session, sessionId, userId, userInput,
-                            history, systemPrompt, fallback, fallbackName, startTime,
-                            !routingService.hasStreamingFallbackAfter(fallback), clientMessageId, requiresAHP, requiresTools, retryCount, 1);
-                } else {
-                    metrics.recordAiFailure(modelName, System.currentTimeMillis() - startTime);
-                    chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.FAILED, modelName, null, error.getMessage());
-                    sseTransport.safeSend(emitter, "phase", Phase.FAILED.name(), null);
-                    sseTransport.safeSend(emitter, "error", "AI service is currently unavailable. Please try again later.", null);
-                    sseTransport.safeComplete(emitter, emitterCompleted);
-                }
+                log.error("[SSE] Model {} failed for session {}: {}", modelName, sessionId, error != null ? error.getMessage() : "null");
+                ModelFailureClassifier.Failure failure = ModelFailureClassifier.classify(error, false, false, clock.instant());
+                failover(turn, toolRound, model, candidate, lastToolName, consecutiveToolExecutions,
+                        retryCount, modelKeyAttempts, failure);
             }
         };
 
@@ -759,61 +944,177 @@ public class StreamingChatEngine {
                 }
             });
         } else {
-            model.chat(request, handler);
+            try {
+                model.chat(request, handler);
+            } catch (Throwable t) {
+                handler.onError(t);
+            }
         }
     }
 
-    private void handleFirstResponseTimeout(
-            SseEmitter emitter,
-            AtomicBoolean emitterCompleted,
-            ChatSessionEntity session,
-            Long sessionId,
-            Long userId,
-            String userInput,
-            List<ChatMessage> history,
-            String systemPrompt,
-            StreamingChatModel model,
-            String modelName,
-            long startTime,
-            boolean isFallbackAttempt,
-            String clientMessageId,
-            boolean requiresAHP,
-            boolean requiresTools,
+    private void failover(
+            CopilotTurnState turn,
+            int toolRound,
+            StreamingChatModel currentModel,
+            ModelCandidate currentCandidate,
+            String lastToolName,
+            int consecutiveToolExecutions,
             int retryCount,
-            int initialModelKeyAttempts) {
-
-        String message = "Model did not produce a first streaming response within " + streamFirstResponseTimeoutSeconds + "s";
-        log.warn("[SSE] {} for session {} using model {}", message, sessionId, modelName);
-
-        if (timeoutFallbackHandler.hasRemainingKeys(model, initialModelKeyAttempts)) {
-            int nextAttempt = initialModelKeyAttempts + 1;
-            chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.THINKING, modelName, null, null);
-            sseTransport.safeSend(emitter, "model", modelName + " (" + timeoutFallbackHandler.getModelKeyLabel(model, nextAttempt) + ")", null);
-            sseTransport.safeSend(emitter, "phase", Phase.THINKING.name(), null);
-            doStreamWithKeyAttempts(emitter, emitterCompleted, session, sessionId, userId, userInput,
-                    history, systemPrompt, model, modelName, startTime, isFallbackAttempt, clientMessageId,
-                    requiresAHP, requiresTools, retryCount, nextAttempt);
+            int keyAttempt,
+            ModelFailureClassifier.Failure failure) {
+        if (turn.isTerminated()) {
             return;
         }
 
-        if (!isFallbackAttempt || routingService.hasStreamingFallbackAfter(model)) {
-            StreamingChatModel fallback = routingService.getNextStreamingFallback(model);
-            if (fallback != model) {
-                String fallbackName = routingService.getModelName(fallback);
-                chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.THINKING, fallbackName, null, null);
-                sseTransport.safeSend(emitter, "model", fallbackName, null);
-                sseTransport.safeSend(emitter, "phase", Phase.THINKING.name(), null);
-                doStreamWithKeyAttempts(emitter, emitterCompleted, session, sessionId, userId, userInput,
-                        history, systemPrompt, fallback, fallbackName, startTime,
-                        !routingService.hasStreamingFallbackAfter(fallback), clientMessageId, requiresAHP, requiresTools, retryCount, 1);
+        boolean rotationAvailable = failure.kind() != ModelFailureClassifier.Kind.NON_RETRYABLE
+                && failure.kind() != ModelFailureClassifier.Kind.RATE_LIMITED
+                && failure.kind() != ModelFailureClassifier.Kind.KEYS_EXHAUSTED
+                && timeoutFallbackHandler.hasRemainingKeys(currentModel, keyAttempt);
+
+        TurnAttemptTracker.Decision decision = turn.tracker.onFailure(currentCandidate, failure, rotationAvailable);
+
+        // Compatibility for legacy unit tests that mock SmartRoutingService without stubbing candidateChain()
+        if (decision instanceof TurnAttemptTracker.Terminal(var reason)
+                && reason == TurnAttemptTracker.TerminalReason.NO_CANDIDATE
+                && routingService != null
+                && currentModel != null) {
+            StreamingChatModel legacyNext = routingService.getNextStreamingFallback(currentModel);
+            if (legacyNext != null && legacyNext != currentModel) {
+                String nextName = routingService.getModelName(legacyNext);
+                String nextProvider = routingService.getModelProvider(legacyNext);
+                ModelCandidate nextCandidate = new ModelCandidate(nextProvider, nextName, turn.requiresTools, ModelCandidate.Source.DEFAULT_CHAIN);
+                switchToCandidate(turn, toolRound, legacyNext, nextCandidate, lastToolName, consecutiveToolExecutions, retryCount);
                 return;
             }
         }
 
-        chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.FAILED, modelName, null, message);
-        sseTransport.safeSend(emitter, "phase", Phase.FAILED.name(), null);
-        sseTransport.safeSend(emitter, "error", "AI service is taking too long. Please try again later.", null);
-        sseTransport.safeComplete(emitter, emitterCompleted);
+        log.warn("[CopilotChain] failure provider={} model={} kind={} scope={} round={} modelAttempt={} decision={} summary={}",
+                currentCandidate.provider(), currentCandidate.model(),
+                failure.kind(), failure.scope(), toolRound,
+                turn.tracker.getModelAttempts(), decision.getClass().getSimpleName(), failure.summary());
+
+        if (decision instanceof TurnAttemptTracker.RotateKey) {
+            metrics.recordAiFallback(currentCandidate.model());
+            int nextKeyAttempt = keyAttempt + 1;
+            String keyLabel = currentCandidate.model() + " (" + timeoutFallbackHandler.getModelKeyLabel(currentModel, nextKeyAttempt) + ")";
+            chatStreamStatusService.updatePhase(turn.sessionId, turn.clientMessageId, Phase.THINKING, currentCandidate.model(), null, null);
+            sseTransport.safeSend(turn.emitter, "model", keyLabel, null);
+            sseTransport.safeSend(turn.emitter, "phase", Phase.THINKING.name(), null);
+            streamRoundInternal(turn, toolRound, currentModel, currentCandidate,
+                    lastToolName, consecutiveToolExecutions, retryCount, nextKeyAttempt,
+                    TurnAttemptTracker.CallKind.KEY_ROTATION);
+            return;
+        }
+
+        if (decision instanceof TurnAttemptTracker.SwitchTo(ModelCandidate nextCandidate)) {
+            metrics.recordAiFallback(currentCandidate.model());
+            boolean textOnlyBecausePending = toolRound >= 1 && turn.hasPendingConfirmation();
+            StreamingChatModel nextModel = routingService != null
+                    ? routingService.resolveCandidateModel(nextCandidate, textOnlyBecausePending ? "text" : "reasoning")
+                    : null;
+            if (nextModel == null) {
+                ModelFailureClassifier.Failure missingModelFailure = new ModelFailureClassifier.Failure(
+                        ModelFailureClassifier.Kind.NON_RETRYABLE, java.util.Optional.empty(),
+                        ModelFailureClassifier.QuotaScope.MODEL, "Resolved model instance is null");
+                failover(turn, toolRound, null, nextCandidate, lastToolName, consecutiveToolExecutions, retryCount, 1, missingModelFailure);
+                return;
+            }
+            switchToCandidate(turn, toolRound, nextModel, nextCandidate, lastToolName, consecutiveToolExecutions, retryCount);
+            return;
+        }
+
+        if (decision instanceof TurnAttemptTracker.Terminal(TurnAttemptTracker.TerminalReason reason)) {
+            terminate(turn, reason, currentCandidate.model());
+        }
+    }
+
+    private void switchToCandidate(
+            CopilotTurnState turn,
+            int toolRound,
+            StreamingChatModel nextModel,
+            ModelCandidate nextCandidate,
+            String lastToolName,
+            int consecutiveToolExecutions,
+            int retryCount) {
+        if (turn.isTerminated()) {
+            return;
+        }
+        if (toolRound >= 1) {
+            turn.modelSwitchedAfterTool.set(true);
+        }
+        turn.activeModelName.set(nextCandidate.model());
+        chatStreamStatusService.updatePhase(turn.sessionId, turn.clientMessageId, Phase.THINKING, nextCandidate.model(), null, null);
+        sseTransport.safeSend(turn.emitter, "model", nextCandidate.model(), null);
+        sseTransport.safeSend(turn.emitter, "phase", Phase.THINKING.name(), null);
+
+        if (toolRound >= 1 && turn.hasPendingConfirmation()) {
+            turn.tracker.recordCall(nextCandidate, 1, toolRound, TurnAttemptTracker.CallKind.FAILOVER_FINALIZER);
+            timeoutFallbackHandler.forceTextOnlyResponse(
+                    turn.emitter, turn.emitterCompleted, turn.session, turn.sessionId, turn.userId, turn.userInput,
+                    turn.history, turn.systemPrompt, nextModel, nextCandidate.model(), turn.startTime,
+                    true, turn.clientMessageId, turn.fullResponse,
+                    turn.clientDisconnected, turn.generatingMarked, turn.requiresAHP,
+                    turn.toolCallSummaries, turn.toolNames,
+                    "A confirmation proposal has already been created and is waiting for the user's approval. Explain the proposal clearly based on the tool data above. Do not call any tools.",
+                    turn.tracker, nextCandidate, turn.terminated, turn::cancelTurnDeadline);
+            return;
+        }
+
+        streamRoundInternal(turn, toolRound, nextModel, nextCandidate,
+                lastToolName, consecutiveToolExecutions, retryCount, 1,
+                TurnAttemptTracker.CallKind.FAILOVER);
+    }
+
+    private void terminate(CopilotTurnState turn, TurnAttemptTracker.TerminalReason reason, String lastModelName) {
+        synchronized (turn.toolCallSummaries) {
+            if (!turn.terminated.compareAndSet(false, true)) {
+                return;
+            }
+        }
+        turn.cancelTurnDeadline();
+
+        log.warn("[CopilotChain] TERMINAL reason={} session={} clientMessageId={} modelAttempts={}/{} elapsedMs={} trace={}",
+                reason, turn.sessionId, turn.clientMessageId,
+                turn.tracker.getModelAttempts(), turn.tracker.getMaxModelAttempts(),
+                turn.tracker.elapsedMillis(), turn.tracker.formatTrace());
+
+        if (reason == TurnAttemptTracker.TerminalReason.DEADLINE && turn.generatingMarked.get()) {
+            sseTransport.safeSend(turn.emitter, "reset_stream", Map.of("reason", "turn_deadline"), MediaType.APPLICATION_JSON);
+        }
+
+        List<Map<String, Object>> summariesSnapshot = turn.snapshotToolCallSummaries();
+        LinkedHashSet<String> toolNamesSnapshot = turn.snapshotToolNames();
+
+        if (CopilotTurnState.hasPendingConfirmation(summariesSnapshot)) {
+            String statusCode = timeoutFallbackHandler.buildTextOnlyTimeoutResponse(summariesSnapshot);
+            timeoutFallbackHandler.finalizeForceTextOnlyResponse(
+                    turn.emitter, turn.session, turn.sessionId, turn.userId, turn.userInput, turn.systemPrompt,
+                    lastModelName, turn.startTime, turn.clientMessageId, turn.clientDisconnected,
+                    summariesSnapshot, toolNamesSnapshot, statusCode, null, turn.generatingMarked,
+                    FinalizerTerminalCause.MODEL_CANDIDATES_EXHAUSTED,
+                    "terminalCause=MODEL_CANDIDATES_EXHAUSTED; reason=" + reason);
+            sseTransport.safeComplete(turn.emitter, turn.emitterCompleted);
+            return;
+        }
+
+        String statusPayload = switch (reason) {
+            case EXHAUSTED -> CopilotStreamStatusCode.COPILOT_MODELS_EXHAUSTED.toJsonPayload(
+                    Map.of("attempted", Math.max(1, turn.tracker.getModelAttempts())));
+            case DEADLINE -> CopilotStreamStatusCode.COPILOT_TURN_DEADLINE_EXCEEDED.toJsonPayload(
+                    Map.of("deadlineSeconds", turn.tracker.getDeadlineSeconds()));
+            case MAX_ATTEMPTS -> CopilotStreamStatusCode.COPILOT_MAX_ATTEMPTS_REACHED.toJsonPayload(
+                    Map.of("maxAttempts", Math.max(1, turn.tracker.getMaxModelAttempts())));
+            case NO_CANDIDATE -> CopilotStreamStatusCode.COPILOT_NO_AVAILABLE_MODEL.toJsonPayload();
+        };
+
+        if (turn.generatingMarked.compareAndSet(false, true)) {
+            sseTransport.safeSend(turn.emitter, "token", Map.of("token", "</think>\n\n"), MediaType.APPLICATION_JSON);
+        }
+        metrics.recordAiFailure(lastModelName, System.currentTimeMillis() - turn.startTime);
+        chatStreamStatusService.updatePhase(turn.sessionId, turn.clientMessageId, Phase.FAILED, lastModelName, null, statusPayload);
+        sseTransport.safeSend(turn.emitter, "phase", Phase.FAILED.name(), null);
+        sseTransport.safeSend(turn.emitter, "error", statusPayload, null);
+        sseTransport.safeComplete(turn.emitter, turn.emitterCompleted);
     }
 
     private List<ToolExecutionRequest> recoverHallucinatedToolCalls(String text) {
@@ -958,17 +1259,6 @@ public class StreamingChatEngine {
     }
 
     boolean isNonRetryableModelError(Throwable error) {
-        Throwable current = error;
-        while (current != null) {
-            String msg = current.getMessage();
-            if (msg != null) {
-                String lower = msg.toLowerCase(java.util.Locale.ROOT);
-                if (lower.contains("404") || lower.contains("does not exist") || lower.contains("not found") || lower.contains("model_not_found")) {
-                    return true;
-                }
-            }
-            current = current.getCause();
-        }
-        return false;
+        return ModelFailureClassifier.isNonRetryableModelError(error);
     }
 }
