@@ -87,6 +87,9 @@ public final class RecoveryAdoption {
     private static Flyway flyway(Target t) {
         return MigrationDatabaseConfiguration.configure(Flyway.configure().dataSource(t.jdbcUrl(),t.username(),t.password())).load();
     }
+    private static Flyway adoptionFlyway(Target t) {
+        return MigrationDatabaseConfiguration.configure(Flyway.configure().dataSource(t.jdbcUrl(),t.username(),t.password())).target("42").load();
+    }
     private static String scriptHash(String script) throws Exception {
         try(var in=RecoveryAdoption.class.getResourceAsStream("/db/reconciled/"+script)) {
             if(in==null) throw new SecurityException("MISSING_REVIEWED_BUNDLE");
@@ -147,7 +150,9 @@ public final class RecoveryAdoption {
         }
     }
     private static void approvedInventory(Flyway f) {
+        var v42 = org.flywaydb.core.api.MigrationVersion.fromVersion("42");
         for(var m:f.info().all()) {
+            if(m.getVersion()!=null && m.getVersion().compareTo(v42)>0) continue;
             boolean baseline="41".equals(m.getVersion()==null?null:m.getVersion().getVersion())
                     && m.getScript()!=null && m.getScript().contains("Flyway Baseline");
             if(!baseline && !SCRIPTS.contains(m.getScript())) throw new SecurityException("UNREVIEWED_MIGRATIONS");
@@ -228,7 +233,7 @@ public final class RecoveryAdoption {
             if (before.historyRows()<1 || !"41".equals(before.historyVersion()) || !before.historySuccessful() || !before.canAlterMeetings() || !before.emailUniqueValid() || !before.scheduleDefinitionValid())
                 throw new SecurityException("UNSUPPORTED_SOURCE_STATE");
             ReviewedSchemaContract.verify(lock);
-            var f = flyway(target);
+            var f = adoptionFlyway(target);
             approvedInventory(f);
             if("t".equals(scalar(lock,"SELECT to_regclass('"+HISTORY+"') IS NULL"))) f.baseline();
             else {

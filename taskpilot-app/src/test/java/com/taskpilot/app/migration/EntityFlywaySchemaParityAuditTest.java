@@ -109,18 +109,27 @@ class EntityFlywaySchemaParityAuditTest {
         if (!Files.exists(migrationDir)) {
             migrationDir = Paths.get("taskpilot-app/src/main/resources/db/migration");
         }
+        Path reconciledDir = Paths.get("src/main/resources/db/reconciled");
+        if (!Files.exists(reconciledDir)) {
+            reconciledDir = Paths.get("taskpilot-app/src/main/resources/db/reconciled");
+        }
 
-        // Aggregate all SQL content
+        // Aggregate all SQL content from legacy migration and active reconciled bundles
         StringBuilder fullSqlBuilder = new StringBuilder();
-        try (Stream<Path> stream = Files.list(migrationDir)) {
-            List<Path> sqlFiles = stream
-                    .filter(p -> p.toString().endsWith(".sql"))
-                    .sorted(Comparator.comparing(Path::getFileName))
-                    .collect(Collectors.toList());
+        for (Path dir : List.of(migrationDir, reconciledDir)) {
+            if (!Files.exists(dir)) {
+                continue;
+            }
+            try (Stream<Path> stream = Files.list(dir)) {
+                List<Path> sqlFiles = stream
+                        .filter(p -> p.toString().endsWith(".sql"))
+                        .sorted(Comparator.comparing(Path::getFileName))
+                        .collect(Collectors.toList());
 
-            for (Path sqlFile : sqlFiles) {
-                fullSqlBuilder.append("\n-- FILE: ").append(sqlFile.getFileName()).append("\n");
-                fullSqlBuilder.append(Files.readString(sqlFile, StandardCharsets.UTF_8));
+                for (Path sqlFile : sqlFiles) {
+                    fullSqlBuilder.append("\n-- FILE: ").append(sqlFile.getFileName()).append("\n");
+                    fullSqlBuilder.append(Files.readString(sqlFile, StandardCharsets.UTF_8));
+                }
             }
         }
         String fullSql = fullSqlBuilder.toString().toLowerCase();

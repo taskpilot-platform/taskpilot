@@ -66,8 +66,17 @@ public class JwtService {
 
     public boolean isTokenValid(String token) {
         try {
-            Date expiration = extractClaim(token, Claims::getExpiration);
-            if (expiration.before(new Date())) {
+            Claims claims = extractAllClaims(token);
+            Date expiration = claims.getExpiration();
+            if (expiration == null || expiration.before(new Date())) {
+                return false;
+            }
+            // Reject purpose-scoped tokens (e.g. FILE_STREAM, B2_RECORDING_UPLOAD) and tokens without a user role
+            if (claims.get("type") != null) {
+                return false;
+            }
+            String role = claims.get("role", String.class);
+            if (role == null || role.isBlank()) {
                 return false;
             }
             return !tokenBlocklistService.isRevoked(token);

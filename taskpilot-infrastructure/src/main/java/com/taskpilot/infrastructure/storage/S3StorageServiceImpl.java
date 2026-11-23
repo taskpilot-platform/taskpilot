@@ -105,6 +105,24 @@ public class S3StorageServiceImpl implements StorageService {
     }
 
     @Override
+    public InputStream downloadFileRange(String bucket, String key, long start, long end) throws IOException {
+        String targetBucket = (bucket != null && !bucket.isBlank()) ? bucket : defaultBucketName;
+        String cleanedKey = cleanKey(key);
+
+        try {
+            GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                    .bucket(targetBucket)
+                    .key(cleanedKey)
+                    .range("bytes=" + start + "-" + end)
+                    .build();
+            return s3Client.getObject(getObjectRequest);
+        } catch (Exception e) {
+            log.error("Failed to download byte range from S3: bucket={}, key={}, error={}", targetBucket, cleanedKey, e.getMessage());
+            throw new IOException("Failed to download byte range from S3: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
     public void deleteFile(String bucket, String key) {
         if (key == null || key.isBlank()) {
             return;

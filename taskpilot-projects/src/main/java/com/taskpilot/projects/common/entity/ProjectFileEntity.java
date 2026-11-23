@@ -1,5 +1,6 @@
 package com.taskpilot.projects.common.entity;
 
+import com.taskpilot.projects.common.enums.FileArchiveStatus;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -42,6 +43,28 @@ public class ProjectFileEntity {
     @Column(name = "storage_bucket", nullable = false)
     @Builder.Default
     private String storageBucket = "documents";
+
+    @Column(name = "storage_provider", nullable = false, length = 32)
+    @Builder.Default
+    private String storageProvider = "s3";
+
+    @Column(name = "source_egress_id", length = 128)
+    private String sourceEgressId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "archive_status", nullable = false, length = 32)
+    @Builder.Default
+    private FileArchiveStatus archiveStatus = FileArchiveStatus.NONE;
+
+    @Column(name = "archive_retry_count", nullable = false)
+    @Builder.Default
+    private Integer archiveRetryCount = 0;
+
+    @Column(name = "archive_error", columnDefinition = "TEXT")
+    private String archiveError;
+
+    @Column(name = "content_md5", length = 64)
+    private String contentMd5;
 
     @Column(columnDefinition = "TEXT")
     private String description;

@@ -42,6 +42,13 @@ public interface StorageService {
     }
 
     /**
+     * Stream an inclusive byte range [start, end] from an explicit bucket.
+     */
+    default InputStream downloadFileRange(String bucket, String key, long start, long end) throws IOException {
+        return downloadFile(bucket, key);
+    }
+
+    /**
      * Delete an object from an explicit bucket.
      *
      * @param bucket explicit target bucket name (e.g., "documents")

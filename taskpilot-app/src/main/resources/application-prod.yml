@@ -53,3 +53,6 @@ app:
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:https://taskpilot-platform.netlify.app}
 
+egress:
+  validate-on-startup: ${EGRESS_VALIDATE_ON_STARTUP:true}
+

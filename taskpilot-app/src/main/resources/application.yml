@@ -12,6 +12,10 @@ spring:
   threads:
     virtual:
       enabled: true
+  task:
+    scheduling:
+      pool:
+        size: ${SPRING_TASK_SCHEDULING_POOL_SIZE:4}
   servlet:
     multipart:
       enabled: true
@@ -116,6 +120,17 @@ management:
       enabled: false
     redis:
       enabled: false
+  metrics:
+    tags:
+      application: taskpilot
+    distribution:
+      slo:
+        "[http.server.requests]": 50ms,100ms,250ms,500ms,1s,2s,5s
+
+taskpilot:
+  monitoring:
+    scrape-username: ${PROMETHEUS_SCRAPE_USERNAME:prometheus}
+    scrape-password: ${PROMETHEUS_SCRAPE_PASSWORD:}
 
 ai:
   gemini:
@@ -236,6 +251,37 @@ livekit:
   api-secret: ${LIVEKIT_API_SECRET:}
   empty-timeout-seconds: ${LIVEKIT_EMPTY_TIMEOUT_SECONDS:300}
   max-participants: ${LIVEKIT_MAX_PARTICIPANTS:15}
+
+egress:
+  enabled: ${EGRESS_ENABLED:true}
+  validate-on-startup: ${EGRESS_VALIDATE_ON_STARTUP:false}
+  layout: ${EGRESS_LAYOUT:grid}
+  s3:
+    endpoint: ${EGRESS_S3_ENDPOINT:}
+    region: ${EGRESS_S3_REGION:}
+    bucket: ${EGRESS_S3_BUCKET:}
+    access-key: ${EGRESS_S3_ACCESS_KEY:}
+    secret-key: ${EGRESS_S3_SECRET_KEY:}
+    presign-get-ttl-minutes: ${EGRESS_S3_PRESIGN_GET_TTL_MINUTES:60}
+    presign-put-ttl-minutes: ${EGRESS_S3_PRESIGN_PUT_TTL_MINUTES:20}
+  fallback:
+    max-file-size-bytes: ${EGRESS_FALLBACK_MAX_FILE_SIZE_BYTES:1073741824}
+    upload-token-grace-minutes: ${EGRESS_FALLBACK_UPLOAD_TOKEN_GRACE_MINUTES:60}
+  archive:
+    gdrive:
+      enabled: ${EGRESS_ARCHIVE_GDRIVE_ENABLED:true}
+      after-days: ${EGRESS_ARCHIVE_AFTER_DAYS:3}
+      poll-interval-ms: ${EGRESS_ARCHIVE_POLL_INTERVAL_MS:300000}
+      initial-delay-ms: ${EGRESS_ARCHIVE_INITIAL_DELAY_MS:60000}
+      max-retries: ${EGRESS_ARCHIVE_MAX_RETRIES:5}
+      retry-cooldown-minutes: ${EGRESS_ARCHIVE_RETRY_COOLDOWN_MINUTES:15}
+      chunk-size-bytes: ${EGRESS_ARCHIVE_CHUNK_SIZE_BYTES:4194304}
+      stale-archiving-minutes: ${EGRESS_ARCHIVE_STALE_MINUTES:30}
+  reconciliation:
+    interval-ms: ${EGRESS_RECONCILIATION_INTERVAL_MS:120000}
+    initial-delay-ms: ${EGRESS_RECONCILIATION_INITIAL_DELAY_MS:30000}
+    missing-timeout-hours: ${EGRESS_RECONCILIATION_MISSING_TIMEOUT_HOURS:24}
+    starting-claim-timeout-seconds: ${EGRESS_RECONCILIATION_STARTING_CLAIM_TIMEOUT_SECONDS:120}
 
 decorator:
   datasource:

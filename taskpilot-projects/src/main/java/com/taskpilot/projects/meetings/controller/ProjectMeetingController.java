@@ -2,11 +2,16 @@ package com.taskpilot.projects.meetings.controller;
 
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import com.taskpilot.projects.common.enums.ProjectMeetingStatus;
+import com.taskpilot.projects.meetings.dto.CompleteRecordingUploadRequest;
 import com.taskpilot.projects.meetings.dto.CreateMeetingRequest;
 import com.taskpilot.projects.meetings.dto.MeetingParticipantResponse;
+import com.taskpilot.projects.meetings.dto.MeetingRecordingPlaybackResponse;
 import com.taskpilot.projects.meetings.dto.MeetingTokenResponse;
+import com.taskpilot.projects.meetings.dto.PresignRecordingUploadRequest;
+import com.taskpilot.projects.meetings.dto.PresignRecordingUploadResponse;
 import com.taskpilot.projects.meetings.dto.ProjectMeetingResponse;
 import com.taskpilot.projects.meetings.dto.UpdateMeetingRecordingRequest;
+import com.taskpilot.projects.meetings.service.MeetingRecordingService;
 import com.taskpilot.projects.meetings.service.ProjectMeetingService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -24,6 +29,7 @@ import java.util.List;
 public class ProjectMeetingController {
 
     private final ProjectMeetingService meetingService;
+    private final MeetingRecordingService meetingRecordingService;
 
     @Operation(summary = "Create project meeting", description = "Create a new meeting room in the project")
     @PostMapping
@@ -103,6 +109,70 @@ public class ProjectMeetingController {
             @Valid @RequestBody UpdateMeetingRecordingRequest request) {
         return ApiResponse.ok("Meeting recording linked successfully",
                 meetingService.updateRecordingFile(projectId, meetingId, authentication.getName(), request.recordingFileId()));
+    }
+
+    @Operation(summary = "Start cloud Egress recording", description = "Start LiveKit Cloud RoomComposite Egress recording to Backblaze B2 (Host or Project Manager only)")
+    @PostMapping("/{meetingId}/recording/start")
+    public ApiResponse<ProjectMeetingResponse> startRecording(
+            @PathVariable Long projectId,
+            @PathVariable Long meetingId,
+            Authentication authentication) {
+        return ApiResponse.ok("Cloud recording started successfully",
+                meetingRecordingService.startRecording(projectId, meetingId, authentication.getName()));
+    }
+
+    @Operation(summary = "Stop cloud Egress recording", description = "Stop active LiveKit Cloud Egress recording (Host or Project Manager only)")
+    @PostMapping("/{meetingId}/recording/stop")
+    public ApiResponse<ProjectMeetingResponse> stopRecording(
+            @PathVariable Long projectId,
+            @PathVariable Long meetingId,
+            Authentication authentication) {
+        return ApiResponse.ok("Cloud recording stopped successfully",
+                meetingRecordingService.stopRecording(projectId, meetingId, authentication.getName()));
+    }
+
+    @Operation(summary = "Synchronize cloud recording status", description = "Query LiveKit ListEgress to recover status if webhook was missed")
+    @PostMapping("/{meetingId}/recording/sync")
+    public ApiResponse<ProjectMeetingResponse> syncRecording(
+            @PathVariable Long projectId,
+            @PathVariable Long meetingId,
+            Authentication authentication) {
+        return ApiResponse.ok("Recording status synchronized successfully",
+                meetingRecordingService.syncRecordingStatus(projectId, meetingId, authentication.getName()));
+    }
+
+    @Operation(summary = "Get recording playback URL", description = "Returns direct B2 presigned GET URL or backend Range-streaming proxy URL based on storage provider")
+    @GetMapping("/{meetingId}/recording/playback-url")
+    public ApiResponse<MeetingRecordingPlaybackResponse> getRecordingPlaybackUrl(
+            @PathVariable Long projectId,
+            @PathVariable Long meetingId,
+            Authentication authentication) {
+        return ApiResponse.ok("Recording playback URL retrieved successfully",
+                meetingRecordingService.getPlaybackUrl(projectId, meetingId, authentication.getName()));
+    }
+
+    @Operation(summary = "Request presigned B2 PUT URL for fallback browser recording",
+            description = "Server generates a scoped object key and short-lived Content-Type-locked B2 PUT URL (Host or Project Manager only)")
+    @PostMapping("/{meetingId}/recording/presign-upload")
+    public ApiResponse<PresignRecordingUploadResponse> presignFallbackUpload(
+            @PathVariable Long projectId,
+            @PathVariable Long meetingId,
+            Authentication authentication,
+            @Valid @RequestBody PresignRecordingUploadRequest request) {
+        return ApiResponse.ok("Presigned recording upload URL generated",
+                meetingRecordingService.presignFallbackUpload(projectId, meetingId, authentication.getName(), request));
+    }
+
+    @Operation(summary = "Complete fallback browser recording upload",
+            description = "Verifies server-issued uploadToken, checks object size on B2 via HeadObject, and links the recording to the meeting")
+    @PostMapping("/{meetingId}/recording/complete-upload")
+    public ApiResponse<ProjectMeetingResponse> completeFallbackUpload(
+            @PathVariable Long projectId,
+            @PathVariable Long meetingId,
+            Authentication authentication,
+            @Valid @RequestBody CompleteRecordingUploadRequest request) {
+        return ApiResponse.ok("Fallback recording completed and linked successfully",
+                meetingRecordingService.completeFallbackUpload(projectId, meetingId, authentication.getName(), request));
     }
 
     @Operation(summary = "List meeting participants", description = "Get participants who joined the meeting")
