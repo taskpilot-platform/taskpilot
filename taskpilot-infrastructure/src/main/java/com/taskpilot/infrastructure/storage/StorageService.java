@@ -79,6 +79,9 @@ public interface StorageService {
      * Stream an object (optionally a single exact byte range) from an explicit bucket.
      */
     default StorageReadResult readObject(StorageReadRequest request) throws IOException {
+        if (request.range().isPresent()) {
+            throw new IOException("Storage provider does not support validated ranged reads");
+        }
         InputStream stream = downloadFile(request.bucket(), request.key());
         return new StorageReadResult(stream, -1L, -1L, null, request.range(), Optional.empty());
     }

@@ -97,7 +97,8 @@ class P4ProjectFileControllerRangeTest {
                 uploadOperationPort,
                 storageCleanupPort
         );
-        ProjectFileController controller = new ProjectFileController(projectFileService);
+        ProjectFileController controller = new ProjectFileController(projectFileService,
+                mock(com.taskpilot.infrastructure.config.security.FileStreamTokenService.class));
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
@@ -281,7 +282,7 @@ class P4ProjectFileControllerRangeTest {
 
         // Multi-range -> ignored, returns 200 full
         when(storageService.readObject(new StorageReadRequest("documents", "projects/10/files/clip.webm", Optional.empty())))
-                .thenReturn(new StorageReadResult(new ByteArrayInputStream(PAYLOAD), 16, 16, "video/webm",
+                .thenAnswer(invocation -> new StorageReadResult(new ByteArrayInputStream(PAYLOAD), 16, 16, "video/webm",
                         Optional.empty(), Optional.of("\"strong-1\"")));
         mockMvc.perform(get("/api/v1/projects/{p}/files/{f}/download", PROJECT_ID, FILE_ID)
                         .header(HttpHeaders.RANGE, "bytes=0-1, 4-5")
@@ -306,7 +307,7 @@ class P4ProjectFileControllerRangeTest {
         // If-Range matching strong ETag -> returns 206
         byte[] slice = "0123".getBytes(StandardCharsets.UTF_8);
         when(storageService.readObject(new StorageReadRequest("documents", "projects/10/files/clip.webm", Optional.of(new ByteRange(0, 3)))))
-                .thenReturn(new StorageReadResult(new ByteArrayInputStream(slice), 16, 4, "video/webm",
+                .thenAnswer(invocation -> new StorageReadResult(new ByteArrayInputStream(slice), 16, 4, "video/webm",
                         Optional.of(new ByteRange(0, 3)), Optional.of("\"strong-1\"")));
         mockMvc.perform(get("/api/v1/projects/{p}/files/{f}/download", PROJECT_ID, FILE_ID)
                         .header(HttpHeaders.RANGE, "bytes=0-3")

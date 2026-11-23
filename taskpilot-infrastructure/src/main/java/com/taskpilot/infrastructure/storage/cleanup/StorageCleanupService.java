@@ -7,6 +7,7 @@ import com.taskpilot.contracts.storage.StorageCleanupStatus;
 import com.taskpilot.contracts.storage.StorageObjectLocator;
 import com.taskpilot.contracts.storage.StorageProviderKind;
 import com.taskpilot.infrastructure.storage.StorageService;
+import com.taskpilot.infrastructure.storage.EgressS3StorageService;
 import com.taskpilot.infrastructure.storage.googledrive.GoogleDriveService;
 import com.taskpilot.infrastructure.storage.range.StorageDeleteResult;
 import lombok.extern.slf4j.Slf4j;
@@ -46,6 +47,12 @@ public class StorageCleanupService implements StorageCleanupPort {
     private final JdbcTemplate jdbcTemplate;
     private final StorageService storageService;
     private final GoogleDriveService googleDriveService;
+    private EgressS3StorageService egressS3StorageService;
+
+    @Autowired(required = false)
+    public void setEgressS3StorageService(EgressS3StorageService egressS3StorageService) {
+        this.egressS3StorageService = egressS3StorageService;
+    }
     private final TransactionTemplate requiresNewTx;
     private final int maxAttempts;
     private final long baseBackoffSeconds;
@@ -181,6 +188,12 @@ public class StorageCleanupService implements StorageCleanupPort {
 
     protected StorageDeleteResult executeProviderDelete(StorageCleanupJobSummary job) {
         try {
+            if (job.provider() == StorageProviderKind.B2) {
+                if (egressS3StorageService == null || !egressS3StorageService.isConfigured()) {
+                    return StorageDeleteResult.retryableFailure("B2_UNAVAILABLE", "B2 storage is unavailable");
+                }
+                return egressS3StorageService.deleteObject(job.bucket(), job.objectKey());
+            }
             if (job.provider() == StorageProviderKind.GOOGLE_DRIVE) {
                 if (googleDriveService == null) {
                     return StorageDeleteResult.retryableFailure(

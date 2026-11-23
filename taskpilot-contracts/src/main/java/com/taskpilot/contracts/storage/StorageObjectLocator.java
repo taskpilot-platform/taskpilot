@@ -28,6 +28,12 @@ public record StorageObjectLocator(
         return new StorageObjectLocator(kind, normalizedBucket, objectKey);
     }
 
+    public static StorageObjectLocator of(String provider, String bucket, String objectKey) {
+        StorageProviderKind kind = StorageProviderKind.fromProviderAndBucket(provider, bucket);
+        String normalizedBucket = (bucket == null || bucket.isBlank()) ? "documents" : bucket.trim();
+        return new StorageObjectLocator(kind, normalizedBucket, objectKey);
+    }
+
     public String dedupeKey() {
         return provider.name() + ":" + bucket + ":" + objectKey;
     }

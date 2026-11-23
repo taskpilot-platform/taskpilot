@@ -1,6 +1,5 @@
 package com.taskpilot.projects.files.service;
 
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.infrastructure.storage.EgressS3StorageService;
 import com.taskpilot.infrastructure.storage.googledrive.GoogleDriveFileDto;
 import com.taskpilot.infrastructure.storage.googledrive.GoogleDriveService;
@@ -48,8 +47,6 @@ class RecordingArchiveWorkerTest {
     @Mock
     private ProjectSecurityService projectSecurityService;
     @Mock
-    private UserIdentityPort userIdentityPort;
-    @Mock
     private EgressS3StorageService egressS3StorageService;
     @Mock
     private GoogleDriveService googleDriveService;
@@ -65,7 +62,6 @@ class RecordingArchiveWorkerTest {
                 projectFileRepository,
                 projectMemberRepository,
                 projectSecurityService,
-                userIdentityPort,
                 egressS3StorageService,
                 googleDriveService,
                 transactionManager,
@@ -166,7 +162,7 @@ class RecordingArchiveWorkerTest {
     @Test
     void processEligibleArchives_respectsZeroAfterDaysAndRecoversStaleLocks() {
         RecordingArchiveWorker immediateWorker = new RecordingArchiveWorker(
-                projectFileRepository, projectMemberRepository, projectSecurityService, userIdentityPort,
+                projectFileRepository, projectMemberRepository, projectSecurityService,
                 egressS3StorageService, googleDriveService, transactionManager,
                 true, 0L, 5, 4 * 1024 * 1024, 30L
         );

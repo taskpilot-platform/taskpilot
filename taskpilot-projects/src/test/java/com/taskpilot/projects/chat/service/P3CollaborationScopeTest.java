@@ -43,7 +43,7 @@ class P3CollaborationScopeTest {
                 new TransactionTemplate(txManager));
         var service = new ProjectMeetingService(meetings, participants, members, security,
                 mock(LiveKitTokenService.class), mock(UserProfilePort.class), provider, lifecycle,
-                mock(MeetingRecordingService.class));
+                mock(ClientMeetingRecordingService.class));
         assertThrows(BusinessException.class, () -> service.leaveMeeting(1L, 99L, 7L, "PA_test"));
         assertThrows(BusinessException.class, () -> service.getParticipants(1L, 99L, 7L));
         verifyNoInteractions(participants);

@@ -1,5 +1,13 @@
 package com.taskpilot.infrastructure.storage;
 
+import com.taskpilot.infrastructure.storage.range.ByteRange;
+import com.taskpilot.infrastructure.storage.range.ProviderRangeValidator;
+import com.taskpilot.infrastructure.storage.range.StorageDeleteResult;
+import com.taskpilot.infrastructure.storage.range.StorageObjectStat;
+import com.taskpilot.infrastructure.storage.range.StorageReadResult;
+import software.amazon.awssdk.core.ResponseInputStream;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
+
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.Getter;
@@ -32,6 +40,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Dedicated S3-compatible client for LiveKit Egress recordings (Backblaze B2).
@@ -236,29 +245,60 @@ public class EgressS3StorageService {
     }
 
     public InputStream downloadFile(String key) throws IOException {
-        ensureConfigured();
-        String cleanedKey = cleanKey(key);
-        try {
-            return getClient().getObject(GetObjectRequest.builder()
-                    .bucket(bucket)
-                    .key(cleanedKey)
-                    .build());
-        } catch (Exception e) {
-            throw new IOException("Failed to download object from B2: key=" + cleanedKey + ": " + e.getMessage(), e);
-        }
+        return readObject(key, Optional.empty()).body();
     }
 
     public InputStream downloadFileRange(String key, long start, long end) throws IOException {
+        return readObject(key, Optional.of(new ByteRange(start, end))).body();
+    }
+
+    public Optional<StorageObjectStat> statObject(String key) throws IOException {
+        ObjectMetadata metadata = headObject(key);
+        return Optional.of(new StorageObjectStat(metadata.contentLength(), metadata.contentType(),
+                Optional.ofNullable(metadata.eTag()).filter(value -> !value.isBlank()), Optional.empty()));
+    }
+
+    public StorageReadResult readObject(String key, Optional<ByteRange> range) throws IOException {
         ensureConfigured();
         String cleanedKey = cleanKey(key);
         try {
-            return getClient().getObject(GetObjectRequest.builder()
+            GetObjectRequest.Builder request = GetObjectRequest.builder()
                     .bucket(bucket)
-                    .key(cleanedKey)
-                    .range("bytes=" + start + "-" + end)
-                    .build());
+                    .key(cleanedKey);
+            range.ifPresent(value -> request.range(value.toHttpRangeHeader()));
+            ResponseInputStream<GetObjectResponse> stream = getClient().getObject(request.build());
+            try {
+                GetObjectResponse response = stream.response();
+                long length = response.contentLength() != null ? response.contentLength() : -1L;
+                long total = range.isPresent()
+                        ? ProviderRangeValidator.validate(range.get(),
+                            response.sdkHttpResponse() != null ? response.sdkHttpResponse().statusCode() : 0,
+                            response.contentRange(), response.contentLength())
+                        : length;
+                return new StorageReadResult(stream, total, length, response.contentType(), range,
+                        Optional.ofNullable(response.eTag()).filter(value -> !value.isBlank()));
+            } catch (IOException | RuntimeException ex) {
+                stream.abort();
+                try { stream.close(); } catch (IOException ignored) { }
+                throw ex;
+            }
         } catch (Exception e) {
             throw new IOException("Failed to download byte range from B2: key=" + cleanedKey + ": " + e.getMessage(), e);
+        }
+    }
+
+    public StorageDeleteResult deleteObject(String requestedBucket, String key) {
+        if (!isConfigured()) {
+            return StorageDeleteResult.retryableFailure("B2_UNAVAILABLE", "B2 storage is unavailable");
+        }
+        if (!bucket.equals(requestedBucket)) {
+            return StorageDeleteResult.retryableFailure("B2_BUCKET_MISMATCH", "B2 cleanup bucket does not match configuration");
+        }
+        try {
+            deleteFileOrThrow(key);
+            return StorageDeleteResult.deleted();
+        } catch (IOException ex) {
+            return StorageDeleteResult.retryableFailure("B2_DELETE_FAILED", "B2 delete failed");
         }
     }
 

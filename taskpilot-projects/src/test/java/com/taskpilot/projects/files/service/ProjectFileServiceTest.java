@@ -314,6 +314,19 @@ class ProjectFileServiceTest {
     }
 
     @Test
+    void deleteFile_b2EnqueuesProviderScopedCleanup() {
+        ProjectFileEntity entity = ProjectFileEntity.builder().id(1L).projectId(projectId).uploaderId(userId)
+                .storageProvider("b2").storageBucket("recordings").storageKey("meeting.mp4").build();
+        when(projectFileRepository.findByIdAndProjectId(1L, projectId)).thenReturn(Optional.of(entity));
+        projectFileService.deleteFile(projectId, 1L, userId);
+        ArgumentCaptor<StorageCleanupRequest> captor = ArgumentCaptor.forClass(StorageCleanupRequest.class);
+        verify(storageCleanupPort).enqueueCleanup(captor.capture());
+        assertEquals(StorageProviderKind.B2, captor.getValue().locator().provider());
+        assertEquals("recordings", captor.getValue().locator().bucket());
+        verifyNoInteractions(storageService, googleDriveService);
+    }
+
+    @Test
     void deleteFile_asManager_success() {
         Long anotherUser = 999L;
         ProjectFileEntity entity = ProjectFileEntity.builder()

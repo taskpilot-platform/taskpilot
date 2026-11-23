@@ -1,9 +1,7 @@
 package com.taskpilot.projects.files.service;
 
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.infrastructure.storage.EgressS3StorageService;
 import com.taskpilot.projects.files.dto.FileStreamResource;
-import lombok.RequiredArgsConstructor;
 import com.taskpilot.contracts.storage.StorageCleanupPort;
 import com.taskpilot.contracts.storage.StorageCleanupRequest;
 import com.taskpilot.contracts.storage.StorageObjectLocator;
@@ -20,6 +18,7 @@ import com.taskpilot.infrastructure.storage.StorageService;
 import com.taskpilot.infrastructure.storage.googledrive.GoogleDriveFileDto;
 import com.taskpilot.infrastructure.storage.googledrive.GoogleDriveService;
 import com.taskpilot.infrastructure.storage.range.ByteRange;
+import com.taskpilot.infrastructure.storage.range.ExactLengthInputStream;
 import com.taskpilot.infrastructure.storage.range.RangeParseResult;
 import com.taskpilot.infrastructure.storage.range.RangeParser;
 import com.taskpilot.infrastructure.storage.range.StorageObjectStat;
@@ -162,6 +161,7 @@ public class ProjectFileService {
                         .contentType(file.getContentType())
                         .storageKey(uploaded.storageKey())
                         .storageBucket(uploaded.storageBucket())
+                        .storageProvider(DRIVE_BUCKET.equalsIgnoreCase(uploaded.storageBucket()) ? "gdrive" : "s3")
                         .description(description)
                         .createdAt(Instant.now())
                         .updatedAt(Instant.now())
@@ -341,22 +341,41 @@ public class ProjectFileService {
             String rangeHeader,
             String ifRangeHeader
     ) {
+        return readFile(projectId, fileId, userId, rangeHeader, ifRangeHeader, false, false);
+    }
+
+    @Transactional(readOnly = true)
+    public ProjectFileDownloadResult streamFileWithRange(Long projectId, Long fileId, Long userId,
+                                                         String rangeHeader, String ifRangeHeader, boolean headOnly) {
+        return readFile(projectId, fileId, userId, rangeHeader, ifRangeHeader, headOnly, true);
+    }
+
+    private ProjectFileDownloadResult readFile(Long projectId, Long fileId, Long userId,
+                                               String rangeHeader, String ifRangeHeader,
+                                               boolean headOnly, boolean capStreamOpenRange) {
         projectSecurityService.requireProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
         ProjectFileEntity entity = projectFileRepository.findByIdAndProjectId(fileId, projectId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "File not found"));
 
-        boolean isDrive = DRIVE_BUCKET.equalsIgnoreCase(entity.getStorageBucket()) && googleDriveService != null;
+        StorageProviderKind provider = StorageProviderKind.fromProviderAndBucket(entity.getStorageProvider(), entity.getStorageBucket());
+        boolean isDrive = provider == StorageProviderKind.GOOGLE_DRIVE;
+        if (provider == StorageProviderKind.B2 && (egressS3StorageService == null || !egressS3StorageService.isConfigured())) {
+            throw new BusinessException(503, "Backblaze B2 recording storage is not configured");
+        }
+        if (isDrive && (googleDriveService == null || (capStreamOpenRange && !googleDriveService.isConfigured()))) {
+            throw new BusinessException(503, "Google Drive archival storage is not configured");
+        }
         Optional<StorageObjectStat> stat = Optional.empty();
         long totalBytes = entity.getFileSize() != null ? entity.getFileSize() : -1L;
 
         boolean hasRange = rangeHeader != null && !rangeHeader.isBlank();
         // Drive media HTTP ETags are not the metadata md5 validator. Use metadata consistently,
         // including on the initial full response whose validator the client later sends in If-Range.
-        if (isDrive || totalBytes < 0 || (hasRange && ifRangeHeader != null && !ifRangeHeader.isBlank())) {
+        if (isDrive || provider == StorageProviderKind.B2 || headOnly || totalBytes < 0 || (hasRange && ifRangeHeader != null && !ifRangeHeader.isBlank())) {
             stat = fetchStatQuietly(isDrive, entity);
-            if (totalBytes < 0 && stat.isPresent() && stat.get().totalBytes() >= 0) {
+            if (stat.isPresent() && stat.get().totalBytes() >= 0) {
                 totalBytes = stat.get().totalBytes();
             }
         }
@@ -388,11 +407,30 @@ public class ProjectFileService {
                 ? parsedRange.range()
                 : Optional.empty();
 
+        if (capStreamOpenRange && (isDrive || provider == StorageProviderKind.B2) && requestedRange.isPresent()
+                && rangeHeader != null && rangeHeader.trim().matches("(?i)bytes=\\d+-")) {
+            ByteRange range = requestedRange.get();
+            long end = range.startInclusive() + Math.min(range.length(), MAX_STREAM_OPEN_RANGE_BYTES) - 1;
+            requestedRange = Optional.of(new ByteRange(range.startInclusive(), end));
+        }
+        if (headOnly) {
+            return new ProjectFileDownloadResult(requestedRange.isPresent()
+                    ? ProjectFileDownloadResult.Status.PARTIAL_206 : ProjectFileDownloadResult.Status.FULL_200,
+                    entity.getOriginalName(), entity.getContentType(), totalBytes,
+                    requestedRange.map(ByteRange::length).orElse(totalBytes), requestedRange,
+                    effectiveEtag, effectiveLastModified, null);
+        }
+
         try {
             if (requestedRange.isPresent()) {
                 ByteRange range = requestedRange.get();
                 StorageReadResult read = readFromProvider(isDrive, entity, Optional.of(range));
-                long resolvedTotal = totalBytes >= 0 ? totalBytes : read.totalBytes();
+                if (!read.servedRange().equals(Optional.of(range)) || read.responseBytes() != range.length()
+                        || (totalBytes >= 0 && read.totalBytes() != totalBytes)) {
+                    read.body().close();
+                    throw new IOException("Provider returned inconsistent range metadata");
+                }
+                long resolvedTotal = read.totalBytes();
                 Optional<String> finalEtag = isDrive ? effectiveEtag : read.etag().or(() -> effectiveEtag);
                 return new ProjectFileDownloadResult(
                         ProjectFileDownloadResult.Status.PARTIAL_206,
@@ -403,7 +441,7 @@ public class ProjectFileService {
                         Optional.of(range),
                         finalEtag,
                         effectiveLastModified,
-                        read.body()
+                        new ExactLengthInputStream(read.body(), range.length())
                 );
             }
 
@@ -417,8 +455,8 @@ public class ProjectFileService {
                     totalBytes = read.totalBytes();
                 }
             } else {
-                stream = isDrive
-                        ? googleDriveService.downloadFile(entity.getStorageKey())
+                stream = isDrive ? googleDriveService.downloadFile(entity.getStorageKey())
+                        : provider == StorageProviderKind.B2 ? egressS3StorageService.downloadFile(entity.getStorageKey())
                         : storageService.downloadFile(entity.getStorageBucket(), entity.getStorageKey());
             }
 
@@ -443,6 +481,7 @@ public class ProjectFileService {
         try {
             return isDrive
                     ? googleDriveService.statObject(entity.getStorageKey())
+                    : isB2(entity) ? egressS3StorageService.statObject(entity.getStorageKey())
                     : storageService.statObject(entity.getStorageBucket(), entity.getStorageKey());
         } catch (IOException ex) {
             log.debug("Object stat unavailable for fileId={}: {}", entity.getId(), ex.getMessage());
@@ -454,6 +493,7 @@ public class ProjectFileService {
             throws IOException {
         StorageReadResult result = isDrive
                 ? googleDriveService.readObject(entity.getStorageKey(), range)
+                : isB2(entity) ? egressS3StorageService.readObject(entity.getStorageKey(), range)
                 : storageService.readObject(new StorageReadRequest(entity.getStorageBucket(), entity.getStorageKey(), range));
         if (result == null || result.body() == null) {
             throw new IOException("Provider returned empty stream for ranged read");
@@ -465,6 +505,7 @@ public class ProjectFileService {
             throws IOException {
         return isDrive
                 ? googleDriveService.readObject(entity.getStorageKey(), range)
+                : isB2(entity) ? egressS3StorageService.readObject(entity.getStorageKey(), range)
                 : storageService.readObject(new StorageReadRequest(entity.getStorageBucket(), entity.getStorageKey(), range));
     }
 
@@ -496,7 +537,7 @@ public class ProjectFileService {
             }
         }
 
-        StorageObjectLocator locator = StorageObjectLocator.of(entity.getStorageBucket(), entity.getStorageKey());
+        StorageObjectLocator locator = StorageObjectLocator.of(entity.getStorageProvider(), entity.getStorageBucket(), entity.getStorageKey());
         String deletedId = entity.getId() != null ? String.valueOf(entity.getId()) : null;
 
         if (taskWorkflowService != null) {
@@ -541,7 +582,7 @@ public class ProjectFileService {
             super(message, cause);
         }
     }
-    private static final long MAX_GDRIVE_OPEN_RANGE_BYTES = 8L * 1024L * 1024L;
+    private static final long MAX_STREAM_OPEN_RANGE_BYTES = 8L * 1024L * 1024L;
     private EgressS3StorageService egressS3StorageService;
 
     public static class RangeNotSatisfiableException extends BusinessException {
@@ -562,128 +603,20 @@ public class ProjectFileService {
         this.egressS3StorageService = egressS3StorageService;
     }
 
+    /** Compatibility facade; all authorization and range validation uses the same read path. */
     @Transactional(readOnly = true)
     public FileStreamResource streamFile(Long projectId, Long fileId, Long userId, String rangeHeader) {
-        projectSecurityService.requireProject(projectId);
-        projectSecurityService.validateMember(projectId, userId);
-
-        ProjectFileEntity entity = projectFileRepository.findByIdAndProjectId(fileId, projectId)
-                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "File not found"));
-
-        String provider = resolveProvider(entity);
-        if ("b2".equals(provider) && (egressS3StorageService == null || !egressS3StorageService.isConfigured())) {
-            throw new BusinessException(HttpStatus.SERVICE_UNAVAILABLE.value(),
-                    "Backblaze B2 recording storage is not configured");
+        ProjectFileDownloadResult result = streamFileWithRange(projectId, fileId, userId, rangeHeader, null, false);
+        if (result.status() == ProjectFileDownloadResult.Status.RANGE_NOT_SATISFIABLE_416) {
+            throw new RangeNotSatisfiableException(result.totalBytes(), "Requested range not satisfiable");
         }
-        if ("gdrive".equals(provider) && (googleDriveService == null || !googleDriveService.isConfigured())) {
-            throw new BusinessException(HttpStatus.SERVICE_UNAVAILABLE.value(),
-                    "Google Drive archival storage is not configured");
-        }
-
-        long totalSize = resolveFileSize(entity, provider);
-
-        long start = 0L;
-        long end = totalSize > 0 ? totalSize - 1 : 0L;
-        boolean partial = false;
-
-        if (rangeHeader != null && !rangeHeader.isBlank() && rangeHeader.trim().startsWith("bytes=") && totalSize > 0) {
-            String spec = rangeHeader.trim().substring("bytes=".length());
-            int commaIdx = spec.indexOf(',');
-            if (commaIdx >= 0) {
-                spec = spec.substring(0, commaIdx);
-            }
-            spec = spec.trim();
-            int dashIdx = spec.indexOf('-');
-            if (dashIdx < 0) {
-                throw new RangeNotSatisfiableException(totalSize, "Invalid Range header");
-            }
-            try {
-                String startStr = spec.substring(0, dashIdx).trim();
-                String endStr = spec.substring(dashIdx + 1).trim();
-                if (startStr.isEmpty()) {
-                    long suffix = Long.parseLong(endStr);
-                    if (suffix <= 0) {
-                        throw new RangeNotSatisfiableException(totalSize, "Invalid suffix range");
-                    }
-                    start = Math.max(0L, totalSize - suffix);
-                    end = totalSize - 1;
-                } else {
-                    start = Long.parseLong(startStr);
-                    if (endStr.isEmpty()) {
-                        long maxEnd = "gdrive".equals(provider)
-                                ? Math.min(totalSize - 1, start + MAX_GDRIVE_OPEN_RANGE_BYTES - 1)
-                                : (totalSize - 1);
-                        end = maxEnd;
-                    } else {
-                        end = Math.min(Long.parseLong(endStr), totalSize - 1);
-                    }
-                }
-            } catch (NumberFormatException e) {
-                throw new RangeNotSatisfiableException(totalSize, "Invalid Range bounds");
-            }
-
-            if (start < 0 || start >= totalSize || end < start) {
-                throw new RangeNotSatisfiableException(totalSize,
-                        "Requested range not satisfiable for totalSize=" + totalSize);
-            }
-            partial = true;
-        }
-
-        final long finalStart = start;
-        final long finalEnd = end;
-        final boolean isPartial = partial;
-        final String key = entity.getStorageKey();
-        final String bucket = entity.getStorageBucket();
-
-        FileStreamResource.StreamOpener opener = () -> {
-            if ("b2".equals(provider) && egressS3StorageService != null) {
-                return isPartial
-                        ? egressS3StorageService.downloadFileRange(key, finalStart, finalEnd)
-                        : egressS3StorageService.downloadFile(key);
-            }
-            if ("gdrive".equals(provider) && googleDriveService != null) {
-                return isPartial
-                        ? googleDriveService.downloadFileRange(key, finalStart, finalEnd)
-                        : googleDriveService.downloadFile(key);
-            }
-            return isPartial
-                    ? storageService.downloadFileRange(bucket, key, finalStart, finalEnd)
-                    : storageService.downloadFile(bucket, key);
-        };
-
-        return new FileStreamResource(
-                entity.getOriginalName(),
-                entity.getContentType(),
-                totalSize,
-                finalStart,
-                finalEnd,
-                isPartial,
-                opener
-        );
+        return new FileStreamResource(result.fileName(), result.contentType(), result.totalBytes(),
+                result.servedRange().map(ByteRange::startInclusive).orElse(0L),
+                result.servedRange().map(ByteRange::endInclusive).orElse(Math.max(0L, result.totalBytes() - 1)),
+                result.status() == ProjectFileDownloadResult.Status.PARTIAL_206, result::inputStream);
     }
 
-    private long resolveFileSize(ProjectFileEntity entity, String provider) {
-        if (entity.getFileSize() != null && entity.getFileSize() > 0) {
-            return entity.getFileSize();
-        }
-        try {
-            if ("b2".equals(provider) && egressS3StorageService != null && egressS3StorageService.isConfigured()) {
-                return egressS3StorageService.headObject(entity.getStorageKey()).contentLength();
-            }
-            if ("gdrive".equals(provider) && googleDriveService != null && googleDriveService.isConfigured()) {
-                var meta = googleDriveService.getFileMetadata(entity.getStorageKey());
-                return meta != null && meta.getSize() != null ? meta.getSize() : 0L;
-            }
-        } catch (Exception e) {
-            log.warn("Could not resolve file size for fileId={}: {}", entity.getId(), e.getMessage());
-        }
-        return 0L;
-    }
-
-    private static String resolveProvider(ProjectFileEntity entity) {
-        if (entity.getStorageProvider() != null && !entity.getStorageProvider().isBlank()) {
-            return entity.getStorageProvider().toLowerCase();
-        }
-        return "googledrive".equalsIgnoreCase(entity.getStorageBucket()) ? "gdrive" : "s3";
+    private static boolean isB2(ProjectFileEntity entity) {
+        return StorageProviderKind.fromProviderAndBucket(entity.getStorageProvider(), entity.getStorageBucket()) == StorageProviderKind.B2;
     }
 }

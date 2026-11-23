@@ -72,6 +72,7 @@ public class ProjectFileAttachmentService {
                 .contentType(contentType)
                 .storageKey(storageKey)
                 .storageBucket(storageBucket)
+                .storageProvider("googledrive".equalsIgnoreCase(storageBucket) ? "gdrive" : "s3")
                 .description(userDescription)
                 .createdAt(now)
                 .updatedAt(now)

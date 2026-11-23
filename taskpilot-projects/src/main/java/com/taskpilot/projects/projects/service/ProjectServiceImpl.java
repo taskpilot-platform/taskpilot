@@ -754,7 +754,7 @@ public class ProjectServiceImpl {
             for (ProjectFileEntity file : projectFileRepository.findByProjectId(projectId)) {
                 if (file.getStorageKey() != null && !file.getStorageKey().isBlank()) {
                     requests.add(new StorageCleanupRequest(
-                            StorageObjectLocator.of(file.getStorageBucket(), file.getStorageKey()),
+                            StorageObjectLocator.of(file.getStorageProvider(), file.getStorageBucket(), file.getStorageKey()),
                             "PROJECT_FILE",
                             file.getId() != null ? String.valueOf(file.getId()) : null,
                             projectId,

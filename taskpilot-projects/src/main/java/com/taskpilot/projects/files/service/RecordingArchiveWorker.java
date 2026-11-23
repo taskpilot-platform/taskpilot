@@ -1,6 +1,5 @@
 package com.taskpilot.projects.files.service;
 
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.infrastructure.observability.TaskPilotMetrics;
 import com.taskpilot.infrastructure.storage.EgressS3StorageService;
@@ -59,7 +58,6 @@ public class RecordingArchiveWorker {
     private final ProjectFileRepository projectFileRepository;
     private final ProjectMemberRepository projectMemberRepository;
     private final ProjectSecurityService projectSecurityService;
-    private final UserIdentityPort userIdentityPort;
     private final EgressS3StorageService egressS3StorageService;
     private final GoogleDriveService googleDriveService;
     private final TransactionTemplate requiresNewTx;
@@ -81,7 +79,6 @@ public class RecordingArchiveWorker {
             ProjectFileRepository projectFileRepository,
             ProjectMemberRepository projectMemberRepository,
             ProjectSecurityService projectSecurityService,
-            UserIdentityPort userIdentityPort,
             EgressS3StorageService egressS3StorageService,
             GoogleDriveService googleDriveService,
             PlatformTransactionManager transactionManager,
@@ -90,7 +87,7 @@ public class RecordingArchiveWorker {
             int maxRetries,
             int chunkSizeBytes,
             long staleArchivingMinutes) {
-        this(projectFileRepository, projectMemberRepository, projectSecurityService, userIdentityPort,
+        this(projectFileRepository, projectMemberRepository, projectSecurityService,
                 egressS3StorageService, googleDriveService, transactionManager,
                 enabled, archiveAfterDays, maxRetries, 15L, chunkSizeBytes, staleArchivingMinutes);
     }
@@ -100,7 +97,6 @@ public class RecordingArchiveWorker {
             ProjectFileRepository projectFileRepository,
             ProjectMemberRepository projectMemberRepository,
             ProjectSecurityService projectSecurityService,
-            UserIdentityPort userIdentityPort,
             EgressS3StorageService egressS3StorageService,
             GoogleDriveService googleDriveService,
             PlatformTransactionManager transactionManager,
@@ -113,7 +109,6 @@ public class RecordingArchiveWorker {
         this.projectFileRepository = projectFileRepository;
         this.projectMemberRepository = projectMemberRepository;
         this.projectSecurityService = projectSecurityService;
-        this.userIdentityPort = userIdentityPort;
         this.egressS3StorageService = egressS3StorageService;
         this.googleDriveService = googleDriveService;
         this.enabled = enabled;
@@ -199,10 +194,7 @@ public class RecordingArchiveWorker {
      * Allows a project manager or file uploader to immediately archive a hot B2 file to cold Google Drive 5TB
      * (useful for immediate cold tiering or live thesis demonstration without waiting N days).
      */
-    public boolean archiveFileNow(Long projectId, Long fileId, String userEmail) {
-        Long userId = userIdentityPort.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"))
-                .id();
+    public boolean archiveFileNow(Long projectId, Long fileId, Long userId) {
         projectSecurityService.requireActiveProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
