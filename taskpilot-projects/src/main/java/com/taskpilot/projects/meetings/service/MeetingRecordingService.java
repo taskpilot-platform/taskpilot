@@ -4,6 +4,7 @@ import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.infrastructure.config.security.FileStreamTokenService;
 import com.taskpilot.infrastructure.config.security.PresignedUploadTokenService;
 import com.taskpilot.infrastructure.exception.BusinessException;
+import com.taskpilot.infrastructure.observability.TaskPilotMetrics;
 import com.taskpilot.infrastructure.storage.EgressS3StorageService;
 import com.taskpilot.projects.common.entity.ProjectFileEntity;
 import com.taskpilot.projects.common.entity.ProjectMeetingEntity;
@@ -84,6 +85,12 @@ public class MeetingRecordingService {
     private final boolean gdriveArchiveEnabled;
     private final long maxFallbackFileSizeBytes;
     private final long uploadTokenGraceMinutes;
+    private TaskPilotMetrics metrics = TaskPilotMetrics.noop();
+
+    @Autowired(required = false)
+    public void setMetrics(TaskPilotMetrics metrics) {
+        this.metrics = metrics != null ? metrics : TaskPilotMetrics.noop();
+    }
 
     public MeetingRecordingService(
             ProjectMeetingRepository meetingRepository,
@@ -174,13 +181,19 @@ public class MeetingRecordingService {
 
         String filepath = buildEgressFilepath(projectId, meetingId);
         EgressSnapshot snapshot;
-        try {
+        io.micrometer.observation.Observation startObs = io.micrometer.observation.Observation
+                .createNotStarted("taskpilot.egress.start", metrics.getObservationRegistry())
+                .lowCardinalityKeyValue("mode", "cloud")
+                .start();
+        try (io.micrometer.observation.Observation.Scope ignored = startObs.openScope()) {
             snapshot = egressClientAdapter.startRoomCompositeEgress(
                     meeting.getRoomName(),
                     filepath,
                     egressS3StorageService
             );
         } catch (Exception e) {
+            startObs.error(e);
+            metrics.recordEgressRecording("cloud", "start_failed");
             requiresNewTx.execute(tx -> meetingRepository.releaseFailedStartClaim(
                     meetingId,
                     truncateError("Failed to start cloud recording: " + e.getMessage()),
@@ -189,6 +202,8 @@ public class MeetingRecordingService {
             log.error("Failed to start LiveKit Egress for meeting {}: {}", meetingId, e.getMessage(), e);
             throw new BusinessException(HttpStatus.BAD_GATEWAY.value(),
                     "Failed to start cloud recording: " + e.getMessage());
+        } finally {
+            startObs.stop();
         }
 
         MeetingRecordingStatus nextStatus = "EGRESS_ACTIVE".equals(snapshot.status())
@@ -200,6 +215,7 @@ public class MeetingRecordingService {
                 nextStatus,
                 Instant.now()
         ));
+        metrics.recordEgressRecording("cloud", "started");
 
         log.info("Started LiveKit RoomComposite Egress: meetingId={}, room={}, egressId={}, targetKey={}",
                 meetingId, meeting.getRoomName(), snapshot.egressId(), filepath);
@@ -353,16 +369,19 @@ public class MeetingRecordingService {
     }
 
     public void handleWebhook(String rawBody, String authorizationHeader) {
-        LiveKitEgressClientAdapter.ParsedWebhookEvent parsed =
-                egressClientAdapter.receiveWebhook(rawBody, authorizationHeader);
+        metrics.observeRunnable("taskpilot.egress.webhook", "mode", "cloud", () -> {
+            LiveKitEgressClientAdapter.ParsedWebhookEvent parsed =
+                    egressClientAdapter.receiveWebhook(rawBody, authorizationHeader);
 
-        log.info("Received verified LiveKit webhook event='{}', egressId='{}'",
-                parsed.eventName(),
-                parsed.egressSnapshot() != null ? parsed.egressSnapshot().egressId() : "none");
+            metrics.recordLiveKitWebhook(parsed.eventName(), "accepted");
+            log.info("Received verified LiveKit webhook event='{}', egressId='{}'",
+                    parsed.eventName(),
+                    parsed.egressSnapshot() != null ? parsed.egressSnapshot().egressId() : "none");
 
-        if (parsed.egressSnapshot() != null) {
-            applyEgressSnapshot(parsed.egressSnapshot());
-        }
+            if (parsed.egressSnapshot() != null) {
+                applyEgressSnapshot(parsed.egressSnapshot());
+            }
+        });
     }
 
     /**
@@ -640,6 +659,7 @@ public class MeetingRecordingService {
             throw new BusinessException(HttpStatus.CONFLICT.value(),
                     "Cannot link fallback recording because a cloud recording became active");
         }
+        metrics.recordEgressRecording("fallback", "completed");
 
         log.info("Completed fallback B2 recording upload: meetingId={}, fileId={}, key={}, size={}",
                 meetingId, savedFile.getId(), claims.objectKey(), meta.contentLength());
@@ -739,7 +759,7 @@ public class MeetingRecordingService {
                     String msg = buildBackupStorageErrorMessage(snapshot.egressId(), snapshot.error());
                     log.warn("Egress {} completed with backup_storage_used=true and object missing from B2: {}",
                             snapshot.egressId(), msg);
-                    requiresNewTx.execute(tx -> meetingRepository.transitionRecordingStatus(
+                    Integer backupUpdated = requiresNewTx.execute(tx -> meetingRepository.transitionRecordingStatus(
                             meeting.getId(),
                             snapshot.egressId(),
                             MeetingRecordingStatus.FAILED,
@@ -748,6 +768,9 @@ public class MeetingRecordingService {
                             now,
                             RECOVERABLE_COMPLETION_STATUSES
                     ));
+                    if (backupUpdated != null && backupUpdated > 0) {
+                        metrics.recordEgressRecording("cloud", "backup_storage");
+                    }
                 }
                 return;
             }
@@ -786,6 +809,9 @@ public class MeetingRecordingService {
                 now,
                 RECOVERABLE_COMPLETION_STATUSES
         ));
+        if (updated != null && updated > 0) {
+            metrics.recordEgressRecording("cloud", "completed");
+        }
 
         log.info("Applied EGRESS_COMPLETE: meetingId={}, egressId={}, fileId={}, rowsUpdated={}",
                 meeting.getId(), snapshot.egressId(), recordingFile.getId(), updated);
@@ -805,7 +831,7 @@ public class MeetingRecordingService {
             log.error("Egress {} failed for meeting {}: {}", snapshot.egressId(), meeting.getId(), errorMessage);
         }
 
-        requiresNewTx.execute(tx -> meetingRepository.transitionRecordingStatus(
+        Integer updated = requiresNewTx.execute(tx -> meetingRepository.transitionRecordingStatus(
                 meeting.getId(),
                 snapshot.egressId(),
                 MeetingRecordingStatus.FAILED,
@@ -814,6 +840,9 @@ public class MeetingRecordingService {
                 now,
                 IN_FLIGHT_STATUSES
         ));
+        if (updated != null && updated > 0) {
+            metrics.recordEgressRecording("cloud", snapshot.backupStorageUsed() ? "backup_storage" : "failed");
+        }
     }
 
     /**

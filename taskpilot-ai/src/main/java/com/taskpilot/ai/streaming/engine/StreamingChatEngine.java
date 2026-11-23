@@ -23,6 +23,7 @@ import com.taskpilot.ai.streaming.postprocess.SessionPostProcessor;
 import com.taskpilot.ai.streaming.sse.AiSseTransport;
 import com.taskpilot.ai.streaming.tool.ConfirmationBlockParser;
 import com.taskpilot.ai.streaming.tool.StreamingToolCoordinator;
+import com.taskpilot.infrastructure.observability.TaskPilotMetrics;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
@@ -38,6 +39,7 @@ import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
@@ -97,6 +99,12 @@ public class StreamingChatEngine {
     private final SessionPostProcessor postProcessor;
     private final TimeoutFallbackHandler timeoutFallbackHandler;
     private final IntermediateResponseStreamer intermediateResponseStreamer;
+    private TaskPilotMetrics metrics = TaskPilotMetrics.noop();
+
+    @Autowired(required = false)
+    public void setMetrics(TaskPilotMetrics metrics) {
+        this.metrics = metrics != null ? metrics : TaskPilotMetrics.noop();
+    }
 
     @Value("${ai.chat.stream-first-response-timeout-seconds:60}")
     private int streamFirstResponseTimeoutSeconds = 60;
@@ -684,6 +692,7 @@ public class StreamingChatEngine {
                 timeoutFuture.cancel(false);
 
                 if (clientDisconnected.get() || sseTransport.isClientAbort(error)) {
+                    metrics.recordAiAborted(modelName);
                     log.debug("[SSE] Client aborted stream for session {} (model {}): {}", sessionId, modelName, error.getMessage());
                     return;
                 }
@@ -692,6 +701,7 @@ public class StreamingChatEngine {
 
                 boolean isNonRetryableModelError = isNonRetryableModelError(error);
                 if (!isNonRetryableModelError && timeoutFallbackHandler.hasRemainingKeys(model, modelKeyAttempts)) {
+                    metrics.recordAiFallback(modelName);
                     int nextAttempt = modelKeyAttempts + 1;
                     chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.THINKING, modelName, null, null);
                     sseTransport.safeSend(emitter, "model", modelName + " (" + timeoutFallbackHandler.getModelKeyLabel(model, nextAttempt) + ")", null);
@@ -708,6 +718,7 @@ public class StreamingChatEngine {
                 if (!isFallbackAttempt || routingService.hasStreamingFallbackAfter(model)) {
                     StreamingChatModel fallback = routingService.getNextStreamingFallback(model);
                     if (fallback == model) {
+                        metrics.recordAiFailure(modelName, System.currentTimeMillis() - startTime);
                         chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.FAILED, modelName, null, error.getMessage());
                         sseTransport.safeSend(emitter, "phase", Phase.FAILED.name(), null);
                         sseTransport.safeSend(emitter, "error", "AI service is currently unavailable. Please try again later.", null);
@@ -715,6 +726,7 @@ public class StreamingChatEngine {
                         return;
                     }
 
+                    metrics.recordAiFallback(modelName);
                     String fallbackName = routingService.getModelName(fallback);
                     chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.THINKING, fallbackName, null, null);
                     sseTransport.safeSend(emitter, "model", fallbackName, null);
@@ -724,6 +736,7 @@ public class StreamingChatEngine {
                             history, systemPrompt, fallback, fallbackName, startTime,
                             !routingService.hasStreamingFallbackAfter(fallback), clientMessageId, requiresAHP, requiresTools, retryCount, 1);
                 } else {
+                    metrics.recordAiFailure(modelName, System.currentTimeMillis() - startTime);
                     chatStreamStatusService.updatePhase(sessionId, clientMessageId, Phase.FAILED, modelName, null, error.getMessage());
                     sseTransport.safeSend(emitter, "phase", Phase.FAILED.name(), null);
                     sseTransport.safeSend(emitter, "error", "AI service is currently unavailable. Please try again later.", null);

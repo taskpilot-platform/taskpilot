@@ -67,7 +67,7 @@ setup_prometheus_agent() {
 }
 
 if [ -n "$MISSING" ]; then
-    echo "[monitoring] disabled: missing env${MISSING}"
+    echo "[monitoring] prometheus disabled: missing env${MISSING}"
 elif [ ! -x "$PROM_BIN" ]; then
     echo "[monitoring] warning: prometheus binary missing at $PROM_BIN; starting app without prometheus agent" >&2
 elif setup_prometheus_agent; then
@@ -80,6 +80,50 @@ elif setup_prometheus_agent; then
 else
     rm -f "$PROM_DIR/prometheus.yml.tmp" 2>/dev/null || true
     echo "[monitoring] warning: setup failed; starting app without prometheus agent" >&2
+fi
+
+# ------------------------------------------------------------------------------
+# OpenTelemetry OTLP (Traces -> Grafana Cloud Tempo, Logs -> Grafana Cloud Loki)
+# Prometheus Agent remains the sole metrics transport (never duplicate via OTLP).
+# Supports EITHER:
+#   A) Standard Grafana Cloud copy-paste env vars:
+#        OTEL_EXPORTER_OTLP_ENDPOINT + OTEL_EXPORTER_OTLP_HEADERS
+#   B) Convenience credentials (auto-encoded to Basic Auth header):
+#        OTEL_EXPORTER_OTLP_ENDPOINT + OTEL_INSTANCE_ID + OTEL_API_TOKEN
+# ------------------------------------------------------------------------------
+export OTEL_METRICS_EXPORTER="${OTEL_METRICS_EXPORTER:-none}"
+export OTEL_EXPORTER_OTLP_PROTOCOL="${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}"
+
+TRIMMED_OTEL_ENDPOINT="$(trim_ws "${OTEL_EXPORTER_OTLP_ENDPOINT:-}")"
+TRIMMED_OTEL_HEADERS="$(trim_ws "${OTEL_EXPORTER_OTLP_HEADERS:-}")"
+TRIMMED_OTEL_INSTANCE_ID="$(trim_ws "${OTEL_INSTANCE_ID:-}")"
+TRIMMED_OTEL_API_TOKEN_CHECK="$(trim_ws "${OTEL_API_TOKEN:-}")"
+
+if [ -n "$TRIMMED_OTEL_ENDPOINT" ]; then
+    export OTEL_EXPORTER_OTLP_ENDPOINT="$TRIMMED_OTEL_ENDPOINT"
+    if [ -n "$TRIMMED_OTEL_HEADERS" ]; then
+        # Spring Boot 4's W3CHeaderParser invokes URLDecoder.decode whenever '%' is present,
+        # which would turn raw '+' characters inside Base64 Basic tokens into spaces.
+        case "$TRIMMED_OTEL_HEADERS" in
+            *%*)
+                SAFE_OTEL_HEADERS="$(printf '%s' "$TRIMMED_OTEL_HEADERS" | awk '{gsub(/\+/, "%2B"); print}')"
+                export OTEL_EXPORTER_OTLP_HEADERS="$SAFE_OTEL_HEADERS"
+                ;;
+            *)
+                export OTEL_EXPORTER_OTLP_HEADERS="$TRIMMED_OTEL_HEADERS"
+                ;;
+        esac
+        echo "[monitoring] OTLP traces+logs enabled (endpoint=$TRIMMED_OTEL_ENDPOINT)"
+    elif [ -n "$TRIMMED_OTEL_INSTANCE_ID" ] && [ -n "$TRIMMED_OTEL_API_TOKEN_CHECK" ]; then
+        OTEL_BASIC_B64="$(printf '%s:%s' "$TRIMMED_OTEL_INSTANCE_ID" "$TRIMMED_OTEL_API_TOKEN_CHECK" | base64 | tr -d '\r\n')"
+        export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic ${OTEL_BASIC_B64}"
+        echo "[monitoring] OTLP traces+logs enabled via instance credentials (endpoint=$TRIMMED_OTEL_ENDPOINT)"
+    else
+        unset OTEL_EXPORTER_OTLP_ENDPOINT
+        echo "[monitoring] OTLP traces+logs disabled: missing OTEL_EXPORTER_OTLP_HEADERS (or OTEL_INSTANCE_ID + OTEL_API_TOKEN)"
+    fi
+else
+    echo "[monitoring] OTLP traces+logs disabled: missing env OTEL_EXPORTER_OTLP_ENDPOINT"
 fi
 
 exec java \

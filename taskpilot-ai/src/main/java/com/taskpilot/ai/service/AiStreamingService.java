@@ -10,6 +10,7 @@ import com.taskpilot.ai.repository.ChatMessageRepository;
 import com.taskpilot.ai.repository.ChatSessionRepository;
 import com.taskpilot.ai.streaming.engine.StreamingChatEngine;
 import com.taskpilot.ai.streaming.sse.AiSseTransport;
+import com.taskpilot.infrastructure.observability.TaskPilotMetrics;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
@@ -18,6 +19,7 @@ import dev.langchain4j.model.chat.StreamingChatModel;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -49,8 +51,14 @@ public class AiStreamingService {
     private final SystemPromptBuilder promptBuilder;
     private final ChatHistoryCompactor compactor;
     private final AiSseTransport sseTransport;
+    private TaskPilotMetrics metrics = TaskPilotMetrics.noop();
 
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+
+    @Autowired(required = false)
+    public void setMetrics(TaskPilotMetrics metrics) {
+        this.metrics = metrics != null ? metrics : TaskPilotMetrics.noop();
+    }
 
     @PreDestroy
     public void shutdown() {
@@ -117,22 +125,29 @@ public class AiStreamingService {
         chatStreamStatusService.updatePhase(sessionId, effectiveClientMessageId, Phase.THINKING, modelName, null, null);
 
         String finalClientMessageId = effectiveClientMessageId;
-        executor.submit(() -> {
-            try {
-                sseTransport.safeSend(emitter, "model", modelName, null);
-                sseTransport.safeSend(emitter, "phase", Phase.THINKING.name(), null);
-                streamingChatEngine.doStream(
-                        emitter, emitterCompleted, session, sessionId, userId, userInput,
-                        requestHistory, systemPrompt, selectedModel, modelName, startTime,
-                        false, finalClientMessageId, requiresAHP, requiresTools, 0);
-            } catch (Exception e) {
-                log.error("[SSE] Exception in stream thread for session {}: {}", sessionId, e.getMessage(), e);
-                chatStreamStatusService.updatePhase(sessionId, finalClientMessageId, Phase.FAILED, modelName, null, e.getMessage());
-                sseTransport.safeSend(emitter, "phase", Phase.FAILED.name(), null);
-                sseTransport.safeSend(emitter, "error", Map.of("error", e.getMessage(), "type", "generation_failed"), MediaType.APPLICATION_JSON);
-                sseTransport.safeComplete(emitter, emitterCompleted);
-            }
-        });
+        String normalizedProvider = TaskPilotMetrics.normalizeAiProvider(modelName);
+        executor.submit(metrics.wrapWithCurrentContext(() -> metrics.observeRunnable(
+                "taskpilot.ai.chat.stream",
+                "provider",
+                normalizedProvider,
+                () -> {
+                    try {
+                        sseTransport.safeSend(emitter, "model", modelName, null);
+                        sseTransport.safeSend(emitter, "phase", Phase.THINKING.name(), null);
+                        streamingChatEngine.doStream(
+                                emitter, emitterCompleted, session, sessionId, userId, userInput,
+                                requestHistory, systemPrompt, selectedModel, modelName, startTime,
+                                false, finalClientMessageId, requiresAHP, requiresTools, 0);
+                    } catch (Exception e) {
+                        metrics.recordAiFailure(modelName, System.currentTimeMillis() - startTime);
+                        log.error("[SSE] Exception in stream thread for session {}: {}", sessionId, e.getMessage(), e);
+                        chatStreamStatusService.updatePhase(sessionId, finalClientMessageId, Phase.FAILED, modelName, null, e.getMessage());
+                        sseTransport.safeSend(emitter, "phase", Phase.FAILED.name(), null);
+                        sseTransport.safeSend(emitter, "error", Map.of("error", e.getMessage(), "type", "generation_failed"), MediaType.APPLICATION_JSON);
+                        sseTransport.safeComplete(emitter, emitterCompleted);
+                    }
+                }
+        )));
 
         emitter.onTimeout(() -> {
             log.warn("[SSE] SseEmitter timed out for session {}", sessionId);

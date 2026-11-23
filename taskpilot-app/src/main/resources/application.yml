@@ -126,6 +126,29 @@ management:
     distribution:
       slo:
         "[http.server.requests]": 50ms,100ms,250ms,500ms,1s,2s,5s
+  opentelemetry:
+    resource-attributes:
+      service.name: taskpilot
+      deployment.environment.name: ${APP_ENV:prod}
+    tracing:
+      export:
+        otlp:
+          compression: gzip
+    logging:
+      export:
+        otlp:
+          compression: gzip
+  tracing:
+    sampling:
+      probability: ${OTEL_TRACING_SAMPLING_PROBABILITY:1.0}
+  otlp:
+    metrics:
+      export:
+        enabled: false
+
+logging:
+  pattern:
+    correlation: "[${spring.application.name:taskpilot},%X{traceId:-},%X{spanId:-}] "
 
 taskpilot:
   monitoring:

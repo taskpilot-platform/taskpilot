@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <!-- OpenTelemetry Logback Appender: ships INFO/WARN/ERROR logs to Grafana Cloud Loki
+         via Spring Boot's OTLP LogRecordExporter with automatic traceId/spanId correlation.
+         No-ops cleanly when OTEL_EXPORTER_OTLP_ENDPOINT is unset. -->
+    <appender name="OTEL" class="io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender">
+        <captureExperimentalAttributes>false</captureExperimentalAttributes>
+        <captureCodeAttributes>false</captureCodeAttributes>
+        <captureMarkerAttribute>true</captureMarkerAttribute>
+        <captureKeyValuePairAttributes>true</captureKeyValuePairAttributes>
+        <captureMdcAttributes>traceId,spanId</captureMdcAttributes>
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>${OTEL_LOG_LEVEL:-INFO}</level>
+        </filter>
+    </appender>
+
+    <!-- Prevent recursive log loops if OpenTelemetry exporter emits internal warnings -->
+    <logger name="io.opentelemetry" level="WARN" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+    </logger>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="OTEL"/>
+    </root>
+</configuration>

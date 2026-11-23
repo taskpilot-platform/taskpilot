@@ -2,8 +2,10 @@ package com.taskpilot.ai.service;
 
 import com.taskpilot.ai.entity.AiLogEntity;
 import com.taskpilot.ai.repository.AiLogRepository;
+import com.taskpilot.infrastructure.observability.TaskPilotMetrics;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Async;
@@ -16,6 +18,12 @@ import java.time.Instant;
 @RequiredArgsConstructor
 public class AiLogService {
     private final AiLogRepository aiLogRepository;
+    private TaskPilotMetrics metrics = TaskPilotMetrics.noop();
+
+    @Autowired(required = false)
+    public void setMetrics(TaskPilotMetrics metrics) {
+        this.metrics = metrics != null ? metrics : TaskPilotMetrics.noop();
+    }
 
     @Async
     @Transactional
@@ -23,6 +31,7 @@ public class AiLogService {
             String request, String response, String reasoning,
             String actionTaken, Object toolOutput,
             String modelUsed, int tokensUsed, int durationMs) {
+        metrics.recordAiCompletion(modelUsed, tokensUsed, durationMs);
         try {
             AiLogEntity log = AiLogEntity.builder()
                     .userId(userId)

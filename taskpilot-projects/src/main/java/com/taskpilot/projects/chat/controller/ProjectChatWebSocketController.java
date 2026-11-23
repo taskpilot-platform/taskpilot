@@ -1,10 +1,12 @@
 package com.taskpilot.projects.chat.controller;
 
+import com.taskpilot.infrastructure.observability.TaskPilotMetrics;
 import com.taskpilot.projects.chat.dto.ChatMessageResponse;
 import com.taskpilot.projects.chat.dto.SendChatMessageRequest;
 import com.taskpilot.projects.chat.service.ProjectChatService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
@@ -18,6 +20,12 @@ import java.security.Principal;
 public class ProjectChatWebSocketController {
 
     private final ProjectChatService projectChatService;
+    private TaskPilotMetrics metrics = TaskPilotMetrics.noop();
+
+    @Autowired(required = false)
+    public void setMetrics(TaskPilotMetrics metrics) {
+        this.metrics = metrics != null ? metrics : TaskPilotMetrics.noop();
+    }
 
     @MessageMapping("/projects/{projectId}/chat.sendMessage")
     public ChatMessageResponse handleSendMessage(
@@ -26,6 +34,8 @@ public class ProjectChatWebSocketController {
             Principal principal) {
         String email = principal != null ? principal.getName() : null;
         log.debug("Received STOMP chat message for project {} from {}", projectId, email);
-        return projectChatService.sendMessage(projectId, email, request);
+        ChatMessageResponse response = projectChatService.sendMessage(projectId, email, request);
+        metrics.recordWebSocketMessage("sent");
+        return response;
     }
 }
