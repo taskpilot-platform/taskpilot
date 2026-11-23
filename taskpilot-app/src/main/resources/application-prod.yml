@@ -1,6 +1,6 @@
 server:
   port: ${PORT:${SERVER_PORT:7860}}
-  forward-headers-strategy: framework
+  forward-headers-strategy: none
 
 spring:
   config:
@@ -33,6 +33,10 @@ application:
     jwt:
       blocklist:
         provider: ${JWT_BLOCKLIST_PROVIDER:redis}
+    oauth2:
+      success-redirect-uri: ${OAUTH2_SUCCESS_REDIRECT_URI:https://taskpilot-platform.netlify.app/auth/callback}
+      allowed-redirect-origins: ${OAUTH2_ALLOWED_REDIRECT_ORIGINS:https://taskpilot-platform.netlify.app}
+      cookie-secure: ${OAUTH2_COOKIE_SECURE:true}
 
 management:
   endpoints:

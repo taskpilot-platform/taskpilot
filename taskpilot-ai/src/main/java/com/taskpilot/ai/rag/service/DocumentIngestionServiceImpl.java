@@ -7,6 +7,9 @@ import com.taskpilot.ai.rag.entity.DocumentEntity;
 import com.taskpilot.ai.rag.repository.DocumentChunkRepository;
 import com.taskpilot.ai.rag.repository.DocumentChunkStagingRepository;
 import com.taskpilot.ai.rag.repository.DocumentRepository;
+import com.taskpilot.contracts.storage.StorageCleanupPort;
+import com.taskpilot.contracts.storage.StorageCleanupRequest;
+import com.taskpilot.contracts.storage.StorageObjectLocator;
 import com.taskpilot.infrastructure.storage.StorageService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -46,6 +49,23 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
     private final RagEmbeddingProperties properties;
     private final JdbcTemplate jdbcTemplate;
     private final TransactionTemplate transactionTemplate;
+    private final StorageCleanupPort storageCleanupPort;
+
+    public DocumentIngestionServiceImpl(
+            DocumentRepository documentRepository,
+            DocumentChunkRepository documentChunkRepository,
+            DocumentChunkStagingRepository stagingRepository,
+            StorageService storageService,
+            DocumentTextExtractor documentTextExtractor,
+            DocumentChunker documentChunker,
+            EmbeddingGateway embeddingGateway,
+            RagEmbeddingProperties properties,
+            JdbcTemplate jdbcTemplate,
+            PlatformTransactionManager transactionManager) {
+        this(documentRepository, documentChunkRepository, stagingRepository, storageService,
+                documentTextExtractor, documentChunker, embeddingGateway, properties,
+                jdbcTemplate, transactionManager, null);
+    }
 
     @Autowired
     public DocumentIngestionServiceImpl(
@@ -58,7 +78,8 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
             EmbeddingGateway embeddingGateway,
             RagEmbeddingProperties properties,
             JdbcTemplate jdbcTemplate,
-            @Autowired(required = false) PlatformTransactionManager transactionManager) {
+            @Autowired(required = false) PlatformTransactionManager transactionManager,
+            @Autowired(required = false) StorageCleanupPort storageCleanupPort) {
         this.documentRepository = documentRepository;
         this.documentChunkRepository = documentChunkRepository;
         this.stagingRepository = stagingRepository;
@@ -69,6 +90,7 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
         this.properties = properties;
         this.jdbcTemplate = jdbcTemplate;
         this.transactionTemplate = transactionManager != null ? new TransactionTemplate(transactionManager) : null;
+        this.storageCleanupPort = storageCleanupPort;
     }
 
     @Override
@@ -225,15 +247,31 @@ public class DocumentIngestionServiceImpl implements DocumentIngestionService {
             // 2. Delete any lingering staging rows
             stagingRepository.deleteAllByDocumentId(documentId);
 
-            // 3. Delete file in S3
-            try {
-                storageService.deleteFile("documents", doc.getStorageKey());
-            } catch (Exception e) {
-                log.warn("Failed to delete S3 file key={}: {}", doc.getStorageKey(), e.getMessage());
-            }
+            // 3. Capture object locator before deleting document record and enqueue durable cleanup in same TX
+            String storageKey = doc.getStorageKey();
+            Long docId = doc.getId();
+            Long projectId = doc.getProjectId();
 
             // 4. Delete document record
             documentRepository.delete(doc);
+
+            if (storageKey != null && !storageKey.isBlank()) {
+                if (storageCleanupPort != null) {
+                    storageCleanupPort.enqueueCleanup(new StorageCleanupRequest(
+                            StorageObjectLocator.of("documents", storageKey),
+                            "RAG_DOCUMENT",
+                            docId != null ? String.valueOf(docId) : null,
+                            projectId,
+                            null
+                    ));
+                } else {
+                    try {
+                        storageService.deleteFile("documents", storageKey);
+                    } catch (Exception e) {
+                        log.warn("Failed to delete S3 file key={}: {}", storageKey, e.getMessage());
+                    }
+                }
+            }
         });
     }
 

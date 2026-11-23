@@ -2,6 +2,7 @@ package com.taskpilot.projects.meetings.service;
 
 import com.taskpilot.projects.common.entity.ProjectMeetingEntity;
 import com.taskpilot.projects.common.enums.MeetingRecordingStatus;
+import com.taskpilot.projects.common.enums.ProjectMeetingStatus;
 import com.taskpilot.projects.common.repository.ProjectMeetingRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -113,5 +114,27 @@ class EgressReconciliationJobTest {
         assertThat(count).isEqualTo(2);
         verify(meetingRecordingService).recoverStartingClaim(20L, found);
         verify(meetingRecordingService).releaseStaleStartingClaim(eq(21L), contains("server restart"));
+    }
+
+    @Test
+    void reconcileInFlightRecordings_stopsActiveEgressWhenMeetingIsEndingOrEnded() throws IOException {
+        ProjectMeetingEntity endingWithLiveEgress = ProjectMeetingEntity.builder()
+                .id(33L).projectId(2L).roomName("tp-proj-2-m-33")
+                .status(ProjectMeetingStatus.ENDING)
+                .egressId("EG_ENDING_RETRY").recordingStatus(MeetingRecordingStatus.RECORDING).build();
+        EgressSnapshot stillActive = new EgressSnapshot(
+                "EG_ENDING_RETRY", "tp-proj-2-m-33", "EGRESS_ACTIVE", "", false, "", 0L, 0L
+        );
+
+        when(egressClientAdapter.isConfigured()).thenReturn(true);
+        when(meetingRepository.findByRecordingStatusInAndEgressIdIsNotNull(anyCollection()))
+                .thenReturn(List.of(endingWithLiveEgress));
+        when(egressClientAdapter.listEgress(null, "EG_ENDING_RETRY")).thenReturn(List.of(stillActive));
+
+        int count = reconciliationJob.reconcileInFlightRecordings();
+
+        assertThat(count).isEqualTo(1);
+        verify(meetingRecordingService).applyEgressSnapshot(stillActive);
+        verify(meetingRecordingService).stopRecordingIfActive(endingWithLiveEgress);
     }
 }

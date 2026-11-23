@@ -6,6 +6,10 @@ import com.taskpilot.ai.context.ChatHistoryCompactor;
 import com.taskpilot.ai.context.ChatMessageSanitizer;
 import com.taskpilot.ai.entity.AiChatRequestEntity.Phase;
 import com.taskpilot.ai.entity.ChatSessionEntity;
+import com.taskpilot.ai.routing.CopilotStreamStatusCode;
+import com.taskpilot.ai.routing.ModelCandidate;
+import com.taskpilot.ai.routing.ModelFailureClassifier;
+import com.taskpilot.ai.routing.TurnAttemptTracker;
 import com.taskpilot.ai.service.ChatStreamStatusService;
 import com.taskpilot.ai.service.SmartRoutingService;
 import com.taskpilot.ai.streaming.diagnostic.FinalizerDiagnosticOutcome;
@@ -132,8 +136,7 @@ public class TimeoutFallbackHandler {
         boolean hasPendingConfirmation = toolCallSummaries != null && toolCallSummaries.stream()
                 .anyMatch(summary -> summary.get("confirmation") instanceof Map<?, ?>);
         if (hasPendingConfirmation) {
-            return "Mình đã chuẩn bị thao tác ghi dữ liệu và cần bạn phê duyệt trong thẻ xác nhận bên dưới. "
-                    + "Bước diễn giải cuối của model phản hồi quá lâu nên mình hiển thị ngay hành động cần xác nhận.";
+            return CopilotStreamStatusCode.COPILOT_CONFIRMATION_EXPLANATION_INCOMPLETE.code();
         }
         return "I retrieved the requested data, but the AI service could not finish formatting the response. Please try again shortly.";
     }
@@ -159,11 +162,99 @@ public class TimeoutFallbackHandler {
             List<Map<String, Object>> toolCallSummaries,
             LinkedHashSet<String> toolNames,
             String guardrailInstruction) {
+        forceTextOnlyResponse(
+                emitter, emitterCompleted, session, sessionId, userId, userInput,
+                history, systemPrompt, model, modelName, startTime, isFallbackAttempt,
+                clientMessageId, ignoredSharedBuffer, clientDisconnected, generatingMarked,
+                requiresAHP, toolCallSummaries, toolNames, guardrailInstruction,
+                null, null);
+    }
+
+    public void forceTextOnlyResponse(
+            SseEmitter emitter,
+            AtomicBoolean emitterCompleted,
+            ChatSessionEntity session,
+            Long sessionId,
+            Long userId,
+            String userInput,
+            List<ChatMessage> history,
+            String systemPrompt,
+            StreamingChatModel model,
+            String modelName,
+            long startTime,
+            boolean isFallbackAttempt,
+            String clientMessageId,
+            StringBuilder ignoredSharedBuffer,
+            AtomicBoolean clientDisconnected,
+            AtomicBoolean generatingMarked,
+            boolean requiresAHP,
+            List<Map<String, Object>> toolCallSummaries,
+            LinkedHashSet<String> toolNames,
+            String guardrailInstruction,
+            TurnAttemptTracker tracker,
+            ModelCandidate activeCandidate) {
+        forceTextOnlyResponse(
+                emitter, emitterCompleted, session, sessionId, userId, userInput,
+                history, systemPrompt, model, modelName, startTime, isFallbackAttempt,
+                clientMessageId, ignoredSharedBuffer, clientDisconnected, generatingMarked,
+                requiresAHP, toolCallSummaries, toolNames, guardrailInstruction,
+                tracker, activeCandidate, null, null);
+    }
+
+    public void forceTextOnlyResponse(
+            SseEmitter emitter,
+            AtomicBoolean emitterCompleted,
+            ChatSessionEntity session,
+            Long sessionId,
+            Long userId,
+            String userInput,
+            List<ChatMessage> history,
+            String systemPrompt,
+            StreamingChatModel model,
+            String modelName,
+            long startTime,
+            boolean isFallbackAttempt,
+            String clientMessageId,
+            StringBuilder ignoredSharedBuffer,
+            AtomicBoolean clientDisconnected,
+            AtomicBoolean generatingMarked,
+            boolean requiresAHP,
+            List<Map<String, Object>> toolCallSummaries,
+            LinkedHashSet<String> toolNames,
+            String guardrailInstruction,
+            TurnAttemptTracker tracker,
+            ModelCandidate activeCandidate,
+            AtomicBoolean sharedTerminalFlag,
+            Runnable onTurnCompleted) {
 
         StreamingChatModel textModel = model;
         String textModelName = modelName;
         String provider = routingService != null ? routingService.getModelProvider(textModel) : "UNKNOWN";
+        ModelCandidate resolvedCandidate = activeCandidate != null
+                ? activeCandidate
+                : new ModelCandidate(provider, textModelName, false, ModelCandidate.Source.DEFAULT_CHAIN);
         log.info("[ForceTextOnly] Using text-only finalizer {} ({}) for session {}", textModelName, provider, sessionId);
+
+        AtomicBoolean terminalFinalized = sharedTerminalFlag != null ? sharedTerminalFlag : new AtomicBoolean(false);
+        if (terminalFinalized.get()) {
+            return;
+        }
+
+        if (tracker != null && !tracker.hasTimeForNextCall()) {
+            if (terminalFinalized.compareAndSet(false, true)) {
+                if (onTurnCompleted != null) {
+                    onTurnCompleted.run();
+                }
+                log.warn("[ForceTextOnly] Turn deadline exhausted before starting finalizer for session {}. Emitting fallback text.", sessionId);
+                String timeoutFallback = buildTextOnlyTimeoutResponse(toolCallSummaries);
+                finalizeForceTextOnlyResponse(emitter, session, sessionId, userId, userInput, systemPrompt,
+                        textModelName, startTime, clientMessageId, clientDisconnected, toolCallSummaries, toolNames,
+                        timeoutFallback, null, generatingMarked, FinalizerTerminalCause.MODEL_CANDIDATES_EXHAUSTED,
+                        "terminalCause=MODEL_CANDIDATES_EXHAUSTED");
+                sseTransport.safeComplete(emitter, emitterCompleted);
+            }
+            return;
+        }
 
         List<ChatMessage> textOnlyHistory = new ArrayList<>(sanitizer.sanitizeHistoryForTools(history));
         if (!textOnlyHistory.isEmpty() && textOnlyHistory.get(0) instanceof SystemMessage) {
@@ -183,12 +274,12 @@ public class TimeoutFallbackHandler {
                 .maxOutputTokens(Math.min(maxOutputTokens, 1200))
                 .build();
 
-        AtomicBoolean terminalFinalized = new AtomicBoolean(false);
         AtomicInteger activeAttempt = new AtomicInteger(1);
 
         executeFinalizerAttempt(
-                1, textModel, textModelName, provider, request,
-                activeAttempt, terminalFinalized, emitter, emitterCompleted,
+                1, textModel, textModelName, provider, resolvedCandidate, tracker, request,
+                activeAttempt, terminalFinalized, sharedTerminalFlag != null, onTurnCompleted,
+                emitter, emitterCompleted,
                 session, sessionId, userId, userInput, systemPrompt, startTime,
                 clientMessageId, clientDisconnected, generatingMarked,
                 toolCallSummaries, toolNames);
@@ -199,9 +290,13 @@ public class TimeoutFallbackHandler {
             StreamingChatModel currentModel,
             String currentModelName,
             String currentProvider,
+            ModelCandidate currentCandidate,
+            TurnAttemptTracker tracker,
             ChatRequest request,
             AtomicInteger activeAttempt,
             AtomicBoolean terminalFinalized,
+            boolean externalTurnDeadlineActive,
+            Runnable onTurnCompleted,
             SseEmitter emitter,
             AtomicBoolean emitterCompleted,
             ChatSessionEntity session,
@@ -225,11 +320,18 @@ public class TimeoutFallbackHandler {
         final AtomicBoolean lateCallbackIgnored = new AtomicBoolean(false);
         final StringBuilder roundResponse = new StringBuilder();
 
+        long watchdogSeconds = tracker != null ? tracker.watchdogTimeoutSeconds(25L) : 25L;
+        final AtomicReference<ScheduledFuture<?>> deadlineFutureRef = new AtomicReference<>(null);
+
         final ScheduledFuture<?> timeoutFuture = timeoutScheduler.schedule(() -> {
-            if (firstModelSignalReceived.get() || clientDisconnected.get() || emitterCompleted.get() || attempt != activeAttempt.get()) {
+            if (terminalFinalized.get() || firstModelSignalReceived.get() || clientDisconnected.get() || emitterCompleted.get() || attempt != activeAttempt.get()) {
                 return;
             }
             if (attemptClosed.compareAndSet(false, true)) {
+                ScheduledFuture<?> df = deadlineFutureRef.get();
+                if (df != null) {
+                    df.cancel(false);
+                }
                 watchdogWon.set(true);
                 long elapsedMs = System.currentTimeMillis() - stageStartedAt;
                 FinalizerTerminalCause cause = FinalizerTerminalCause.FINALIZER_TIMEOUT_BEFORE_FIRST_TOKEN;
@@ -239,6 +341,9 @@ public class TimeoutFallbackHandler {
                         cause, partialChars.get(), true, true, lateCallbackIgnored.get(), null);
 
                 if (terminalFinalized.compareAndSet(false, true)) {
+                    if (onTurnCompleted != null) {
+                        onTurnCompleted.run();
+                    }
                     log.warn("[ForceTextOnly] Text-only finalizer timed out (attempt={}) for session {}. Emitting fallback text.", attempt, sessionId);
                     String timeoutFallback = buildTextOnlyTimeoutResponse(toolCallSummaries);
                     finalizeForceTextOnlyResponse(emitter, session, sessionId, userId, userInput, systemPrompt,
@@ -247,14 +352,50 @@ public class TimeoutFallbackHandler {
                     sseTransport.safeComplete(emitter, emitterCompleted);
                 }
             }
-        }, 25, TimeUnit.SECONDS);
+        }, watchdogSeconds, TimeUnit.SECONDS);
+
+        final ScheduledFuture<?> deadlineFuture = (tracker != null && !externalTurnDeadlineActive)
+                ? timeoutScheduler.schedule(() -> {
+                    if (terminalFinalized.get() || clientDisconnected.get() || emitterCompleted.get() || attempt != activeAttempt.get()) {
+                        return;
+                    }
+                    if (attemptClosed.compareAndSet(false, true)) {
+                        timeoutFuture.cancel(false);
+                        watchdogWon.set(true);
+                        long elapsedMs = System.currentTimeMillis() - stageStartedAt;
+                        Long firstTokenMs = firstTokenAt.get() != null ? (firstTokenAt.get() - stageStartedAt) : null;
+                        FinalizerTerminalCause cause = FinalizerTerminalCause.MODEL_CANDIDATES_EXHAUSTED;
+                        String errorSummary = "terminalCause=TURN_DEADLINE_EXCEEDED";
+
+                        recordAttempt(sessionId, clientMessageId, attempt, currentProvider, currentModelName, elapsedMs, firstTokenMs,
+                                cause, partialChars.get(), true, true, lateCallbackIgnored.get(), null);
+
+                        if (terminalFinalized.compareAndSet(false, true)) {
+                            if (onTurnCompleted != null) {
+                                onTurnCompleted.run();
+                            }
+                            log.warn("[ForceTextOnly] Shared turn deadline ({}s) exceeded mid-stream in finalizer (attempt={}, partialChars={}) for session {}.",
+                                    tracker.getDeadlineSeconds(), attempt, partialChars.get(), sessionId);
+                            if (partialChars.get() > 0) {
+                                sseTransport.safeSend(emitter, "reset_stream", Map.of("reason", "turn_deadline"), MediaType.APPLICATION_JSON);
+                            }
+                            String timeoutFallback = buildTextOnlyTimeoutResponse(toolCallSummaries);
+                            finalizeForceTextOnlyResponse(emitter, session, sessionId, userId, userInput, systemPrompt,
+                                    currentModelName, startTime, clientMessageId, clientDisconnected, toolCallSummaries, toolNames,
+                                    timeoutFallback, null, generatingMarked, cause, errorSummary);
+                            sseTransport.safeComplete(emitter, emitterCompleted);
+                        }
+                    }
+                }, Math.max(1L, tracker.remainingMillis()), TimeUnit.MILLISECONDS)
+                : null;
+        deadlineFutureRef.set(deadlineFuture);
 
         try {
             currentModel.chat(request, new StreamingChatResponseHandler() {
                 @Override
                 public void onPartialResponse(String partialResponse) {
                     firstModelSignalReceived.set(true);
-                    if (attemptClosed.get() || clientDisconnected.get() || emitterCompleted.get() || attempt != activeAttempt.get()) {
+                    if (terminalFinalized.get() || attemptClosed.get() || clientDisconnected.get() || emitterCompleted.get() || attempt != activeAttempt.get()) {
                         lateCallbackIgnored.set(true);
                         log.warn("[AI_ATTEMPT_LATE] session={} clientMessageId={} stage=FINALIZER late partial response ignored (attempt={}, chars={})",
                                 sessionId, clientMessageId, attempt, partialResponse != null ? partialResponse.length() : 0);
@@ -274,11 +415,15 @@ public class TimeoutFallbackHandler {
                 @Override
                 public void onCompleteResponse(ChatResponse completeResponse) {
                     timeoutFuture.cancel(true);
-                    if (!attemptClosed.compareAndSet(false, true) || attempt != activeAttempt.get()) {
+                    if (deadlineFuture != null) deadlineFuture.cancel(false);
+                    if (terminalFinalized.get() || !attemptClosed.compareAndSet(false, true) || attempt != activeAttempt.get()) {
                         lateCallbackIgnored.set(true);
                         log.warn("[AI_ATTEMPT_LATE] session={} clientMessageId={} stage=FINALIZER late complete response ignored (attempt={})",
                                 sessionId, clientMessageId, attempt);
                         return;
+                    }
+                    if (tracker != null) {
+                        tracker.markLastOutcome("ok");
                     }
                     long elapsedMs = System.currentTimeMillis() - stageStartedAt;
                     Long firstTokenMs = firstTokenAt.get() != null ? (firstTokenAt.get() - stageStartedAt) : null;
@@ -291,6 +436,9 @@ public class TimeoutFallbackHandler {
                             cause, partialChars.get(), false, true, lateCallbackIgnored.get(), null);
 
                     if (terminalFinalized.compareAndSet(false, true)) {
+                        if (onTurnCompleted != null) {
+                            onTurnCompleted.run();
+                        }
                         finalizeForceTextOnlyResponse(emitter, session, sessionId, userId, userInput, systemPrompt,
                                 currentModelName, startTime, clientMessageId, clientDisconnected, toolCallSummaries, toolNames,
                                 roundResponse.toString(), completeResponse, generatingMarked, cause, null);
@@ -301,7 +449,8 @@ public class TimeoutFallbackHandler {
                 @Override
                 public void onError(Throwable error) {
                     timeoutFuture.cancel(true);
-                    if (!attemptClosed.compareAndSet(false, true) || attempt != activeAttempt.get()) {
+                    if (deadlineFuture != null) deadlineFuture.cancel(false);
+                    if (terminalFinalized.get() || !attemptClosed.compareAndSet(false, true) || attempt != activeAttempt.get()) {
                         lateCallbackIgnored.set(true);
                         log.warn("[AI_ATTEMPT_LATE] session={} clientMessageId={} stage=FINALIZER late error response ignored (attempt={}): {}",
                                 sessionId, clientMessageId, attempt, error != null ? error.getMessage() : "null");
@@ -313,24 +462,28 @@ public class TimeoutFallbackHandler {
                     Throwable actionable = unwrapActionableException(error);
 
                     boolean canFallback = (attempt == 1) && !hadTokens && isRateLimitError(error);
-                    StreamingChatModel fallbackCandidate = canFallback && routingService != null
-                            ? routingService.getNextStreamingFallback(currentModel)
-                            : currentModel;
+                    FinalizerFallback nextFallback = canFallback
+                            ? resolveFinalizerFallback(currentModel, currentCandidate, error, tracker)
+                            : null;
 
-                    if (canFallback && fallbackCandidate != null && fallbackCandidate != currentModel) {
+                    if (nextFallback != null && !terminalFinalized.get()) {
                         FinalizerTerminalCause cause = FinalizerTerminalCause.FINALIZER_MODEL_ERROR_BEFORE_FIRST_TOKEN;
                         recordAttempt(sessionId, clientMessageId, 1, currentProvider, currentModelName, elapsedMs, firstTokenMs,
                                 cause, partialChars.get(), false, false, lateCallbackIgnored.get(), actionable);
 
-                        String fallbackModelName = routingService.getModelName(fallbackCandidate);
-                        String fallbackProvider = routingService.getModelProvider(fallbackCandidate);
                         log.warn("[ForceTextOnly] Finalizer attempt 1 ({}) hit rate limit before first token. Escalating to fallback text model: {} ({})",
-                                currentModelName, fallbackModelName, fallbackProvider);
+                                currentModelName, nextFallback.modelName(), nextFallback.provider());
 
+                        if (tracker != null) {
+                            tracker.recordCall(nextFallback.candidate(), 1, -1, TurnAttemptTracker.CallKind.FAILOVER_FINALIZER);
+                        }
+                        sseTransport.safeSend(emitter, "model", nextFallback.modelName(), null);
                         activeAttempt.set(2);
                         executeFinalizerAttempt(
-                                2, fallbackCandidate, fallbackModelName, fallbackProvider, request,
-                                activeAttempt, terminalFinalized, emitter, emitterCompleted,
+                                2, nextFallback.model(), nextFallback.modelName(), nextFallback.provider(),
+                                nextFallback.candidate(), tracker, request,
+                                activeAttempt, terminalFinalized, externalTurnDeadlineActive, onTurnCompleted,
+                                emitter, emitterCompleted,
                                 session, sessionId, userId, userInput, systemPrompt, startTime,
                                 clientMessageId, clientDisconnected, generatingMarked,
                                 toolCallSummaries, toolNames);
@@ -349,6 +502,12 @@ public class TimeoutFallbackHandler {
                             attempt, sessionId, error != null ? error.getMessage() : "null");
 
                     if (terminalFinalized.compareAndSet(false, true)) {
+                        if (onTurnCompleted != null) {
+                            onTurnCompleted.run();
+                        }
+                        if (hadTokens) {
+                            sseTransport.safeSend(emitter, "reset_stream", Map.of("reason", "finalizer_error"), MediaType.APPLICATION_JSON);
+                        }
                         String timeoutFallback = buildTextOnlyTimeoutResponse(toolCallSummaries);
                         finalizeForceTextOnlyResponse(emitter, session, sessionId, userId, userInput, systemPrompt,
                                 currentModelName, startTime, clientMessageId, clientDisconnected, toolCallSummaries, toolNames,
@@ -359,31 +518,36 @@ public class TimeoutFallbackHandler {
             });
         } catch (Exception ex) {
             timeoutFuture.cancel(true);
-            if (!attemptClosed.compareAndSet(false, true) || attempt != activeAttempt.get()) {
+            if (deadlineFuture != null) deadlineFuture.cancel(false);
+            if (terminalFinalized.get() || !attemptClosed.compareAndSet(false, true) || attempt != activeAttempt.get()) {
                 return;
             }
             long elapsedMs = System.currentTimeMillis() - stageStartedAt;
             Throwable actionable = unwrapActionableException(ex);
 
             boolean canFallback = (attempt == 1) && isRateLimitError(ex);
-            StreamingChatModel fallbackCandidate = canFallback && routingService != null
-                    ? routingService.getNextStreamingFallback(currentModel)
-                    : currentModel;
+            FinalizerFallback nextFallback = canFallback
+                    ? resolveFinalizerFallback(currentModel, currentCandidate, ex, tracker)
+                    : null;
 
-            if (canFallback && fallbackCandidate != null && fallbackCandidate != currentModel) {
+            if (nextFallback != null && !terminalFinalized.get()) {
                 FinalizerTerminalCause cause = FinalizerTerminalCause.FINALIZER_SYNC_START_FAILURE;
                 recordAttempt(sessionId, clientMessageId, 1, currentProvider, currentModelName, elapsedMs, null,
                         cause, partialChars.get(), false, false, lateCallbackIgnored.get(), actionable);
 
-                String fallbackModelName = routingService.getModelName(fallbackCandidate);
-                String fallbackProvider = routingService.getModelProvider(fallbackCandidate);
                 log.warn("[ForceTextOnly] Finalizer attempt 1 ({}) hit synchronous rate limit. Escalating to fallback text model: {} ({})",
-                        currentModelName, fallbackModelName, fallbackProvider);
+                        currentModelName, nextFallback.modelName(), nextFallback.provider());
 
+                if (tracker != null) {
+                    tracker.recordCall(nextFallback.candidate(), 1, -1, TurnAttemptTracker.CallKind.FAILOVER_FINALIZER);
+                }
+                sseTransport.safeSend(emitter, "model", nextFallback.modelName(), null);
                 activeAttempt.set(2);
                 executeFinalizerAttempt(
-                        2, fallbackCandidate, fallbackModelName, fallbackProvider, request,
-                        activeAttempt, terminalFinalized, emitter, emitterCompleted,
+                        2, nextFallback.model(), nextFallback.modelName(), nextFallback.provider(),
+                        nextFallback.candidate(), tracker, request,
+                        activeAttempt, terminalFinalized, externalTurnDeadlineActive, onTurnCompleted,
+                        emitter, emitterCompleted,
                         session, sessionId, userId, userInput, systemPrompt, startTime,
                         clientMessageId, clientDisconnected, generatingMarked,
                         toolCallSummaries, toolNames);
@@ -400,6 +564,9 @@ public class TimeoutFallbackHandler {
                     attempt, sessionId, ex.getMessage());
 
             if (terminalFinalized.compareAndSet(false, true)) {
+                if (onTurnCompleted != null) {
+                    onTurnCompleted.run();
+                }
                 String timeoutFallback = buildTextOnlyTimeoutResponse(toolCallSummaries);
                 finalizeForceTextOnlyResponse(emitter, session, sessionId, userId, userInput, systemPrompt,
                         currentModelName, startTime, clientMessageId, clientDisconnected, toolCallSummaries, toolNames,
@@ -407,6 +574,39 @@ public class TimeoutFallbackHandler {
                 sseTransport.safeComplete(emitter, emitterCompleted);
             }
         }
+    }
+
+    private record FinalizerFallback(StreamingChatModel model, String modelName, String provider, ModelCandidate candidate) {}
+
+    private FinalizerFallback resolveFinalizerFallback(
+            StreamingChatModel currentModel,
+            ModelCandidate currentCandidate,
+            Throwable error,
+            TurnAttemptTracker tracker) {
+        if (routingService == null) {
+            return null;
+        }
+        if (tracker != null) {
+            ModelFailureClassifier.Failure failure = ModelFailureClassifier.classify(error, false, false);
+            TurnAttemptTracker.Decision decision = tracker.onFailure(currentCandidate, failure, false);
+            if (decision instanceof TurnAttemptTracker.SwitchTo switchTo) {
+                ModelCandidate next = switchTo.candidate();
+                StreamingChatModel nextModel = routingService.resolveCandidateModel(next, "text");
+                if (nextModel != null && nextModel != currentModel) {
+                    return new FinalizerFallback(nextModel, next.model(), next.provider(), next);
+                }
+            }
+            return null;
+        }
+        StreamingChatModel fallbackCandidate = routingService.getNextStreamingFallback(currentModel);
+        if (fallbackCandidate != null && fallbackCandidate != currentModel) {
+            String fbName = routingService.getModelName(fallbackCandidate);
+            String fbProvider = routingService.getModelProvider(fallbackCandidate);
+            return new FinalizerFallback(
+                    fallbackCandidate, fbName, fbProvider,
+                    new ModelCandidate(fbProvider, fbName, false, ModelCandidate.Source.DEFAULT_CHAIN));
+        }
+        return null;
     }
 
     private Throwable unwrapActionableException(Throwable error) {
@@ -425,23 +625,7 @@ public class TimeoutFallbackHandler {
     }
 
     private boolean isRateLimitError(Throwable error) {
-        Throwable current = error;
-        java.util.Set<Throwable> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
-        while (current != null && seen.add(current)) {
-            String className = current.getClass().getName();
-            if (className.endsWith("RateLimitException")) {
-                return true;
-            }
-            String msg = current.getMessage();
-            if (msg != null) {
-                String lower = msg.toLowerCase(java.util.Locale.ROOT);
-                if (lower.contains("429") || lower.contains("rate limit") || lower.contains("rate_limit")) {
-                    return true;
-                }
-            }
-            current = current.getCause();
-        }
-        return false;
+        return ModelFailureClassifier.isRateLimitError(error);
     }
 
     private void recordAttempt(

@@ -11,5 +11,20 @@ public record RecommendAndAssignResult(
         String reason,
         AutoAssignmentResponse recommendation,
         TaskAssignmentResultDto assignment,
-        String message) {
+        String message,
+        String decisionId
+) {
+    public RecommendAndAssignResult(
+            boolean assigned,
+            Long taskId,
+            Long projectId,
+            Long selectedMemberId,
+            String selectedMemberName,
+            String reason,
+            AutoAssignmentResponse recommendation,
+            TaskAssignmentResultDto assignment,
+            String message) {
+        this(assigned, taskId, projectId, selectedMemberId, selectedMemberName, reason,
+                recommendation, assignment, message, null);
+    }
 }

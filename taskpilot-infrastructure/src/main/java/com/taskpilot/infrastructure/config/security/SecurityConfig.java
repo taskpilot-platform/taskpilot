@@ -1,7 +1,6 @@
 package com.taskpilot.infrastructure.config.security;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -18,8 +17,6 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.AuthenticationFailureHandler;
 import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
@@ -35,8 +32,7 @@ import java.util.List;
 @EnableWebSecurity
 @EnableMethodSecurity
 public class SecurityConfig {
-        @Value("${FE_ORIGIN:${app.cors.allowed-origins:http://localhost:5173}}")
-        private String feOrigin;
+        private final CorsOriginProperties corsOriginProperties;
         private final JwtAuthenticationFilter jwtAuthFilter;
 
         @Autowired(required = false)
@@ -53,11 +49,6 @@ public class SecurityConfig {
                         .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
         @Bean
-        public PasswordEncoder passwordEncoder() {
-                return new BCryptPasswordEncoder();
-        }
-
-        @Bean
         public SecurityFilterChain filterChain(HttpSecurity http)
                         throws Exception {
                 http.cors(cors -> cors.configurationSource(corsConfigurationSource()))
@@ -68,12 +59,18 @@ public class SecurityConfig {
                                                 .dispatcherTypeMatchers(DispatcherType.ASYNC)
                                                 .permitAll()
                                                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                                                .requestMatchers(HttpMethod.POST, "/api/v1/integrations/livekit/room-events").permitAll()
                                                 .requestMatchers("/actuator/health").permitAll()
                                                 .requestMatchers("/actuator/**").hasRole("ADMIN")
                                                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                                                 .requestMatchers("/api/v1/auth/logout").authenticated()
                                                 .requestMatchers(
                                                                 "/api/v1/auth/register",
+                                                                "/api/v1/auth/verify-email",
+                                                                "/api/v1/auth/verify-email/resend",
+                                                                "/api/v1/auth/password-setup/complete",
+                                                                "/api/v1/auth/restore/confirm",
+                                                                "/api/v1/auth/restore/cancel",
                                                                 "/api/v1/auth/login",
                                                                 "/api/v1/auth/refresh",
                                                                 "/api/v1/auth/forgot-password",
@@ -129,16 +126,23 @@ public class SecurityConfig {
         @Bean
         public CorsConfigurationSource corsConfigurationSource() {
                 CorsConfiguration configuration = new CorsConfiguration();
-                configuration.setAllowedOriginPatterns(List.of("*"));
+                configuration.setAllowedOrigins(corsOriginProperties.getAllowedOrigins());
                 configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-                configuration.setAllowedHeaders(List.of("*"));
+                configuration.setAllowedHeaders(List.of(
+                                "Authorization",
+                                "Content-Type",
+                                "Accept",
+                                "Origin",
+                                "X-Requested-With",
+                                "Cache-Control",
+                                "Idempotency-Key"));
                 configuration.setExposedHeaders(List.of(
                                 "Authorization",
                                 // Range streaming headers
                                 "Accept-Ranges", "Content-Range", "Content-Length", "Content-Disposition",
                                 // SSE required headers
                                 "Cache-Control", "Content-Type", "X-Accel-Buffering"));
-                configuration.setAllowCredentials(true);
+                configuration.setAllowCredentials(false);
                 configuration.setMaxAge(3600L);
 
                 UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

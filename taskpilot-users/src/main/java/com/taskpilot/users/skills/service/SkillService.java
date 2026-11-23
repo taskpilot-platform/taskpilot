@@ -1,5 +1,6 @@
 package com.taskpilot.users.skills.service;
 
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.users.common.entity.SkillEntity;
 import com.taskpilot.users.common.entity.UserEntity;
@@ -32,8 +33,8 @@ public class SkillService {
     private final UserSkillRepository userSkillRepository;
 
     private UserEntity getCurrentUser() {
-        String email = SecurityContextHolder.getContext().getAuthentication().getName();
-        return userRepository.findByEmail(email)
+        long userId = CurrentActorResolver.userId(SecurityContextHolder.getContext().getAuthentication());
+        return userRepository.findById(userId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
     }
 

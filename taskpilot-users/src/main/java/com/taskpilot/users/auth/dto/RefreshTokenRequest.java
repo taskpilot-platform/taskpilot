@@ -3,6 +3,15 @@ package com.taskpilot.users.auth.dto;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 
+/**
+ * Request body for refresh and logout endpoints carrying an opaque refresh token.
+ */
 public record RefreshTokenRequest(
-                @NotBlank(message = "Refresh token is required") @Pattern(regexp = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$", message = "Refresh token format is invalid") String refreshToken) {
+        @NotBlank(message = "Refresh token is required")
+        @Pattern(
+                regexp = "^[A-Za-z0-9._-]{16,256}$",
+                message = "Refresh token format is invalid"
+        )
+        String refreshToken
+) {
 }

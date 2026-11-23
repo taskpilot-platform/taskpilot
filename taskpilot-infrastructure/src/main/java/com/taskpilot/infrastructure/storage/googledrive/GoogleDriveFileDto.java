@@ -5,6 +5,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.Instant;
+
 @Data
 @Builder
 @NoArgsConstructor
@@ -15,6 +17,7 @@ public class GoogleDriveFileDto {
     private String mimeType;
     private Long size;
     private String md5Checksum;
+    private Instant modifiedTime;
     private String webViewLink;
     private String webContentLink;
 }

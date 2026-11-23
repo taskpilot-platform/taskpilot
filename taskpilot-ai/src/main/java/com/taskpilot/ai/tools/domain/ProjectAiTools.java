@@ -380,16 +380,18 @@ public class ProjectAiTools {
         log.info("[AiTool] deleteProject called for project {}", projectId);
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
+        UUID requestId = UUID.randomUUID();
 
         return pendingAiActionService.create(
                 userId,
                 sessionId,
                 "deleteProject",
                 "Permanently delete project ID " + projectId,
-                args("projectId", projectId),
+                args("projectId", projectId, "confirmationText", String.valueOf(projectId),
+                        "requestId", requestId.toString()),
                 null,
                 () -> {
-                    projectInsightsPort.deleteProject(projectId, userId);
+                    projectInsightsPort.deleteProject(projectId, String.valueOf(projectId), requestId, userId);
                     return "Project deleted successfully";
                 });
     }

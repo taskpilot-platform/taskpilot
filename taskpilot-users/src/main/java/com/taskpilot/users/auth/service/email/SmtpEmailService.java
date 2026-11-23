@@ -20,8 +20,53 @@ public class SmtpEmailService implements EmailService {
    @Value("${application.security.password-reset.frontend-reset-url:http://localhost:5173/reset-password}")
    private String frontendResetUrl;
 
+   @Value("${application.security.password-reset.frontend-verify-url:http://localhost:5173/verify-email}")
+   private String frontendVerifyUrl;
+
+   @Value("${application.security.password-reset.frontend-setup-url:http://localhost:5173/setup-password}")
+   private String frontendSetupUrl;
+
    @Value("${application.mail.from:no-reply@taskpilot.local}")
    private String fromEmail;
+
+   @Override
+   public void sendEmailVerificationEmail(String recipientEmail, String verifyToken, long expirationMs) {
+      String link = frontendVerifyUrl + "?token=" + verifyToken;
+      String expirationText = PasswordResetExpirationFormatter.toMinutesText(expirationMs);
+      sendSimpleActionMail(
+              recipientEmail,
+              "Verify Your TaskPilot Email",
+              "Use the link below to verify your email and set your account password:\n" + link
+                      + "\n\nThis link expires in " + expirationText + ".",
+              buildResetPasswordEmailHtml(link, expirationText));
+   }
+
+   @Override
+   public void sendPasswordSetupEmail(String recipientEmail, String setupToken, long expirationMs) {
+      String link = frontendSetupUrl + "?token=" + setupToken;
+      String expirationText = PasswordResetExpirationFormatter.toMinutesText(expirationMs);
+      sendSimpleActionMail(
+              recipientEmail,
+              "Set Up Your TaskPilot Password",
+              "Use the link below to set a password for your TaskPilot account:\n" + link
+                      + "\n\nThis link expires in " + expirationText + ".",
+              buildResetPasswordEmailHtml(link, expirationText));
+   }
+
+   private void sendSimpleActionMail(String recipientEmail, String subject, String plainText, String htmlContent) {
+      try {
+         MimeMessage mimeMessage = mailSender.createMimeMessage();
+         MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true, "UTF-8");
+         helper.setFrom(fromEmail);
+         helper.setTo(recipientEmail);
+         helper.setSubject(subject);
+         helper.setText(plainText, htmlContent);
+         mailSender.send(mimeMessage);
+         log.info("Security email '{}' sent successfully to: {}", subject, recipientEmail);
+      } catch (Exception e) {
+         log.error("Failed to send security email '{}' to {}. Error: {}", subject, recipientEmail, e.getMessage(), e);
+      }
+   }
 
    @Override
    public void sendPasswordResetEmail(String recipientEmail, String resetToken, long expirationMs) {

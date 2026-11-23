@@ -1,6 +1,5 @@
 package com.taskpilot.users.auth.service;
 
-import com.taskpilot.infrastructure.config.security.JwtService;
 import com.taskpilot.infrastructure.config.security.oauth2.OAuth2OneTimeCodeStore;
 import com.taskpilot.infrastructure.config.security.oauth2.OAuth2Properties;
 import com.taskpilot.infrastructure.exception.BusinessException;
@@ -9,6 +8,7 @@ import com.taskpilot.users.auth.dto.LoginRequest;
 import com.taskpilot.users.auth.dto.RegisterRequest;
 import com.taskpilot.users.auth.service.email.EmailService;
 import com.taskpilot.users.common.entity.UserEntity;
+import com.taskpilot.users.common.enums.AccountLifecycle;
 import com.taskpilot.users.common.repository.PasswordResetTokenRepository;
 import com.taskpilot.users.common.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,8 +30,7 @@ class AuthServiceRecoveryTest {
     @Mock UserRepository users;
     @Mock PasswordResetTokenRepository resets;
     @Mock PasswordEncoder passwords;
-    @Mock JwtService jwt;
-    @Mock RefreshTokenService refresh;
+    @Mock UserSessionService userSessionService;
     @Mock EmailService mail;
     @Mock PasswordResetThrottleService throttle;
     @Mock OAuth2OneTimeCodeStore codes;
@@ -39,18 +38,26 @@ class AuthServiceRecoveryTest {
 
     @BeforeEach
     void setUp() {
-        service = new AuthService(users, resets, passwords, jwt, refresh, mail, throttle,
+        service = new AuthService(users, resets, passwords, userSessionService, mail, throttle,
                 codes, new OAuth2Properties());
     }
 
     @Test
     void registrationChecksCanonicalEmailAndStoresCanonicalValue() {
-        when(passwords.encode("password123")).thenReturn("hash");
+        when(users.save(any(UserEntity.class))).thenAnswer(call -> {
+            UserEntity u = call.getArgument(0);
+            u.setId(1L);
+            return u;
+        });
+        when(resets.saveAndFlush(any())).thenAnswer(call -> call.getArgument(0));
         service.register(new RegisterRequest(" Person@Example.Test ", "password123", "Test"));
         verify(users).existsByEmailIgnoreCase("person@example.test");
         var captor = ArgumentCaptor.forClass(UserEntity.class);
         verify(users).save(captor.capture());
         assertThat(captor.getValue().getEmail()).isEqualTo("person@example.test");
+        assertThat(captor.getValue().getAccountState()).isEqualTo(AccountLifecycle.PENDING_EMAIL);
+        assertThat(captor.getValue().getEmailVerified()).isFalse();
+        verify(mail).sendEmailVerificationEmail(eq("person@example.test"), anyString(), anyLong());
     }
 
     @Test
@@ -67,7 +74,12 @@ class AuthServiceRecoveryTest {
         Locale original = Locale.getDefault();
         try {
             Locale.setDefault(Locale.forLanguageTag("tr-TR"));
-            when(passwords.encode("password123")).thenReturn("hash");
+            when(users.save(any(UserEntity.class))).thenAnswer(call -> {
+                UserEntity u = call.getArgument(0);
+                u.setId(2L);
+                return u;
+            });
+            when(resets.saveAndFlush(any())).thenAnswer(call -> call.getArgument(0));
             service.register(new RegisterRequest("I@Example.Test", "password123", "Test"));
             verify(users).existsByEmailIgnoreCase("i@example.test");
         } finally {

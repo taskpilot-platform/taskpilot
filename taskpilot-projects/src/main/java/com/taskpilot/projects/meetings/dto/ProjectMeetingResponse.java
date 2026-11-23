@@ -6,7 +6,7 @@ import lombok.Builder;
 
 import java.time.Instant;
 
-@Builder
+@Builder(toBuilder = true)
 public record ProjectMeetingResponse(
         Long id,
         Long projectId,
@@ -30,6 +30,36 @@ public record ProjectMeetingResponse(
         Long durationSeconds,
         long activeParticipantsCount,
         long totalParticipantsCount,
-        boolean isHost
+        boolean isHost,
+        Long completedRecordingFileId
 ) {
+    public ProjectMeetingResponse(
+            Long id,
+            Long projectId,
+            Long hostId,
+            String hostName,
+            String hostAvatarUrl,
+            String title,
+            String description,
+            String roomName,
+            ProjectMeetingStatus status,
+            Boolean recordingEnabled,
+            Long recordingFileId,
+            String egressId,
+            MeetingRecordingStatus recordingStatus,
+            String recordingError,
+            Boolean backupStorageUsed,
+            Instant scheduledStartTime,
+            Instant scheduledEndTime,
+            Instant startedAt,
+            Instant endedAt,
+            Long durationSeconds,
+            long activeParticipantsCount,
+            long totalParticipantsCount,
+            boolean isHost) {
+        this(id, projectId, hostId, hostName, hostAvatarUrl, title, description, roomName, status,
+                recordingEnabled, recordingFileId, egressId, recordingStatus, recordingError, backupStorageUsed,
+                scheduledStartTime, scheduledEndTime, startedAt, endedAt, durationSeconds,
+                activeParticipantsCount, totalParticipantsCount, isHost, null);
+    }
 }

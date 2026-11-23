@@ -1,4 +1,13 @@
 package com.taskpilot.projects.tasks.dto;
 
-public record UpdateTaskSprintRequest(Long sprintId) {
+import java.util.UUID;
+
+public record UpdateTaskSprintRequest(
+        Long sprintId,
+        Long expectedTaskVersion,
+        UUID requestId
+) {
+    public UpdateTaskSprintRequest(Long sprintId) {
+        this(sprintId, null, null);
+    }
 }

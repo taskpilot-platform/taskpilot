@@ -1,7 +1,9 @@
 package com.taskpilot.projects.tasks.controller;
 
+import java.io.IOException;
 import java.util.List;
 
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
@@ -17,8 +19,11 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import com.taskpilot.contracts.user.dto.RealtimeAccessContext;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
 import com.taskpilot.infrastructure.dto.ApiResponse;
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
+import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.tasks.dto.CreateTaskCommentRequest;
 import com.taskpilot.projects.tasks.dto.TaskCommentDto;
 import com.taskpilot.projects.tasks.dto.UpdateTaskCommentRequest;
@@ -39,7 +44,7 @@ public class TaskCommentController {
             @PathVariable Long taskId,
             Authentication authentication) {
         return ApiResponse.ok("Task comments retrieved successfully",
-                taskCommentService.getComments(taskId, authentication.getName()));
+                taskCommentService.getComments(taskId, CurrentActorResolver.userId(authentication)));
     }
 
     @PostMapping
@@ -49,7 +54,7 @@ public class TaskCommentController {
             @Valid @RequestBody CreateTaskCommentRequest request,
             Authentication authentication) {
         return ApiResponse.created("Task comment created successfully",
-                taskCommentService.createComment(taskId, request, authentication.getName()));
+                taskCommentService.createComment(taskId, request, CurrentActorResolver.userId(authentication)));
     }
 
     @PutMapping("/{commentId}")
@@ -59,7 +64,7 @@ public class TaskCommentController {
             @Valid @RequestBody UpdateTaskCommentRequest request,
             Authentication authentication) {
         return ApiResponse.ok("Task comment updated successfully",
-                taskCommentService.updateComment(taskId, commentId, request, authentication.getName()));
+                taskCommentService.updateComment(taskId, commentId, request, CurrentActorResolver.userId(authentication)));
     }
 
     @DeleteMapping("/{commentId}")
@@ -68,14 +73,43 @@ public class TaskCommentController {
             @PathVariable Long commentId,
             Authentication authentication) {
         return ApiResponse.ok("Task comment deleted successfully",
-                taskCommentService.deleteComment(taskId, commentId, authentication.getName()));
+                taskCommentService.deleteComment(taskId, commentId, CurrentActorResolver.userId(authentication)));
     }
 
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamComments(
             @PathVariable Long taskId,
-            Authentication authentication) {
-        return taskCommentService.streamComments(taskId, authentication.getName());
+            Authentication authentication,
+            HttpServletResponse response) throws IOException {
+        try {
+            RealtimeAccessContext context = CurrentActorResolver.extractRealtimeContext(authentication)
+                    .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(),
+                            "Authenticated realtime session required"));
+            return taskCommentService.streamComments(taskId, context);
+        } catch (BusinessException ex) {
+            writeSseError(response, ex);
+            return null;
+        }
+    }
+
+    private static void writeSseError(HttpServletResponse response, BusinessException ex) throws IOException {
+        if (response.isCommitted()) {
+            return;
+        }
+        int status = ex.getStatus();
+        response.setStatus(status);
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.getWriter().write("{\"status\":" + status + ",\"message\":\"" + safeSseErrorMessage(status) + "\"}");
+        response.getWriter().flush();
+    }
+
+    private static String safeSseErrorMessage(int status) {
+        return switch (status) {
+            case 401 -> "Unauthorized";
+            case 403 -> "Access denied";
+            case 404 -> "Resource not found";
+            default -> "Request rejected";
+        };
     }
 
     @GetMapping("/mention-candidates")
@@ -84,6 +118,6 @@ public class TaskCommentController {
             @RequestParam(required = false) String keyword,
             Authentication authentication) {
         return ApiResponse.ok("Mention candidates retrieved successfully",
-                taskCommentService.getMentionCandidates(taskId, keyword, authentication.getName()));
+                taskCommentService.getMentionCandidates(taskId, keyword, CurrentActorResolver.userId(authentication)));
     }
 }

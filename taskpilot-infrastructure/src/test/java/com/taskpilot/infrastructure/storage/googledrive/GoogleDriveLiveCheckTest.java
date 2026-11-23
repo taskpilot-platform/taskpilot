@@ -20,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-@Tag("live")
+@Tag("provider-live")
 @EnabledIfEnvironmentVariable(named = "GOOGLE_DRIVE_LIVE_TEST", matches = "true")
 public class GoogleDriveLiveCheckTest {
 

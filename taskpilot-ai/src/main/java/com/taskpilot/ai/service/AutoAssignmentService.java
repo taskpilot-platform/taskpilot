@@ -3,12 +3,20 @@ package com.taskpilot.ai.service;
 import com.taskpilot.ai.assignment.port.out.AiAuditPort;
 import com.taskpilot.ai.dto.AutoAssignmentResponse;
 import com.taskpilot.ai.dto.CandidateScore;
+import com.taskpilot.ai.dto.InternalCandidateRanking;
+import com.taskpilot.ai.dto.MetricDataStatus;
+import com.taskpilot.ai.dto.RecommendationDifferentiationStatus;
+import com.taskpilot.ai.dto.RecommendationRequestSource;
 import com.taskpilot.ai.entity.AiLogEntity;
+import com.taskpilot.ai.entity.RecommendationSnapshotEntity;
 import com.taskpilot.ai.heuristic.HeuristicStrategy;
+import com.taskpilot.ai.heuristic.HeuristicNormalization;
+import com.taskpilot.contracts.aiquery.port.out.TaskCommandPort;
+import com.taskpilot.contracts.assignment.dto.TaskAssignmentContextDto;
+import com.taskpilot.contracts.assignment.dto.TaskAssignmentMetrics;
+import com.taskpilot.contracts.assignment.port.out.TaskPerformanceReadPort;
 import com.taskpilot.ai.heuristic.HeuristicStrategyFactory;
 import com.taskpilot.ai.heuristic.NormalizedScores;
-import com.taskpilot.ai.heuristic.RawScores;
-import com.taskpilot.ai.heuristic.ScoreRanges;
 import com.taskpilot.contracts.assignment.dto.ProjectMemberDto;
 import com.taskpilot.contracts.assignment.dto.UserProfileDto;
 import com.taskpilot.contracts.assignment.dto.UserSkillDto;
@@ -22,12 +30,10 @@ import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -44,9 +50,10 @@ import org.springframework.beans.factory.annotation.Value;
 public class AutoAssignmentService {
     public static final long DEFAULT_EXPLANATION_TIMEOUT_MS = 5000L;
     public static final String DEFAULT_FALLBACK_EXPLANATION =
-            "Đề xuất tự động dựa trên phân tích đa tiêu chí AHP, bao gồm mức độ phù hợp kỹ năng, khối lượng công việc và hiệu suất lịch sử. Vui lòng tham khảo điểm số chi tiết của các ứng viên ở trên.";
+            "Ranking uses declared skills, active tasks in this project, and independently reviewed work. Quality uses a neutral value when no reviewed evidence is available.";
 
     private final ProjectMemberPort projectMemberPort;
+    private final TaskPerformanceReadPort taskPerformanceReadPort;
     private final UserSkillPort userSkillPort;
     private final AiAuditPort aiAuditPort;
     private final UserPort userPort;
@@ -55,10 +62,28 @@ public class AutoAssignmentService {
     private final StreamingChatModel explanationModel;
     private final long explanationTimeoutMs;
     private final String explanationModelName;
+    private RecommendationSnapshotService recommendationSnapshotService;
+    private TaskCommandPort taskCommandPort;
+    private boolean telemetryEnabled = true;
+
+    @Autowired(required = false)
+    void setAdaptiveTelemetryDependencies(
+            @Autowired(required = false) RecommendationSnapshotService recommendationSnapshotService,
+            @Autowired(required = false) TaskCommandPort taskCommandPort,
+            @Value("${ai.adaptive.telemetry-enabled:true}") boolean telemetryEnabled) {
+        this.recommendationSnapshotService = recommendationSnapshotService;
+        this.taskCommandPort = taskCommandPort;
+        this.telemetryEnabled = telemetryEnabled;
+    }
+
+    public void setTelemetryEnabled(boolean telemetryEnabled) {
+        this.telemetryEnabled = telemetryEnabled;
+    }
 
     @Autowired
     public AutoAssignmentService(
             ProjectMemberPort projectMemberPort,
+            TaskPerformanceReadPort taskPerformanceReadPort,
             UserSkillPort userSkillPort,
             AiAuditPort aiAuditPort,
             UserPort userPort,
@@ -68,6 +93,7 @@ public class AutoAssignmentService {
             @Value("${ai.assignment.explanation-timeout-ms:5000}") long explanationTimeoutMs,
             @Value("${ai.gemini.model-name:gemini-3.5-flash}") String explanationModelName) {
         this.projectMemberPort = projectMemberPort;
+        this.taskPerformanceReadPort = taskPerformanceReadPort;
         this.userSkillPort = userSkillPort;
         this.aiAuditPort = aiAuditPort;
         this.userPort = userPort;
@@ -81,18 +107,20 @@ public class AutoAssignmentService {
 
     public AutoAssignmentService(
             ProjectMemberPort projectMemberPort,
+            TaskPerformanceReadPort taskPerformanceReadPort,
             UserSkillPort userSkillPort,
             AiAuditPort aiAuditPort,
             UserPort userPort,
             ProjectPort projectPort,
             HeuristicStrategyFactory heuristicStrategyFactory,
             StreamingChatModel explanationModel) {
-        this(projectMemberPort, userSkillPort, aiAuditPort, userPort, projectPort,
+        this(projectMemberPort, taskPerformanceReadPort, userSkillPort, aiAuditPort, userPort, projectPort,
                 heuristicStrategyFactory, explanationModel, DEFAULT_EXPLANATION_TIMEOUT_MS, "gemini-3.5-flash");
     }
 
     public AutoAssignmentService(
             ProjectMemberPort projectMemberPort,
+            TaskPerformanceReadPort taskPerformanceReadPort,
             UserSkillPort userSkillPort,
             AiAuditPort aiAuditPort,
             UserPort userPort,
@@ -100,39 +128,29 @@ public class AutoAssignmentService {
             HeuristicStrategyFactory heuristicStrategyFactory,
             StreamingChatModel explanationModel,
             long explanationTimeoutMs) {
-        this(projectMemberPort, userSkillPort, aiAuditPort, userPort, projectPort,
+        this(projectMemberPort, taskPerformanceReadPort, userSkillPort, aiAuditPort, userPort, projectPort,
                 heuristicStrategyFactory, explanationModel, explanationTimeoutMs, "gemini-3.5-flash");
     }
 
-    private static final int PERFORMANCE_WINDOW_SIZE = 3;
-    private static final double NEUTRAL_PERFORMANCE_PRIOR = 0.5;
-    private static final double[] DECAY_WEIGHTS = new double[] { 0.5, 0.3, 0.2 };
-
-    @Transactional(readOnly = true)
     public AutoAssignmentResponse recommend(Long projectId, List<String> requiredSkills,
             int taskDifficulty, Long requestingUserId) {
-        AutoAssignmentResponse base = recommendCandidates(projectId, requiredSkills, taskDifficulty, requestingUserId);
-
-        if (base.candidates() == null || base.candidates().isEmpty()) {
-            return base;
-        }
-
-        List<CandidateScore> top3 = base.candidates().stream().limit(3).toList();
-        String explanation = generateExplanation(top3, base.requiredSkills(), taskDifficulty,
-                requestingUserId, projectId);
-
-        saveAutoAssignLog(requestingUserId, projectId, base.requiredSkills(), base.candidates(),
-                explanation);
-
-        return AutoAssignmentResponse.builder()
-                .projectId(projectId)
-                .requiredSkills(base.requiredSkills())
-                .candidates(base.candidates())
-                .aiExplanation(explanation)
-                .build();
+        return recommend(projectId, null, requiredSkills, taskDifficulty, requestingUserId);
     }
 
-    @Transactional(readOnly = true)
+    public AutoAssignmentResponse recommend(Long projectId, Long taskId, List<String> requiredSkills,
+            int taskDifficulty, Long requestingUserId) {
+        AutoAssignmentResponse base = recommendCandidates(
+                projectId, taskId, requiredSkills, taskDifficulty, requestingUserId,
+                Set.of(), Set.of(), RecommendationRequestSource.REST_AUTO_ASSIGN);
+        if (base.candidates().isEmpty()) {
+            return base;
+        }
+        String explanation = generateExplanation(base.candidates().stream().limit(3).toList(),
+                base.requiredSkills(), taskDifficulty);
+        saveAutoAssignLog(requestingUserId, projectId, base.requiredSkills(), base.candidates(), explanation);
+        return base.toBuilder().aiExplanation(explanation).build();
+    }
+
     public AutoAssignmentResponse recommendCandidates(Long projectId, List<String> requiredSkills,
             int taskDifficulty, Long requestingUserId) {
         return recommendCandidates(projectId, requiredSkills, taskDifficulty, requestingUserId, Set.of(), Set.of());
@@ -140,133 +158,198 @@ public class AutoAssignmentService {
 
     public AutoAssignmentResponse recommendCandidates(Long projectId, List<String> requiredSkills,
             int taskDifficulty, Long requestingUserId, Set<Long> includeUserIds, Set<Long> excludeUserIds) {
-        List<String> safeRequiredSkills = requiredSkills == null ? Collections.emptyList() : requiredSkills;
-        log.info("[AutoAssign] Starting candidate scoring for project {} with skills: {}", projectId,
-                safeRequiredSkills);
+        return recommendCandidates(projectId, null, requiredSkills, taskDifficulty, requestingUserId,
+                includeUserIds, excludeUserIds, RecommendationRequestSource.AI_TOOL_RECOMMEND);
+    }
 
+    public AutoAssignmentResponse recommendCandidates(
+            Long projectId,
+            Long taskId,
+            List<String> requiredSkills,
+            int taskDifficulty,
+            Long requestingUserId,
+            Set<Long> includeUserIds,
+            Set<Long> excludeUserIds,
+            RecommendationRequestSource requestSource) {
+        if (requestingUserId == null || !projectMemberPort.isProjectMember(projectId, requestingUserId)) {
+            throw new BusinessException(HttpStatus.FORBIDDEN.value(), "You are not a member of this project");
+        }
+        Long capturedTaskVersion = null;
+        Long capturedAssignmentVersion = null;
+        if (taskId != null && taskCommandPort != null) {
+            TaskAssignmentContextDto taskCtx = taskCommandPort.getTaskAssignmentContext(taskId, requestingUserId)
+                    .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found: " + taskId));
+            if (taskCtx.deleted()) {
+                throw new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found: " + taskId);
+            }
+            if (!Objects.equals(taskCtx.projectId(), projectId)) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                        "Task " + taskId + " does not belong to project " + projectId);
+            }
+            capturedTaskVersion = taskCtx.taskVersion();
+            capturedAssignmentVersion = taskCtx.assignmentVersion();
+        }
+        List<String> skills = requiredSkills == null ? List.of() : requiredSkills.stream()
+                .filter(Objects::nonNull).map(String::trim).filter(skill -> !skill.isEmpty())
+                .map(skill -> skill.toLowerCase(Locale.ROOT)).distinct().toList();
         String mode = resolveHeuristicMode(projectId);
         HeuristicStrategy strategy = heuristicStrategyFactory.resolve(mode);
-        List<ProjectMemberDto> members = projectMemberPort.findProjectMembers(projectId);
-        Set<Long> safeIncludeUserIds = includeUserIds == null ? Set.of() : includeUserIds;
-        Set<Long> safeExcludeUserIds = excludeUserIds == null ? Set.of() : excludeUserIds;
-        if (!safeIncludeUserIds.isEmpty() || !safeExcludeUserIds.isEmpty()) {
-            members = members.stream()
-                    .filter(member -> safeIncludeUserIds.isEmpty() || safeIncludeUserIds.contains(member.userId()))
-                    .filter(member -> !safeExcludeUserIds.contains(member.userId()))
+        validateNormalization(strategy, mode);
+
+        Set<Long> included = includeUserIds == null ? Set.of() : includeUserIds;
+        Set<Long> excluded = excludeUserIds == null ? Set.of() : excludeUserIds;
+        Set<Long> candidateIds = projectMemberPort.findProjectMembers(projectId).stream()
+                .map(ProjectMemberDto::userId)
+                .filter(id -> included.isEmpty() || included.contains(id))
+                .filter(id -> !excluded.contains(id))
+                .collect(Collectors.toSet());
+        Map<Long, TaskAssignmentMetrics> metrics = taskPerformanceReadPort.readProjectMetrics(projectId, candidateIds);
+
+        List<RankedCandidate> ranked = metrics.values().stream()
+                .flatMap(metric -> userPort.findById(metric.userId()).stream()
+                        .filter(user -> user.activeAccount() && !isUnavailable(user.status()))
+                        .map(user -> scoreCandidate(user, metric, skills, strategy)))
+                .sorted(Comparator.comparingDouble(RankedCandidate::score).reversed()
+                        .thenComparing(candidate -> candidate.user().id()))
+                .toList();
+        List<CandidateScore> candidates = new ArrayList<>(ranked.size());
+        boolean hasRequirements = !skills.isEmpty();
+        for (int i = 0; i < ranked.size(); i++) {
+            candidates.add(toView(ranked.get(i), i + 1, hasRequirements));
+        }
+        String differentiation = ranked.isEmpty() ? null
+                : ranked.size() > 1 && Double.compare(ranked.get(0).score(), ranked.get(1).score()) == 0
+                        ? "INSUFFICIENT_TO_DIFFERENTIATE" : "DIFFERENTIATED";
+
+        String snapshotId = null;
+        if (telemetryEnabled && recommendationSnapshotService != null) {
+            RecommendationDifferentiationStatus diffStatus = ranked.isEmpty()
+                    ? RecommendationDifferentiationStatus.UNOBSERVED
+                    : RecommendationDifferentiationStatus.valueOf(differentiation);
+            List<InternalCandidateRanking> internalRankings = ranked.stream()
+                    .map(r -> toInternalRanking(r, mode, hasRequirements))
                     .toList();
+            String weightVersion = heuristicStrategyFactory.resolveWeightVersion(mode);
+            String rosterRevision = projectMemberPort.computeProjectRosterRevision(projectId);
+            RecommendationRequestSource effectiveSource = requestSource != null
+                    ? requestSource
+                    : (taskId != null ? RecommendationRequestSource.AI_TOOL_TASK_RECOMMENDATION
+                    : RecommendationRequestSource.AI_TOOL_RECOMMEND);
+            RecommendationSnapshotEntity savedSnapshot = recommendationSnapshotService.createSnapshot(
+                    requestingUserId,
+                    projectId,
+                    taskId,
+                    capturedTaskVersion,
+                    capturedAssignmentVersion,
+                    skills,
+                    mode,
+                    strategy,
+                    weightVersion,
+                    rosterRevision,
+                    diffStatus,
+                    internalRankings,
+                    effectiveSource);
+            snapshotId = savedSnapshot.getSnapshotId();
         }
 
-        if (members.isEmpty()) {
-            return AutoAssignmentResponse.builder().projectId(projectId)
-                    .requiredSkills(safeRequiredSkills)
-                    .candidates(Collections.emptyList())
-                    .aiExplanation("No matching members found in this project.")
-                    .build();
-        }
-
-        List<CandidateScore> scoredCandidates = computeCandidates(
-                members, safeRequiredSkills, strategy, mode);
-
-        if (scoredCandidates.isEmpty()) {
-            return AutoAssignmentResponse.builder().projectId(projectId)
-                    .requiredSkills(safeRequiredSkills)
-                    .candidates(Collections.emptyList())
-                    .aiExplanation("No eligible members are currently available for assignment.")
-                    .build();
-        }
-
-        return AutoAssignmentResponse.builder().projectId(projectId)
-                .requiredSkills(safeRequiredSkills)
-                .candidates(scoredCandidates)
-                .aiExplanation(null)
+        return AutoAssignmentResponse.builder()
+                .projectId(projectId).requiredSkills(skills).candidates(List.copyOf(candidates))
+                .heuristicMode(mode).presentationContractVersion("allowlisted-view-v3")
+                .scoringModelVersion(NormalizedScores.PROJECT_RANKING_VERSION).differentiationStatus(differentiation)
+                .snapshotId(snapshotId).taskId(taskId)
+                .taskVersion(snapshotId == null ? null : capturedTaskVersion)
+                .aiExplanation(ranked.isEmpty() ? "No eligible members are currently available for assignment." : null)
                 .build();
     }
 
-    private List<CandidateScore> computeCandidates(
-            List<ProjectMemberDto> members,
-            List<String> requiredSkills,
-            HeuristicStrategy strategy,
-            String mode) {
-        List<RawCandidate> rawCandidates = members.stream()
-                .map(member -> userPort.findById(member.userId())
-                        .map(user -> buildRawCandidate(user, member.performanceScore(), requiredSkills))
-                        .orElse(null))
-                .filter(java.util.Objects::nonNull)
-                .toList();
-
-        if (rawCandidates.isEmpty()) {
-            return Collections.emptyList();
-        }
-
-        List<RawScores> rawScores = rawCandidates.stream().map(RawCandidate::rawScores).toList();
-        ScoreRanges ranges = ScoreRanges.from(rawScores);
-
-        return rawCandidates.stream()
-                .map(raw -> buildCandidateScore(raw, strategy, ranges, mode))
-                .sorted(Comparator.comparingDouble(CandidateScore::getTotalScore).reversed())
-                .collect(Collectors.toList());
-    }
-
-    private RawCandidate buildRawCandidate(UserProfileDto user, double projectPerformancePrior,
-            List<String> requiredSkills) {
-        if (isUnavailable(user.status())) {
-            return null;
-        }
-
-        List<UserSkillDto> userSkills = userSkillPort.findByUserIdWithSkill(user.id());
-
-        double fitScore = calculateFitScore(userSkills, requiredSkills);
-        int workload = user.currentWorkload();
-        double loadScore = normalizeLoad(workload);
-        PerformanceSnapshot performanceSnapshot = calculateTimeDecayPerformanceScore(user.id(),
-                projectPerformancePrior);
-
-        return new RawCandidate(user, new RawScores(fitScore, loadScore, performanceSnapshot.performanceScore()),
-                performanceSnapshot.confidence(), workload);
-    }
-
-    private CandidateScore buildCandidateScore(RawCandidate raw,
-            HeuristicStrategy strategy,
-            ScoreRanges ranges,
-            String mode) {
-        NormalizedScores normalized = strategy.normalize(raw.rawScores(), ranges);
-        double totalScore = strategy.score(normalized);
-
-        double roundedFit = round2(normalized.fit());
-        double roundedLoad = round2(normalized.load());
-        double roundedPerf = round2(normalized.performance());
-
-        return CandidateScore.builder()
-                .userId(raw.user().id())
-                .fullName(raw.user().fullName())
-                .email(raw.user().email())
-                .fitScore(roundedFit)
-                .loadScore(roundedLoad)
-                .performanceScore(roundedPerf)
-                .confidenceScore(round2(raw.confidence()))
-                .skillScore(roundedFit)
-                .workloadScore(round2(1.0 - roundedLoad))
-                .totalScore(round2(totalScore))
-                .currentWorkload(raw.currentWorkload())
-                .status(raw.user().status())
+    private InternalCandidateRanking toInternalRanking(RankedCandidate ranked, String mode, boolean hasRequirements) {
+        var metrics = ranked.metrics();
+        var performance = metrics.performance();
+        var workload = metrics.workload();
+        return InternalCandidateRanking.builder()
+                .userId(ranked.user().id())
+                .fullName(ranked.user().fullName())
+                .rankingRawFit(ranked.fit())
+                .presentationFitValue(hasRequirements ? ranked.fit() : null)
+                .fitStatus(hasRequirements ? MetricDataStatus.MEASURED : MetricDataStatus.MISSING_REQUIREMENTS)
+                .fitSource(hasRequirements ? "DECLARED_PROFILE" : null)
+                .storedWorkloadValue((int) workload.activeTaskCount())
+                .workloadStatus(MetricDataStatus.MEASURED)
+                .workloadUnit(workload.unit())
+                .workloadScope(workload.scope())
+                .workloadMeasuredAt(metrics.asOf())
+                .workloadRevision(workload.revision())
+                .derivedPerformanceInput(performance.score())
+                .performanceStatus(performance.status() == TaskAssignmentMetrics.DataStatus.MEASURED
+                        ? MetricDataStatus.MEASURED
+                        : MetricDataStatus.DEFAULT)
+                .performanceVersion(performance.version())
+                .performanceRubricVersion(performance.rubricVersion())
+                .performanceSampleCount(performance.eligibleTaskCount())
+                .performanceWindowLimit(performance.windowLimit())
+                .observedQualityMean(performance.observedQualityMean())
+                .evidenceWeight(performance.evidenceWeight())
+                .performanceEvidenceRevision(performance.evidenceRevision())
+                .performanceMeasuredAt(metrics.asOf())
+                .fullPrecisionScore(ranked.score())
+                .rankingKey(Math.round(ranked.score() * 1_000_000_000.0))
+                .memberStatus(ranked.user().status() != null ? ranked.user().status() : "AVAILABLE")
                 .heuristicMode(mode)
+                .build();
+    }
+
+    private static void validateNormalization(HeuristicStrategy strategy, String mode) {
+        var config = strategy.normalization();
+        if (config.fit() != HeuristicNormalization.BENCHMARK_BENEFIT
+                || config.load() != HeuristicNormalization.BENCHMARK_BENEFIT
+                || config.performance() != HeuristicNormalization.BENCHMARK_BENEFIT) {
+            throw new BusinessException(HttpStatus.CONFLICT.value(),
+                    "Legacy normalization for " + mode + " requires review before "
+                            + NormalizedScores.PROJECT_RANKING_VERSION);
+        }
+    }
+
+    private RankedCandidate scoreCandidate(UserProfileDto user, TaskAssignmentMetrics metrics,
+            List<String> requiredSkills, HeuristicStrategy strategy) {
+        double fit = requiredSkills.isEmpty() ? 0.5
+                : calculateFitScore(userSkillPort.findByUserIdWithSkill(user.id()), requiredSkills);
+        var normalized = NormalizedScores.forProjectTasks(fit, metrics.workload().activeTaskCount(),
+                metrics.performance().score());
+        double score = strategy.score(normalized);
+        return new RankedCandidate(user, metrics, fit, score);
+    }
+
+    private CandidateScore toView(RankedCandidate candidate, int rank, boolean hasRequirements) {
+        var metrics = candidate.metrics();
+        var performance = metrics.performance();
+        return CandidateScore.builder()
+                .userId(candidate.user().id()).fullName(candidate.user().fullName())
+                .rank(rank).totalScore(candidate.score()).memberStatus(candidate.user().status())
+                .presentationFitValue(hasRequirements ? candidate.fit() : null)
+                .fitStatus(hasRequirements ? "MEASURED" : "MISSING_REQUIREMENTS")
+                .fitSource(hasRequirements ? "DECLARED_PROFILE" : null)
+                .storedWorkloadValue(metrics.workload().activeTaskCount()).workloadStatus("MEASURED")
+                .workloadUnit(metrics.workload().unit()).workloadScope(metrics.workload().scope())
+                .workloadMeasuredAt(metrics.asOf().toString())
+                .performanceStatus(performance.status().name())
+                .performanceSampleCount(performance.eligibleTaskCount())
+                .performanceWindowLimit(performance.windowLimit()).observedQualityMean(performance.observedQualityMean())
+                .evidenceWeight(performance.evidenceWeight())
                 .build();
     }
 
     private double calculateFitScore(List<UserSkillDto> userSkills,
             List<String> requiredSkills) {
-        if (requiredSkills == null || requiredSkills.isEmpty())
-            return 1.0;
         Map<String, Integer> skillLevelMap = userSkills.stream()
-                .collect(Collectors.toMap(us -> us.skillName().toLowerCase(),
+                .collect(Collectors.toMap(us -> us.skillName().trim().toLowerCase(Locale.ROOT),
                         UserSkillDto::level, (a, b) -> a));
         int matched = 0;
         int totalLevel = 0;
         for (String required : requiredSkills) {
-            String key = required.toLowerCase();
+            String key = required;
             if (skillLevelMap.containsKey(key)) {
                 matched++;
-                totalLevel += skillLevelMap.get(key); // level 1–5
+                totalLevel += Math.max(0, Math.min(5, skillLevelMap.get(key))); // level 1–5
             }
         }
         if (matched == 0)
@@ -281,69 +364,6 @@ public class AutoAssignmentService {
             return false;
         }
         return "DEACTIVATED".equalsIgnoreCase(status) || "OOO".equalsIgnoreCase(status);
-    }
-
-    private PerformanceSnapshot calculateTimeDecayPerformanceScore(Long userId,
-            double projectPerformancePrior) {
-        double prior = clamp01(projectPerformancePrior);
-        List<Double> recentScores = projectMemberPort.findRecentPerformanceScores(userId, PERFORMANCE_WINDOW_SIZE)
-                .stream().filter(Objects::nonNull).map(this::normalizePerformanceScore)
-                .limit(PERFORMANCE_WINDOW_SIZE).toList();
-
-        if (recentScores.isEmpty()) {
-            return new PerformanceSnapshot(prior, 0.0);
-        }
-
-        double weightedRecent = weightedAverage(recentScores, DECAY_WEIGHTS);
-        double confidence = resolveConfidence(recentScores.size());
-        double blended = (confidence * weightedRecent)
-                + ((1.0 - confidence) * prior);
-
-        return new PerformanceSnapshot(clamp01(blended), confidence);
-    }
-
-    private double resolveConfidence(int evidenceCount) {
-        return switch (evidenceCount) {
-            case 0 -> 0.0;
-            case 1 -> 0.4;
-            case 2 -> 0.7;
-            default -> 1.0;
-        };
-    }
-
-    private double weightedAverage(List<Double> values, double[] weights) {
-        double weightedSum = 0.0;
-        double weightSum = 0.0;
-
-        for (int i = 0; i < values.size() && i < weights.length; i++) {
-            weightedSum += values.get(i) * weights[i];
-            weightSum += weights[i];
-        }
-
-        if (weightSum == 0.0) {
-            return NEUTRAL_PERFORMANCE_PRIOR;
-        }
-        return weightedSum / weightSum;
-    }
-
-    private double normalizeLoad(int workload) {
-        int bounded = Math.max(0, Math.min(workload, 100));
-        return bounded / 100.0;
-    }
-
-    private double normalizePerformanceScore(double score) {
-        if (score > 1.0) {
-            return clamp01(score / 100.0);
-        }
-        return clamp01(score);
-    }
-
-    private double clamp01(double value) {
-        return Math.max(0.0, Math.min(1.0, value));
-    }
-
-    private double round2(double value) {
-        return Math.round(value * 100.0) / 100.0;
     }
 
     private String resolveHeuristicMode(Long projectId) {
@@ -369,31 +389,25 @@ public class AutoAssignmentService {
      * 5. Invariant: Heuristic candidate scoring occurs prior to this method and is completely decoupled from
      *    LLM availability.
      */
-    private String generateExplanation(List<CandidateScore> top3, List<String> requiredSkills,
-            int taskDifficulty, Long userId, Long projectId) {
+    private String generateExplanation(List<CandidateScore> top3, List<String> requiredSkills, int taskDifficulty) {
         try {
             StringBuilder candidateInfo = new StringBuilder();
-            for (int i = 0; i < top3.size(); i++) {
-                CandidateScore c = top3.get(i);
-                candidateInfo.append(String.format(
-                        "%d. %s (Fit: %.0f%%, Load: %.0f%%, Performance: %.0f%%, Total: %.2f, Mode: %s)\n",
-                        i + 1, c.getFullName(), c.getFitScore() * 100, c.getLoadScore() * 100,
-                        c.getPerformanceScore() * 100,
-                        c.getTotalScore(),
-                        c.getHeuristicMode()));
-                candidateInfo.append(String.format("   Status: %s, Confidence: %.0f%%%n",
-                        c.getStatus(), c.getConfidenceScore() * 100));
+            for (CandidateScore candidate : top3) {
+                candidateInfo.append(String.format(Locale.ROOT,
+                        "%d. %s | declared skill fit: %s (%s) | active project tasks: %d | quality evidence: %s, %d reviewed tasks, observed mean: %s%n",
+                        candidate.getRank(), candidate.getFullName(), candidate.getPresentationFitValue(),
+                        candidate.getFitStatus(), candidate.getStoredWorkloadValue(), candidate.getPerformanceStatus(),
+                        candidate.getPerformanceSampleCount(), candidate.getObservedQualityMean()));
             }
-            String prompt = String.format(
-                    """
-                            Based on the Heuristic scoring analysis for a task requiring skills [%s] with difficulty level %d/10:
-                            Top candidates:
-                            %s
-                            Please provide a concise explanation (2-3 sentences per candidate) of why each person is recommended,
-                            highlighting their strengths and any considerations the project manager should be aware of.
-                            Respond in the same language as the task context.
-                            """,
-                    String.join(", ", requiredSkills), taskDifficulty, candidateInfo);
+            String prompt = """
+                    Explain the supplied assignment ranking briefly. Use only the supplied metrics and keep rank order.
+                    Declared skills are self-reported. DEFAULT quality means no measured quality advantage.
+                    Task difficulty is descriptive only. Do not infer capacity, confidence or internal scores.
+                    Required skills: %s
+                    Task difficulty: %d/10
+                    Candidates:
+                    %s
+                    """.formatted(String.join(", ", requiredSkills), taskDifficulty, candidateInfo);
             CompletableFuture<String> future = new CompletableFuture<>();
             StringBuilder fullResponse = new StringBuilder();
             explanationModel.chat(List.of(SystemMessage.from(
@@ -406,7 +420,7 @@ public class AutoAssignmentService {
 
                         @Override
                         public void onCompleteResponse(ChatResponse response) {
-                            future.complete(fullResponse.toString());
+                            future.complete(fullResponse.isEmpty() ? DEFAULT_FALLBACK_EXPLANATION : fullResponse.toString());
                         }
 
                         @Override
@@ -453,10 +467,5 @@ public class AutoAssignmentService {
         }
     }
 
-    private record RawCandidate(UserProfileDto user, RawScores rawScores, double confidence,
-            int currentWorkload) {
-    }
-
-    private record PerformanceSnapshot(double performanceScore, double confidence) {
-    }
+    private record RankedCandidate(UserProfileDto user, TaskAssignmentMetrics metrics, double fit, double score) {}
 }

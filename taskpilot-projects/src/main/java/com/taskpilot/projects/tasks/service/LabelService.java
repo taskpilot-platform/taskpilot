@@ -17,7 +17,6 @@ import com.taskpilot.projects.common.repository.ProjectMemberRepository;
 import com.taskpilot.projects.common.repository.ProjectRepository;
 import com.taskpilot.projects.tasks.dto.CreateLabelRequest;
 import com.taskpilot.projects.tasks.dto.LabelDto;
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 
 import org.springframework.dao.DataIntegrityViolationException;
 
@@ -30,13 +29,6 @@ public class LabelService {
     private final LabelRepository labelRepository;
     private final ProjectRepository projectRepository;
     private final ProjectMemberRepository projectMemberRepository;
-    private final UserIdentityPort userIdentityPort;
-
-    private Long getCurrentUserIdByEmail(String email) {
-        return userIdentityPort.findByEmail(email)
-                .map(identity -> identity.id())
-                .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"));
-    }
 
     private void validateUserIsMember(Long projectId, Long userId) {
         if (!projectMemberRepository.existsByProjectIdAndUserId(projectId, userId)) {
@@ -64,8 +56,7 @@ public class LabelService {
     }
 
     @Transactional(readOnly = true)
-    public List<LabelDto> getLabelsByProject(Long projectId, String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public List<LabelDto> getLabelsByProject(Long projectId, Long userId) {
         validateUserIsMember(projectId, userId);
 
         return labelRepository.findByProjectId(projectId).stream()
@@ -74,8 +65,7 @@ public class LabelService {
     }
 
     @Transactional
-    public LabelDto createLabel(Long projectId, CreateLabelRequest request, String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public LabelDto createLabel(Long projectId, CreateLabelRequest request, Long userId) {
         validateUserIsProjectManager(projectId, userId);
         validateProjectNotArchived(projectId);
 
@@ -103,8 +93,7 @@ public class LabelService {
     }
 
     @Transactional
-    public void deleteLabel(Long projectId, Long labelId, String email) {
-        Long userId = getCurrentUserIdByEmail(email);
+    public void deleteLabel(Long projectId, Long labelId, Long userId) {
         validateUserIsProjectManager(projectId, userId);
         validateProjectNotArchived(projectId);
 

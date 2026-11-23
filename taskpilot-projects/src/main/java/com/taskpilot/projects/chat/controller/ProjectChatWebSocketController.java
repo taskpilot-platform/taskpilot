@@ -1,5 +1,7 @@
 package com.taskpilot.projects.chat.controller;
 
+import com.taskpilot.contracts.user.dto.CurrentActor;
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.infrastructure.observability.TaskPilotMetrics;
 import com.taskpilot.projects.chat.dto.ChatMessageResponse;
 import com.taskpilot.projects.chat.dto.SendChatMessageRequest;
@@ -32,9 +34,9 @@ public class ProjectChatWebSocketController {
             @DestinationVariable Long projectId,
             @Payload SendChatMessageRequest request,
             Principal principal) {
-        String email = principal != null ? principal.getName() : null;
-        log.debug("Received STOMP chat message for project {} from {}", projectId, email);
-        ChatMessageResponse response = projectChatService.sendMessage(projectId, email, request);
+        CurrentActor actor = CurrentActorResolver.resolve(principal);
+        log.debug("Received STOMP chat message for project {} from uid={}", projectId, actor.userId());
+        ChatMessageResponse response = projectChatService.sendMessage(projectId, actor, request);
         metrics.recordWebSocketMessage("sent");
         return response;
     }

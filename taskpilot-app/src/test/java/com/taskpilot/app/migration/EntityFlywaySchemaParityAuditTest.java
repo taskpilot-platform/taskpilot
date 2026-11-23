@@ -2,6 +2,7 @@ package com.taskpilot.app.migration;
 
 import com.taskpilot.ai.entity.*;
 import com.taskpilot.ai.rag.entity.DocumentEntity;
+import com.taskpilot.infrastructure.config.security.oauth2.OAuth2AuthorizationRequestEntity;
 import com.taskpilot.projects.common.entity.*;
 import com.taskpilot.users.common.entity.*;
 import jakarta.persistence.Column;
@@ -39,32 +40,58 @@ import static org.junit.jupiter.api.Assertions.*;
 class EntityFlywaySchemaParityAuditTest {
 
     private static final List<Class<?>> ALL_JPA_ENTITIES = List.of(
+            com.taskpilot.infrastructure.storage.cleanup.StorageUploadOperationEntity.class,
+            com.taskpilot.infrastructure.storage.cleanup.StorageCleanupJobEntity.class,
             AiChatMemoryEntity.class,
             AiChatRequestEntity.class,
             AiLogEntity.class,
+            AdaptiveOutcomeInvalidationEntity.class,
+            AdaptiveReviewedOutcomeEntity.class,
             ChatMessageEntity.class,
             ChatSessionEntity.class,
             DocumentEntity.class,
+            RecommendationDecisionEventEntity.class,
+            RecommendationSnapshotCandidateEntity.class,
+            RecommendationSnapshotEntity.class,
+            RecommendationTaskOutcomeEntity.class,
             CommentEntity.class,
             CommentMentionEntity.class,
             LabelEntity.class,
             ProjectChatMessageEntity.class,
             ProjectEntity.class,
             ProjectFileEntity.class,
+            ProjectInvitationEntity.class,
+            ProjectManagementAttentionAuditEntity.class,
             ProjectMeetingEntity.class,
             ProjectMeetingParticipantEntity.class,
             ProjectMemberEntity.class,
+            ProjectDeletionAuditEntity.class,
+            UserProjectReconciliationStateEntity.class,
             SprintEntity.class,
+            SprintClosureSnapshotEntity.class,
+            SprintClosureCorrectionEntity.class,
+            TaskCommandIdempotencyEntity.class,
+            TaskDeadlineRevisionEntity.class,
             TaskEntity.class,
+            TaskEvaluationEntity.class,
+            TaskEvaluationInvalidationEntity.class,
+            TaskEvidenceAvailabilityEventEntity.class,
             TaskLabelEntity.class,
             TaskRequiredSkillEntity.class,
+            TaskReviewEntity.class,
+            TaskSubmissionEntity.class,
+            TaskSubmissionEvidenceFileEntity.class,
+            TaskWorkflowJournalEntity.class,
             NotificationEntity.class,
+            OAuth2AuthorizationRequestEntity.class,
             PasswordResetTokenEntity.class,
             RefreshTokenEntity.class,
+            RefreshTokenHistoryEntity.class,
             SkillEntity.class,
             SystemSettingEntity.class,
             UserEntity.class,
             UserIdentityEntity.class,
+            UserLifecycleRecoveryOutboxEntity.class,
             UserSkillEntity.class
     );
 
@@ -81,13 +108,13 @@ class EntityFlywaySchemaParityAuditTest {
     }
 
     @Test
-    @DisplayName("Verify all Flyway SQL migration scripts exist, are ordered, and V40 is present")
+    @DisplayName("Verify active reconciled Flyway SQL migration scripts exist, are ordered, and include V43-V52")
     void testFlywayMigrationsExistAndOrdered() throws Exception {
-        Path migrationDir = Paths.get("src/main/resources/db/migration");
+        Path migrationDir = Paths.get("src/main/resources/db/reconciled");
         if (!Files.exists(migrationDir)) {
-            migrationDir = Paths.get("taskpilot-app/src/main/resources/db/migration");
+            migrationDir = Paths.get("taskpilot-app/src/main/resources/db/reconciled");
         }
-        assertTrue(Files.exists(migrationDir), "Flyway migration directory db/migration must exist");
+        assertTrue(Files.exists(migrationDir), "Active Flyway migration directory db/reconciled must exist");
 
         List<Path> sqlFiles;
         try (Stream<Path> stream = Files.list(migrationDir)) {
@@ -98,16 +125,24 @@ class EntityFlywaySchemaParityAuditTest {
         }
 
         assertThat(sqlFiles).isNotEmpty();
-        boolean hasV40 = sqlFiles.stream().anyMatch(p -> p.getFileName().toString().startsWith("V40__"));
-        assertTrue(hasV40, "Migration V40__add_meeting_notes_transcript_ai_summary.sql must exist");
+        assertTrue(sqlFiles.stream().anyMatch(p -> p.getFileName().toString().startsWith("V41__")),
+                "Reconciled baseline V41 must exist");
+        assertTrue(sqlFiles.stream().anyMatch(p -> p.getFileName().toString().equals("V43__add_egress_recording_and_storage_lifecycle.sql")),
+                "Accepted main migration V43__add_egress_recording_and_storage_lifecycle.sql must exist in db/reconciled");
+        assertTrue(sqlFiles.stream().anyMatch(p -> p.getFileName().toString().equals("V45__stable_principal_session_authority.sql")),
+                "Migration V45__stable_principal_session_authority.sql must exist in db/reconciled");
+        assertTrue(sqlFiles.stream().anyMatch(p -> p.getFileName().toString().equals("V46__p2_account_lifecycle_credentials_invitations.sql")),
+                "Migration V46__p2_account_lifecycle_credentials_invitations.sql must exist in db/reconciled");
+        assertTrue(sqlFiles.stream().anyMatch(p -> p.getFileName().toString().equals("V52__p8_adaptive_snapshots_decisions_outcomes.sql")),
+                "Migration V52__p8_adaptive_snapshots_decisions_outcomes.sql must exist in db/reconciled");
     }
 
     @Test
-    @DisplayName("Verify every JPA Entity column has a corresponding definition in Flyway migrations")
+    @DisplayName("Verify every JPA Entity column has a corresponding definition in active reconciled Flyway migrations")
     void testAllEntityColumnsExistInFlywayMigrations() throws Exception {
-        Path migrationDir = Paths.get("src/main/resources/db/migration");
+        Path migrationDir = Paths.get("src/main/resources/db/reconciled");
         if (!Files.exists(migrationDir)) {
-            migrationDir = Paths.get("taskpilot-app/src/main/resources/db/migration");
+            migrationDir = Paths.get("taskpilot-app/src/main/resources/db/reconciled");
         }
         Path reconciledDir = Paths.get("src/main/resources/db/reconciled");
         if (!Files.exists(reconciledDir)) {
@@ -141,12 +176,17 @@ class EntityFlywaySchemaParityAuditTest {
             assertNotNull(tableAnn, "Entity " + entityClass.getSimpleName() + " must have @Table annotation");
             String tableName = tableAnn.name().toLowerCase().replace("\"", "");
 
-            // Verify table exists in migrations
+            // Verify table exists in migrations (supporting public.-qualified or unqualified identifiers)
             boolean tableFound = fullSql.contains("create table \"" + tableName + "\"")
                     || fullSql.contains("create table " + tableName + " ")
                     || fullSql.contains("create table " + tableName + "(")
+                    || fullSql.contains("create table public." + tableName + " ")
+                    || fullSql.contains("create table public." + tableName + "(")
+                    || fullSql.contains("create table public.\"" + tableName + "\"")
                     || fullSql.contains("create table if not exists \"" + tableName + "\"")
-                    || fullSql.contains("create table if not exists " + tableName + " ");
+                    || fullSql.contains("create table if not exists " + tableName + " ")
+                    || fullSql.contains("create table if not exists public." + tableName + " ")
+                    || fullSql.contains("create table if not exists public." + tableName + "(");
 
             if (!tableFound) {
                 missingColumnsReport.add("Table '" + tableName + "' for entity " + entityClass.getSimpleName() + " not found in any Flyway migration!");

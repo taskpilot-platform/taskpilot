@@ -29,6 +29,12 @@ public class UserProfileAdapter implements UserIdentityPort, UserProfilePort {
     }
 
     @Override
+    public Optional<UserIdentityDto> findById(long userId) {
+        return userRepository.findById(userId)
+                .map(user -> new UserIdentityDto(user.getId(), user.getEmail()));
+    }
+
+    @Override
     public Optional<UserProfileLiteDto> findLiteById(Long userId) {
         return userRepository.findById(userId)
                 .map(user -> new UserProfileLiteDto(user.getId(), user.getFullName(), user.getAvatarUrl()));

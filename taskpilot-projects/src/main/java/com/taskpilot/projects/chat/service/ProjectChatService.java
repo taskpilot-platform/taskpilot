@@ -1,9 +1,10 @@
 package com.taskpilot.projects.chat.service;
 
+import com.taskpilot.contracts.user.dto.CurrentActor;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
+import com.taskpilot.infrastructure.realtime.RealtimeAfterCommitDispatcher;
 import com.taskpilot.projects.chat.dto.ChatMessageResponse;
 import com.taskpilot.projects.chat.dto.SendChatMessageRequest;
 import com.taskpilot.projects.common.entity.ProjectChatMessageEntity;
@@ -32,26 +33,24 @@ public class ProjectChatService {
     private final ProjectChatMessageRepository chatMessageRepository;
     private final ProjectFileRepository projectFileRepository;
     private final ProjectSecurityService projectSecurityService;
-    private final UserIdentityPort userIdentityPort;
     private final UserProfilePort userProfilePort;
     private final SimpMessagingTemplate messagingTemplate;
 
     @Transactional
-    public ChatMessageResponse sendMessage(Long projectId, String senderEmail, SendChatMessageRequest request) {
+    public ChatMessageResponse sendMessage(Long projectId, CurrentActor actor, SendChatMessageRequest request) {
         if (request.content() == null || request.content().isBlank()) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Message content cannot be blank");
         }
 
-        Long senderId = getUserId(senderEmail);
+        Long senderId = actor.userId();
         projectSecurityService.requireActiveProject(projectId);
         projectSecurityService.validateMember(projectId, senderId);
 
         String attachedFileName = null;
         if (request.fileId() != null) {
-            Optional<ProjectFileEntity> fileOpt = projectFileRepository.findByIdAndProjectId(request.fileId(), projectId);
-            if (fileOpt.isPresent()) {
-                attachedFileName = fileOpt.get().getOriginalName();
-            }
+            attachedFileName = projectFileRepository.findByIdAndProjectId(request.fileId(), projectId)
+                    .orElseThrow(() -> new BusinessException(404, "Attachment not found in this project"))
+                    .getOriginalName();
         }
 
         ProjectChatMessageEntity entity = ProjectChatMessageEntity.builder()
@@ -70,23 +69,25 @@ public class ProjectChatService {
         String senderAvatarUrl = profile != null ? profile.avatarUrl() : null;
 
         ChatMessageResponse response = ChatMessageResponse.fromEntity(
-                saved, senderName, senderEmail, senderAvatarUrl, attachedFileName);
+                saved, senderName, actor.currentEmail(), senderAvatarUrl, attachedFileName);
 
-        // Broadcast to WebSocket subscribers for this project
-        try {
-            String destination = "/topic/projects/" + projectId + "/chat";
-            messagingTemplate.convertAndSend(destination, response);
-            log.debug("Broadcasted chat message {} to {}", saved.getId(), destination);
-        } catch (Exception e) {
-            log.warn("Failed to broadcast chat message over WebSocket: {}", e.getMessage());
-        }
+        // Broadcast to WebSocket subscribers only after business commit
+        String destination = "/topic/projects/" + projectId + "/chat";
+        Long savedId = saved.getId();
+        RealtimeAfterCommitDispatcher.runAfterCommit(() -> {
+            try {
+                messagingTemplate.convertAndSend(destination, response);
+                log.debug("Broadcasted chat message {} to {}", savedId, destination);
+            } catch (Exception e) {
+                log.warn("Failed to broadcast chat message over WebSocket: {}", e.getMessage());
+            }
+        });
 
         return response;
     }
 
     @Transactional(readOnly = true)
-    public Page<ChatMessageResponse> getChatHistory(Long projectId, String userEmail, Pageable pageable) {
-        Long userId = getUserId(userEmail);
+    public Page<ChatMessageResponse> getChatHistory(Long projectId, Long userId, Pageable pageable) {
         projectSecurityService.requireProject(projectId);
         projectSecurityService.validateMember(projectId, userId);
 
@@ -103,7 +104,7 @@ public class ProjectChatService {
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
 
-        Map<Long, String> fileNames = resolveFileNames(fileIds);
+        Map<Long, String> fileNames = resolveFileNames(projectId, fileIds);
 
         return page.map(msg -> {
             UserProfileLiteDto profile = profileMap.get(msg.getSenderId());
@@ -112,12 +113,6 @@ public class ProjectChatService {
             String fileName = msg.getFileId() != null ? fileNames.get(msg.getFileId()) : null;
             return ChatMessageResponse.fromEntity(msg, name, null, avatar, fileName);
         });
-    }
-
-    private Long getUserId(String email) {
-        return userIdentityPort.findByEmail(email)
-                .orElseThrow(() -> new BusinessException(HttpStatus.UNAUTHORIZED.value(), "User not found"))
-                .id();
     }
 
     private Map<Long, UserProfileLiteDto> resolveProfiles(Set<Long> userIds) {
@@ -130,12 +125,14 @@ public class ProjectChatService {
         return map;
     }
 
-    private Map<Long, String> resolveFileNames(Set<Long> fileIds) {
+    private Map<Long, String> resolveFileNames(Long projectId, Set<Long> fileIds) {
         if (fileIds.isEmpty()) return Collections.emptyMap();
         List<ProjectFileEntity> files = projectFileRepository.findAllById(fileIds);
         Map<Long, String> map = new HashMap<>();
         for (ProjectFileEntity f : files) {
-            map.put(f.getId(), f.getOriginalName());
+            if (Objects.equals(f.getProjectId(), projectId)) {
+                map.put(f.getId(), f.getOriginalName());
+            }
         }
         return map;
     }

@@ -4,8 +4,8 @@ import com.taskpilot.ai.rag.domain.DocumentStatus;
 import com.taskpilot.ai.rag.domain.ScoredChunk;
 import com.taskpilot.ai.rag.dto.DocumentResponse;
 import com.taskpilot.ai.rag.service.ProjectDocumentService;
-import com.taskpilot.contracts.user.dto.UserIdentityDto;
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
+import com.taskpilot.contracts.user.dto.CurrentActor;
+import com.taskpilot.infrastructure.config.security.TaskPilotPrincipal;
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
@@ -15,11 +15,11 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -31,23 +31,18 @@ class ProjectDocumentControllerTest {
 
     @Mock
     private ProjectDocumentService projectDocumentService;
-    @Mock
-    private UserIdentityPort userIdentityPort;
-    @Mock
-    private Authentication authentication;
 
+    private Authentication authentication;
     private ProjectDocumentController controller;
 
     @BeforeEach
     void setUp() {
-        controller = new ProjectDocumentController(projectDocumentService, userIdentityPort);
+        controller = new ProjectDocumentController(projectDocumentService);
     }
 
     private void mockUser(Long userId, String email) {
-        when(authentication.getName()).thenReturn(email);
-        when(userIdentityPort.findByEmail(email)).thenReturn(Optional.of(
-                new UserIdentityDto(userId, email)
-        ));
+        TaskPilotPrincipal principal = new TaskPilotPrincipal(new CurrentActor(userId, email, "USER", 0L));
+        authentication = new UsernamePasswordAuthenticationToken(principal, null, List.of());
     }
 
     @Test
@@ -184,13 +179,12 @@ class ProjectDocumentControllerTest {
 
 
     @Test
-    @DisplayName("Verify endpoint throws 401 BusinessException when user is not found in identity port")
+    @DisplayName("Verify endpoint throws 401 BusinessException when authentication lacks typed TaskPilotPrincipal")
     void testResolveUserNotFound() {
-        when(authentication.getName()).thenReturn("ghost@example.com");
-        when(userIdentityPort.findByEmail("ghost@example.com")).thenReturn(Optional.empty());
+        Authentication rawEmailAuth = new UsernamePasswordAuthenticationToken("ghost@example.com", null, List.of());
 
-        assertThatThrownBy(() -> controller.getDocuments(10L, authentication))
+        assertThatThrownBy(() -> controller.getDocuments(10L, rawEmailAuth))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("User not found");
+                .hasMessageContaining("Authentication required");
     }
 }

@@ -2,6 +2,8 @@ package com.taskpilot.ai.service;
 
 import com.taskpilot.ai.entity.AiLogEntity;
 import com.taskpilot.ai.repository.AiLogRepository;
+import com.taskpilot.contracts.user.dto.CurrentActor;
+import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.infrastructure.observability.TaskPilotMetrics;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -66,10 +68,17 @@ public class AiLogService {
     }
 
     @Transactional
-    public void updateFeedback(Long logId, String feedback) {
-        aiLogRepository.findById(logId).ifPresent(aiLog -> {
-            aiLog.setHumanFeedback(feedback);
-            aiLogRepository.save(aiLog);
-        });
+    public void updateFeedback(Long logId, String feedback, CurrentActor actor) {
+        AiLogEntity aiLog = aiLogRepository.findById(logId)
+                .orElseThrow(() -> new BusinessException(404, "AI log not found"));
+        // Feedback is the requesting user's decision; global admin read access does not imply ownership.
+        if (actor == null || !java.util.Objects.equals(aiLog.getUserId(), actor.userId())) {
+            throw new BusinessException(403, "Only the owner can update AI feedback");
+        }
+        if (feedback == null || !java.util.Set.of("ACCEPTED", "REJECTED", "PENDING").contains(feedback)) {
+            throw new BusinessException(400, "Invalid feedback");
+        }
+        aiLog.setHumanFeedback(feedback);
+        aiLogRepository.save(aiLog);
     }
 }

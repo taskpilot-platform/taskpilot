@@ -6,7 +6,20 @@ import com.taskpilot.ai.dto.CandidateScore;
 import com.taskpilot.ai.entity.AiLogEntity;
 import com.taskpilot.ai.heuristic.HeuristicStrategy;
 import com.taskpilot.ai.heuristic.HeuristicStrategyFactory;
-import com.taskpilot.ai.heuristic.NormalizedScores;
+import com.taskpilot.ai.heuristic.BalancedHeuristicStrategy;
+import com.taskpilot.ai.heuristic.HeuristicConfig;
+import com.taskpilot.ai.heuristic.HeuristicNormalization;
+import com.taskpilot.ai.heuristic.HeuristicNormalizationConfig;
+import com.taskpilot.ai.heuristic.HeuristicWeights;
+import com.taskpilot.contracts.assignment.dto.TaskAssignmentMetrics;
+import com.taskpilot.contracts.assignment.dto.TaskAssignmentMetrics.DataStatus;
+import com.taskpilot.contracts.assignment.dto.TaskAssignmentMetrics.Performance;
+import com.taskpilot.contracts.assignment.dto.TaskAssignmentMetrics.Workload;
+import com.taskpilot.contracts.assignment.port.out.TaskPerformanceReadPort;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Instant;
+import java.util.Map;
+import java.util.Set;
 import com.taskpilot.contracts.assignment.dto.ProjectHeuristicConfigDto;
 import com.taskpilot.contracts.assignment.dto.ProjectMemberDto;
 import com.taskpilot.contracts.assignment.dto.UserProfileDto;
@@ -54,7 +67,7 @@ class AutoAssignmentServiceTest {
     private HeuristicStrategyFactory heuristicStrategyFactory;
 
     @Mock
-    private HeuristicStrategy heuristicStrategy;
+    private TaskPerformanceReadPort metrics;
 
     @Mock
     private StreamingChatModel explanationModel;
@@ -69,6 +82,7 @@ class AutoAssignmentServiceTest {
     void setUp() {
         autoAssignmentService = new AutoAssignmentService(
                 projectMemberPort,
+                metrics,
                 userSkillPort,
                 aiAuditPort,
                 userPort,
@@ -78,9 +92,10 @@ class AutoAssignmentServiceTest {
                 100L // 100ms timeout for test determinism
         );
 
+        when(projectMemberPort.isProjectMember(PROJECT_ID, REQUESTING_USER_ID)).thenReturn(true);
         when(projectPort.findById(PROJECT_ID))
                 .thenReturn(Optional.of(new ProjectHeuristicConfigDto(PROJECT_ID, "BALANCED")));
-        when(heuristicStrategyFactory.resolve("BALANCED")).thenReturn(heuristicStrategy);
+        when(heuristicStrategyFactory.resolve("BALANCED")).thenReturn(strategy());
 
         ProjectMemberDto member = new ProjectMemberDto(USER_ID, "MEMBER", 0.9);
         when(projectMemberPort.findProjectMembers(PROJECT_ID)).thenReturn(List.of(member));
@@ -89,12 +104,10 @@ class AutoAssignmentServiceTest {
         when(userPort.findById(USER_ID)).thenReturn(Optional.of(userProfile));
 
         UserSkillDto skill = new UserSkillDto("Java", 5);
-        when(userSkillPort.findByUserIdWithSkill(USER_ID)).thenReturn(List.of(skill));
+        lenient().when(userSkillPort.findByUserIdWithSkill(USER_ID)).thenReturn(List.of(skill));
 
-        when(projectMemberPort.findRecentPerformanceScores(eq(USER_ID), anyInt())).thenReturn(List.of(0.9, 0.85));
-
-        when(heuristicStrategy.normalize(any(), any())).thenReturn(new NormalizedScores(0.9, 0.8, 0.88));
-        when(heuristicStrategy.score(any())).thenReturn(0.86);
+        lenient().when(metrics.readProjectMetrics(eq(PROJECT_ID), anySet()))
+                .thenAnswer(invocation -> Map.of(USER_ID, evidence(USER_ID, 1, 3.5 / 6, 1)));
     }
 
     @Test
@@ -118,7 +131,7 @@ class AutoAssignmentServiceTest {
 
         CandidateScore candidate = response.candidates().get(0);
         assertEquals(USER_ID, candidate.getUserId());
-        assertEquals(0.86, candidate.getTotalScore(), 0.01);
+        assertEquals(0.23 - 0.65 / 6 + 0.12 * (3.5 / 6), candidate.getTotalScore(), 1e-12);
         assertEquals(expectedExplanation, response.aiExplanation());
 
         verify(aiAuditPort).save(any(AiLogEntity.class));
@@ -139,7 +152,7 @@ class AutoAssignmentServiceTest {
 
         CandidateScore candidate = response.candidates().get(0);
         assertEquals(USER_ID, candidate.getUserId());
-        assertEquals(0.86, candidate.getTotalScore(), 0.01);
+        assertEquals(0.23 - 0.65 / 6 + 0.12 * (3.5 / 6), candidate.getTotalScore(), 1e-12);
         assertEquals(AutoAssignmentService.DEFAULT_FALLBACK_EXPLANATION, response.aiExplanation());
 
         verify(aiAuditPort).save(any(AiLogEntity.class));
@@ -163,7 +176,7 @@ class AutoAssignmentServiceTest {
 
         CandidateScore candidate = response.candidates().get(0);
         assertEquals(USER_ID, candidate.getUserId());
-        assertEquals(0.86, candidate.getTotalScore(), 0.01);
+        assertEquals(0.23 - 0.65 / 6 + 0.12 * (3.5 / 6), candidate.getTotalScore(), 1e-12);
         assertEquals(AutoAssignmentService.DEFAULT_FALLBACK_EXPLANATION, response.aiExplanation());
 
         // Ensure timeout was bounded around 100ms (not waiting 10s or hanging)
@@ -200,6 +213,7 @@ class AutoAssignmentServiceTest {
         String configuredModel = "gemini-2.5-flash";
         AutoAssignmentService customService = new AutoAssignmentService(
                 projectMemberPort,
+                metrics,
                 userSkillPort,
                 aiAuditPort,
                 userPort,
@@ -224,5 +238,64 @@ class AutoAssignmentServiceTest {
                 configuredModel.equals(entity.getModelUsed()) &&
                 explanation.equals(entity.getResponse())
         ));
+    }
+
+    @Test
+    void rawScoresOrderCloseCandidatesAndExactTiesUseUserId() throws Exception {
+        long higherId = USER_ID + 1;
+        when(projectMemberPort.findProjectMembers(PROJECT_ID)).thenReturn(List.of(
+                new ProjectMemberDto(higherId, "MEMBER", 1), new ProjectMemberDto(USER_ID, "MEMBER", 0)));
+        when(userPort.findById(higherId)).thenReturn(Optional.of(
+                new UserProfileDto(higherId, "Bob", "bob@example.com", "AVAILABLE", 99)));
+        when(userSkillPort.findByUserIdWithSkill(higherId)).thenReturn(List.of(new UserSkillDto("Java", 5)));
+        when(metrics.readProjectMetrics(PROJECT_ID, Set.of(USER_ID, higherId))).thenReturn(
+                Map.of(USER_ID, evidence(USER_ID, 5, 0.5, 20), higherId, evidence(higherId, 5, 0.51, 20)),
+                Map.of(USER_ID, evidence(USER_ID, 5, 0.5, 20), higherId, evidence(higherId, 5, 0.5, 20)));
+
+        var close = autoAssignmentService.recommendCandidates(PROJECT_ID, List.of("Java"), 5, REQUESTING_USER_ID);
+        assertEquals(higherId, close.candidates().getFirst().getUserId());
+        assertEquals(0.12 * 0.01, close.candidates().getFirst().getTotalScore()
+                - close.candidates().getLast().getTotalScore(), 1e-12);
+        assertEquals(5, close.candidates().getFirst().getStoredWorkloadValue());
+        var json = new ObjectMapper().valueToTree(close).path("candidates").get(0);
+        assertEquals(higherId, json.path("candidateId").asLong());
+        assertFalse(json.has("totalScore"));
+        assertFalse(json.has("email"));
+        assertFalse(json.has("confidenceScore"));
+
+        var tied = autoAssignmentService.recommendCandidates(PROJECT_ID, List.of("Java"), 10, REQUESTING_USER_ID);
+        assertEquals(USER_ID, tied.candidates().getFirst().getUserId());
+        assertEquals("INSUFFICIENT_TO_DIFFERENTIATE", tied.differentiationStatus());
+    }
+
+    @Test
+    void measuredLoadKeepsFixedScaleAndMissingSkillsAreNeutral() {
+        for (int count : List.of(0, 1, 5, 10)) {
+            when(metrics.readProjectMetrics(PROJECT_ID, Set.of(USER_ID)))
+                    .thenReturn(Map.of(USER_ID, evidence(USER_ID, count, 0.5, 0)));
+            var result = autoAssignmentService.recommendCandidates(PROJECT_ID, List.of(" "), 5, REQUESTING_USER_ID);
+            var candidate = result.candidates().getFirst();
+            assertEquals(0.23 * 0.5 - 0.65 * count / (count + 5.0) + 0.12 * 0.5,
+                    candidate.getTotalScore(), 1e-12);
+            assertNull(candidate.getPresentationFitValue());
+            assertEquals("MISSING_REQUIREMENTS", candidate.getFitStatus());
+            assertEquals("DEFAULT", candidate.getPerformanceStatus());
+            assertNull(candidate.getObservedQualityMean());
+        }
+    }
+
+    private static HeuristicStrategy strategy() {
+        var benefit = HeuristicNormalization.BENCHMARK_BENEFIT;
+        return new BalancedHeuristicStrategy(new HeuristicConfig(new HeuristicWeights(0.23, 0.65, 0.12),
+                new HeuristicNormalizationConfig(benefit, benefit, benefit)));
+    }
+
+    private static TaskAssignmentMetrics evidence(long userId, int load, double performance, int sampleCount) {
+        var status = sampleCount == 0 ? DataStatus.DEFAULT : DataStatus.MEASURED;
+        return new TaskAssignmentMetrics(PROJECT_ID, userId, Instant.EPOCH,
+                new Performance("performance-v1", "quality-v1", status, performance,
+                        sampleCount == 0 ? null : 1.0, sampleCount, 20, sampleCount / (sampleCount + 5.0),
+                        0, null, sampleCount, "evidence"),
+                new Workload(load, "ACTIVE_TASK_COUNT", "PROJECT", "workload"));
     }
 }

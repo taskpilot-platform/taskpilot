@@ -41,23 +41,22 @@ class OAuth2AccountServiceTest {
     }
 
     @Test
-    void verifiedEmailLinksExistingAccountIndependentlyOfServerLocale() {
+    void existingSameEmailWithoutExistingProviderReturnsCollisionAndNeverAutoMerges() {
         Locale original = Locale.getDefault();
         try {
             Locale.setDefault(Locale.forLanguageTag("tr-TR"));
             UserEntity user = new UserEntity();
             user.setId(123L);
             user.setEmail("i@example.test");
+            user.setEmailVerified(true);
             when(userRepository.findByEmail("i@example.test")).thenReturn(Optional.of(user));
 
-            UserEntity resolved = service.resolveUser(new OAuth2UserInfo(
+            var resolution = service.resolveLoginOrRegister(new OAuth2UserInfo(
                     AuthProvider.GOOGLE, "locale-recovery", " I@Example.Test ", true, "Test", null));
 
-            assertSame(user, resolved);
+            assertInstanceOf(OAuth2AccountService.Resolution.EmailCollision.class, resolution);
             verify(userRepository, never()).save(any());
-            var identity = ArgumentCaptor.forClass(UserIdentityEntity.class);
-            verify(userIdentityRepository).save(identity.capture());
-            assertEquals("i@example.test", identity.getValue().getEmail());
+            verify(userIdentityRepository, never()).save(any());
         } finally {
             Locale.setDefault(original);
         }
@@ -69,6 +68,7 @@ class OAuth2AccountServiceTest {
         UserEntity user = new UserEntity();
         user.setId(10L);
         user.setEmail("existing@example.com");
+        user.setEmailVerified(true);
 
         UserIdentityEntity identity = new UserIdentityEntity();
         identity.setUser(user);
@@ -77,6 +77,7 @@ class OAuth2AccountServiceTest {
 
         when(userIdentityRepository.findByProviderAndProviderSubject(AuthProvider.GOOGLE, "sub-123"))
                 .thenReturn(Optional.of(identity));
+        when(userRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(user));
 
         OAuth2UserInfo userInfo = new OAuth2UserInfo(
                 AuthProvider.GOOGLE, "sub-123", "existing@example.com", true, "Name", null);
@@ -102,8 +103,8 @@ class OAuth2AccountServiceTest {
     }
 
     @Test
-    @DisplayName("Should link new identity to existing user with verified matching email")
-    void testLinkExistingUser() {
+    @DisplayName("Should return EmailCollision without auto-linking when verified email matches existing account")
+    void testCollisionInsteadOfAutoLinkExistingUser() {
         when(userIdentityRepository.findByProviderAndProviderSubject(AuthProvider.GOOGLE, "sub-456"))
                 .thenReturn(Optional.empty());
 
@@ -117,17 +118,9 @@ class OAuth2AccountServiceTest {
         OAuth2UserInfo userInfo = new OAuth2UserInfo(
                 AuthProvider.GOOGLE, "sub-456", "match@example.com", true, "New Name", "https://img.com/a.jpg");
 
-        UserEntity resolved = service.resolveUser(userInfo);
-
-        assertSame(existingUser, resolved);
-
-        ArgumentCaptor<UserIdentityEntity> captor = ArgumentCaptor.forClass(UserIdentityEntity.class);
-        verify(userIdentityRepository).save(captor.capture());
-
-        UserIdentityEntity savedIdentity = captor.getValue();
-        assertEquals(AuthProvider.GOOGLE, savedIdentity.getProvider());
-        assertEquals("sub-456", savedIdentity.getProviderSubject());
-        assertEquals(existingUser, savedIdentity.getUser());
+        var resolution = service.resolveLoginOrRegister(userInfo);
+        assertInstanceOf(OAuth2AccountService.Resolution.EmailCollision.class, resolution);
+        verify(userIdentityRepository, never()).save(any());
     }
 
     @Test
@@ -137,14 +130,15 @@ class OAuth2AccountServiceTest {
                 .thenReturn(Optional.empty());
         when(userRepository.findByEmail("newbie@example.com")).thenReturn(Optional.empty());
 
-        when(userRepository.save(any(UserEntity.class))).thenAnswer(invocation -> {
+        when(userRepository.saveAndFlush(any(UserEntity.class))).thenAnswer(invocation -> {
             UserEntity u = invocation.getArgument(0);
             u.setId(99L);
             return u;
         });
 
         OAuth2UserInfo userInfo = new OAuth2UserInfo(
-                AuthProvider.GITHUB, "sub-777", "newbie@example.com", true, "New Developer", "https://avatar.com/u");
+                AuthProvider.GITHUB, "sub-777", "newbie@example.com", true, "New Developer",
+                "https://avatars.githubusercontent.com/u/777");
 
         UserEntity resolved = service.resolveUser(userInfo);
 
@@ -156,6 +150,29 @@ class OAuth2AccountServiceTest {
         assertEquals(UserRole.USER, resolved.getRole());
         assertEquals(UserStatus.AVAILABLE, resolved.getStatus());
 
-        verify(userIdentityRepository).save(any(UserIdentityEntity.class));
+        verify(userIdentityRepository).saveAndFlush(any(UserIdentityEntity.class));
+    }
+
+    @Test
+    @DisplayName("Should require email verification when legacy linked account has unproven local password")
+    void testUnverifiedMixedLegacyAccountBlocked() {
+        UserEntity mixed = new UserEntity();
+        mixed.setId(55L);
+        mixed.setEmail("mixed@example.com");
+        mixed.setPassword("legacy-hash");
+        mixed.setEmailVerified(false);
+
+        UserIdentityEntity identity = new UserIdentityEntity();
+        identity.setUser(mixed);
+        identity.setProvider(AuthProvider.GOOGLE);
+        identity.setProviderSubject("sub-mixed");
+
+        when(userIdentityRepository.findByProviderAndProviderSubject(AuthProvider.GOOGLE, "sub-mixed"))
+                .thenReturn(Optional.of(identity));
+        when(userRepository.findByIdForUpdate(55L)).thenReturn(Optional.of(mixed));
+
+        var resolution = service.resolveLoginOrRegister(new OAuth2UserInfo(
+                AuthProvider.GOOGLE, "sub-mixed", "mixed@example.com", true, "Mixed", null));
+        assertInstanceOf(OAuth2AccountService.Resolution.EmailVerificationRequired.class, resolution);
     }
 }

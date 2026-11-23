@@ -35,6 +35,27 @@ public interface ProjectMemberRepository extends JpaRepository<ProjectMemberEnti
         @Query("SELECT pm FROM ProjectMemberEntity pm WHERE pm.projectId = :projectId")
         List<ProjectMemberEntity> findMembers(@Param("projectId") Long projectId);
 
+        @Meta(comment = "ProjectMemberRepository.findManagerialProjectIdsByUserId")
+        @Query("SELECT pm.projectId FROM ProjectMemberEntity pm "
+                        + "WHERE pm.userId = :userId AND pm.role = :role ORDER BY pm.projectId ASC")
+        List<Long> findManagerialProjectIdsByUserIdAndRole(
+                        @Param("userId") Long userId,
+                        @Param("role") MemberRole role);
+
+        default List<Long> findManagerialProjectIdsByUserId(Long userId) {
+                return findManagerialProjectIdsByUserIdAndRole(userId, MemberRole.MANAGER);
+        }
+
+        @Meta(comment = "ProjectMemberRepository.findProjectIdsByUserId")
+        @Query("SELECT pm.projectId FROM ProjectMemberEntity pm WHERE pm.userId = :userId ORDER BY pm.projectId ASC")
+        List<Long> findProjectIdsByUserId(@Param("userId") Long userId);
+
+        @Meta(comment = "ProjectMemberRepository.findDistinctUserIdsByProjectIdIn")
+        @Query("SELECT DISTINCT pm.userId FROM ProjectMemberEntity pm WHERE pm.projectId IN :projectIds ORDER BY pm.userId ASC")
+        List<Long> findDistinctUserIdsByProjectIdIn(@Param("projectIds") java.util.Collection<Long> projectIds);
+
+        List<ProjectMemberEntity> findByProjectIdIn(java.util.Collection<Long> projectIds);
+
         List<ProjectMemberEntity> findByUserId(Long userId);
 
         List<ProjectMemberEntity> findByProjectIdAndRole(Long projectId, MemberRole role);
@@ -46,12 +67,6 @@ public interface ProjectMemberRepository extends JpaRepository<ProjectMemberEnti
         @Meta(comment = "ProjectMemberRepository.countMembers")
         @Query("SELECT COUNT(pm) FROM ProjectMemberEntity pm WHERE pm.projectId = :projectId")
         long countMembers(@Param("projectId") Long projectId);
-
-        @Meta(comment = "ProjectMemberRepository.findRecentPerformanceScores")
-        @Query("SELECT pm.performanceScore FROM ProjectMemberEntity pm "
-                        + "WHERE pm.userId = :userId AND pm.performanceScore IS NOT NULL "
-                        + "ORDER BY pm.joinedAt DESC")
-        List<Double> findRecentPerformanceScores(@Param("userId") Long userId, Pageable pageable);
 
         @Meta(comment = "ProjectMemberRepository.findUpcomingProjects")
         @Query("SELECT pm.project FROM ProjectMemberEntity pm "

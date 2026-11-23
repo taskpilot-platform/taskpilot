@@ -1,9 +1,13 @@
 package com.taskpilot.app;
 
 import com.taskpilot.ai.entity.ChatMessageEntity;
+import com.taskpilot.ai.repository.AdaptiveReviewedOutcomeRepository;
 import com.taskpilot.ai.repository.AiLogRepository;
 import com.taskpilot.ai.repository.ChatMessageRepository;
 import com.taskpilot.ai.repository.ChatSessionRepository;
+import com.taskpilot.ai.repository.RecommendationDecisionEventRepository;
+import com.taskpilot.ai.repository.RecommendationSnapshotRepository;
+import com.taskpilot.ai.repository.RecommendationTaskOutcomeRepository;
 import com.taskpilot.infrastructure.util.JpaSortUtils;
 import com.taskpilot.projects.common.repository.*;
 import com.taskpilot.users.common.entity.NotificationEntity;
@@ -31,9 +35,18 @@ class SpringDataModernizationTest {
             ChatMessageRepository.class,
             ChatSessionRepository.class,
             AiLogRepository.class,
+            RecommendationSnapshotRepository.class,
+            RecommendationDecisionEventRepository.class,
+            AdaptiveReviewedOutcomeRepository.class,
+            RecommendationTaskOutcomeRepository.class,
             CommentRepository.class,
             ProjectMemberRepository.class,
             TaskRepository.class,
+            SprintRepository.class,
+            TaskDeadlineRevisionRepository.class,
+            TaskEvaluationRepository.class,
+            TaskSubmissionRepository.class,
+            TaskWorkflowJournalRepository.class,
             TaskLabelRepository.class,
             TaskRequiredSkillRepository.class,
             UserSkillRepository.class,
@@ -124,7 +137,9 @@ class SpringDataModernizationTest {
         assertNotNull(taskNativeMethod);
         assertTrue(taskNativeMethod.isAnnotationPresent(NativeQuery.class));
         NativeQuery taskNQ = taskNativeMethod.getAnnotation(NativeQuery.class);
-        assertTrue(taskNQ.value().contains("FROM tasks WHERE project_id = :projectId"));
+        assertTrue(taskNQ.value().contains("FROM public.tasks WHERE project_id = :projectId"));
+        assertTrue(taskNQ.value().contains("deleted_at IS NULL"),
+                "Live task counts must exclude tombstones");
 
         // AiLogRepository native query
         Method aiNativeMethod = AiLogRepository.class.getMethod("countLogsByEndpointNative", java.time.Instant.class);

@@ -64,6 +64,75 @@ class ReconciledFlywayIntegrationTest {
     }
 
     @Test
+    void acceptedV42UpgradesThroughV43ToLatestWithoutChangingChecksumsOrExistingData() throws Exception {
+        String url = database("reconciled_v42_upgrade");
+        flywayAtTarget(url, "flyway_schema_history_v2", "42").migrate();
+        String v42Checksum;
+        try (var connection = DriverManager.getConnection(url, "test", "test");
+             var statement = connection.createStatement()) {
+            v42Checksum = scalar(connection,
+                    "SELECT checksum FROM taskpilot_migrations.flyway_schema_history_v2 WHERE version='42'");
+            statement.execute("INSERT INTO public.users(id,email,full_name) VALUES (8002,'existing-v42@example.invalid','Existing V42 User')");
+        }
+
+        var upgraded = flyway(url, "flyway_schema_history_v2");
+        int pending = upgraded.info().pending().length;
+        assertThat(pending).isEqualTo(10); // V43 (main Egress) + V44..V52 (remediation)
+        assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(pending);
+        assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
+        assertThat(upgraded.migrate().migrationsExecuted).isZero();
+        try (var connection = DriverManager.getConnection(url, "test", "test")) {
+            assertThat(scalar(connection,
+                    "SELECT checksum FROM taskpilot_migrations.flyway_schema_history_v2 WHERE version='42'"))
+                    .isEqualTo(v42Checksum);
+            assertThat(scalar(connection,
+                    "SELECT max(version::int) FROM taskpilot_migrations.flyway_schema_history_v2 WHERE success"))
+                    .isEqualTo("52");
+            assertThat(scalar(connection, "SELECT email FROM public.users WHERE id=8002"))
+                    .isEqualTo("existing-v42@example.invalid");
+            assertThat(scalar(connection,
+                    "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='project_meetings' AND column_name='egress_id'"))
+                    .isEqualTo("1");
+            assertThat(scalar(connection, "SELECT to_regclass('public.adaptive_reviewed_outcomes')::text"))
+                    .isEqualTo("adaptive_reviewed_outcomes");
+        }
+    }
+
+    @Test
+    void acceptedEgressV43UpgradesWithoutChangingItsChecksumOrExistingData() throws Exception {
+        String url = database("egress_v43_upgrade");
+        flywayAtTarget(url, "flyway_schema_history_v2", "43").migrate();
+        String acceptedChecksum;
+        try (var connection = DriverManager.getConnection(url, "test", "test");
+             var statement = connection.createStatement()) {
+            acceptedChecksum = scalar(connection,
+                    "SELECT checksum FROM taskpilot_migrations.flyway_schema_history_v2 WHERE version='43'");
+            statement.execute("INSERT INTO public.users(id,email,full_name) VALUES (8001,'existing-egress@example.invalid','Existing Egress User')");
+        }
+
+        var upgraded = flyway(url, "flyway_schema_history_v2");
+        int pending = upgraded.info().pending().length;
+        assertThat(pending).isPositive();
+        assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(pending);
+        assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
+        assertThat(upgraded.migrate().migrationsExecuted).isZero();
+        try (var connection = DriverManager.getConnection(url, "test", "test")) {
+            assertThat(scalar(connection,
+                    "SELECT checksum FROM taskpilot_migrations.flyway_schema_history_v2 WHERE version='43'"))
+                    .isEqualTo(acceptedChecksum);
+            assertThat(scalar(connection, "SELECT email FROM public.users WHERE id=8001"))
+                    .isEqualTo("existing-egress@example.invalid");
+            assertThat(scalar(connection, "SELECT to_regclass('public.task_submissions')::text"))
+                    .isEqualTo("task_submissions");
+            assertThat(scalar(connection, "SELECT to_regclass('public.adaptive_reviewed_outcomes')::text"))
+                    .isEqualTo("adaptive_reviewed_outcomes");
+            assertThat(scalar(connection,
+                    "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='project_meetings' AND column_name='egress_id'"))
+                    .isEqualTo("1");
+        }
+    }
+
+    @Test
     void freshDatabaseContainsFullSchemaSettingsAndProtectedHistory() throws Exception {
         String url = database("recovery_fresh");
         try (var c = DriverManager.getConnection(url, "test", "test"); var s = c.createStatement()) {
@@ -81,6 +150,21 @@ class ReconciledFlywayIntegrationTest {
             assertThat(scalar(c, "SELECT count(*) FROM system_settings WHERE key_name='heuristic.weights'")).isEqualTo("1");
             assertThat(scalar(c, "SELECT has_table_privilege('anon','taskpilot_migrations.flyway_schema_history_v2','SELECT')")).isEqualTo("f");
             assertThat(scalar(c, "SELECT has_table_privilege('authenticated','taskpilot_migrations.flyway_schema_history_v2','INSERT')")).isEqualTo("f");
+            assertThat(scalar(c, "SELECT c.relrowsecurity::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='oauth2_authorization_requests'")).isEqualTo("true");
+            assertThat(scalar(c, "SELECT c.relrowsecurity::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='refresh_token_history'")).isEqualTo("true");
+            assertThat(scalar(c, "SELECT count(*) FROM pg_policies WHERE schemaname='public' AND tablename='refresh_token_history' AND policyname='deny_all_refresh_token_history'")).isEqualTo("1");
+        }
+        try (var c = DriverManager.getConnection(url, "test", "test"); var s = c.createStatement()) {
+            c.setAutoCommit(false);
+            try {
+                s.execute("SET LOCAL ROLE authenticated");
+                assertThatThrownBy(() -> s.executeUpdate(
+                        "INSERT INTO public.refresh_token_history(session_id, user_id, token_hash, consumed_at, expires_at) " +
+                                "VALUES ('00000000-0000-0000-0000-000000000001', 1, repeat('a', 64), now(), now() + interval '1 day')"))
+                        .hasMessageContaining("row-level security");
+            } finally {
+                c.rollback();
+            }
         }
     }
 

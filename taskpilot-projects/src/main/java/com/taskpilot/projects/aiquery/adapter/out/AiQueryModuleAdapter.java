@@ -13,13 +13,18 @@ import com.taskpilot.contracts.aiquery.port.out.MemberAnalyticsPort;
 import com.taskpilot.contracts.aiquery.port.out.ProjectInsightsPort;
 import com.taskpilot.contracts.aiquery.port.out.SprintQueryPort;
 import com.taskpilot.contracts.aiquery.port.out.TaskCommandPort;
+import com.taskpilot.contracts.assignment.dto.TaskAssignmentContextDto;
 import com.taskpilot.contracts.assignment.dto.UserProfileDto;
 import com.taskpilot.contracts.assignment.dto.UserSkillDto;
 import com.taskpilot.contracts.assignment.port.out.UserPort;
 import com.taskpilot.contracts.assignment.port.out.UserSkillPort;
 import com.taskpilot.contracts.skill.dto.SkillDto;
 import com.taskpilot.contracts.skill.port.out.SkillPort;
-import com.taskpilot.contracts.user.port.out.NotificationPort;
+import com.taskpilot.contracts.task.PatchTaskCommand;
+import com.taskpilot.contracts.task.TaskDatePolicy;
+import com.taskpilot.contracts.user.dto.NotificationTypeDto;
+import com.taskpilot.contracts.user.dto.SystemNotificationCommandDto;
+import com.taskpilot.contracts.user.port.out.UserNotificationPort;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.common.entity.ProjectEntity;
 import com.taskpilot.projects.common.enums.HeuristicMode;
@@ -39,10 +44,13 @@ import com.taskpilot.projects.common.repository.TaskRepository;
 import com.taskpilot.projects.common.repository.TaskRequiredSkillRepository;
 import com.taskpilot.projects.sprints.service.SprintService;
 import com.taskpilot.projects.tasks.service.LabelService;
+import com.taskpilot.projects.tasks.service.TaskCommandService;
 import com.taskpilot.projects.tasks.service.TaskService;
+import com.taskpilot.projects.sprints.dto.CompleteSprintRequest;
 import com.taskpilot.projects.sprints.dto.CreateSprintRequest;
 import com.taskpilot.projects.sprints.dto.UpdateSprintRequest;
 import com.taskpilot.projects.tasks.dto.CreateLabelRequest;
+import com.taskpilot.projects.tasks.dto.CreateSuccessorTaskRequest;
 import com.taskpilot.projects.tasks.dto.CreateTaskRequest;
 import com.taskpilot.projects.tasks.dto.KanbanMoveRequest;
 import com.taskpilot.projects.tasks.dto.LabelDto;
@@ -55,28 +63,31 @@ import com.taskpilot.projects.projects.dto.ProjectResponse;
 import com.taskpilot.projects.projects.dto.UpdateProjectRequest;
 import com.taskpilot.projects.projects.dto.JoinProjectRequest;
 import com.taskpilot.projects.projects.dto.ProjectMemberResponse;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.text.Normalizer;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Primary
 @Component
-@RequiredArgsConstructor
-public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPort, MemberAnalyticsPort, SprintQueryPort {
+public class AiQueryModuleAdapter
+        implements TaskCommandPort, ProjectInsightsPort, MemberAnalyticsPort, SprintQueryPort {
 
     private final TaskRepository taskRepository;
     private final ProjectRepository projectRepository;
@@ -86,11 +97,64 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     private final UserPort userPort;
     private final UserSkillPort userSkillPort;
     private final SkillPort skillPort;
-    private final NotificationPort notificationPort;
     private final SprintService sprintService;
     private final TaskService taskService;
+    private final TaskCommandService taskCommandService;
     private final LabelService labelService;
     private final ProjectServiceImpl projectService;
+    private final Clock clock;
+
+    @Autowired
+    public AiQueryModuleAdapter(
+            TaskRepository taskRepository,
+            ProjectRepository projectRepository,
+            ProjectMemberRepository projectMemberRepository,
+            SprintRepository sprintRepository,
+            TaskRequiredSkillRepository taskRequiredSkillRepository,
+            UserPort userPort,
+            UserSkillPort userSkillPort,
+            SkillPort skillPort,
+            UserNotificationPort notificationPort,
+            SprintService sprintService,
+            TaskService taskService,
+            TaskCommandService taskCommandService,
+            LabelService labelService,
+            ProjectServiceImpl projectService) {
+        this(taskRepository, projectRepository, projectMemberRepository, sprintRepository,
+                taskRequiredSkillRepository, userPort, userSkillPort, skillPort,
+                sprintService, taskService, taskCommandService, labelService, projectService, Clock.systemUTC());
+    }
+
+    public AiQueryModuleAdapter(
+            TaskRepository taskRepository,
+            ProjectRepository projectRepository,
+            ProjectMemberRepository projectMemberRepository,
+            SprintRepository sprintRepository,
+            TaskRequiredSkillRepository taskRequiredSkillRepository,
+            UserPort userPort,
+            UserSkillPort userSkillPort,
+            SkillPort skillPort,
+            SprintService sprintService,
+            TaskService taskService,
+            TaskCommandService taskCommandService,
+            LabelService labelService,
+            ProjectServiceImpl projectService,
+            Clock clock) {
+        this.taskRepository = taskRepository;
+        this.projectRepository = projectRepository;
+        this.projectMemberRepository = projectMemberRepository;
+        this.sprintRepository = sprintRepository;
+        this.taskRequiredSkillRepository = taskRequiredSkillRepository;
+        this.userPort = userPort;
+        this.userSkillPort = userSkillPort;
+        this.skillPort = skillPort;
+        this.sprintService = sprintService;
+        this.taskService = taskService;
+        this.taskCommandService = taskCommandService;
+        this.labelService = labelService;
+        this.projectService = projectService;
+        this.clock = clock != null ? clock : Clock.systemUTC();
+    }
 
     @Override
     @Transactional(readOnly = true)
@@ -139,69 +203,72 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
 
     @Override
     @Transactional
-    public TaskSummaryDto updateTaskRequiredSkills(Long taskId, String skills, Long requesterUserId) {
-        TaskEntity task = findTask(taskId);
-        validateProjectMember(task.getProjectId(), requesterUserId);
-        validateProjectNotArchived(task.getProjectId());
-
-        List<Long> skillIds = resolveSkillIdsByNames(skills);
-        taskRequiredSkillRepository.deleteByTaskId(task.getId());
-        if (!skillIds.isEmpty()) {
-            List<TaskRequiredSkillEntity> taskSkills = skillIds.stream()
-                    .map(skillId -> TaskRequiredSkillEntity.builder()
-                            .id(new TaskRequiredSkillEntity.TaskRequiredSkillId(task.getId(), skillId))
-                            .taskId(task.getId())
-                            .skillId(skillId)
-                            .build())
-                    .toList();
-            taskRequiredSkillRepository.saveAll(taskSkills);
-        }
-
-        return toTaskSummary(task);
+    public TaskSummaryDto patchTask(PatchTaskCommand command, Long requesterUserId) {
+        return toTaskSummary(taskCommandService.patchTask(command, requesterUserId));
     }
 
     @Override
     @Transactional
-    public TaskAssignmentResultDto assignTaskToMember(Long taskId, Long memberId, String reason, Long requesterUserId,
-            boolean simulate) {
-        TaskEntity task = findTask(taskId);
-        validateProjectMember(task.getProjectId(), requesterUserId);
-        validateProjectMember(task.getProjectId(), memberId);
-        validateProjectNotArchived(task.getProjectId());
+    public TaskSummaryDto updateTaskRequiredSkills(Long taskId, String skills, Long expectedTaskVersion, UUID requestId,
+            Long requesterUserId) {
+        return toTaskSummary(taskCommandService.updateTaskRequiredSkillsByNames(
+                taskId, skills, expectedTaskVersion, requestId, requesterUserId));
+    }
 
-        if (!simulate) {
-            task.setAssigneeId(memberId);
-            taskRepository.saveAndFlush(task);
-            notificationPort.sendSystemNotification(memberId, "Task Assigned",
-                    "You have been assigned to task: " + task.getTitle(),
-                    "/tasks?taskId=" + task.getId());
-        }
+    @Override
+    @Transactional
+    public TaskAssignmentResultDto assignTaskToMember(Long taskId, Long memberId, String reason,
+            Long expectedTaskVersion,
+            UUID requestId, Long requesterUserId, boolean simulate) {
+        return assignTaskToMember(taskId, memberId, reason, expectedTaskVersion, requestId, requesterUserId, simulate,
+                null);
+    }
 
+    @Override
+    @Transactional
+    public TaskAssignmentResultDto assignTaskToMember(Long taskId, Long memberId, String reason,
+            Long expectedTaskVersion,
+            UUID requestId, Long requesterUserId, boolean simulate, String assignmentDecisionId) {
+        taskCommandService.assignTaskToMember(
+                taskId, memberId, expectedTaskVersion, requestId, requesterUserId, simulate, assignmentDecisionId);
         return TaskAssignmentResultDto.success(taskId, memberId,
                 normalizeReason(reason, simulate ? "Assignment simulated successfully" : "Task assigned by AI tool"));
     }
 
     @Override
-    @Transactional
-    public TaskSummaryDto updateTaskStatus(Long taskId, String status, Long requesterUserId) {
+    @Transactional(readOnly = true)
+    public java.util.Optional<TaskAssignmentContextDto> getTaskAssignmentContext(Long taskId, Long requesterUserId) {
         TaskEntity task = findTask(taskId);
         validateProjectMember(task.getProjectId(), requesterUserId);
-        validateProjectNotArchived(task.getProjectId());
+        return java.util.Optional.of(new TaskAssignmentContextDto(
+                task.getId(),
+                task.getProjectId(),
+                task.effectiveVersion(),
+                task.effectiveAssignmentVersion(),
+                task.getStatus() != null ? task.getStatus().name() : null,
+                task.getAssigneeId(),
+                task.isDeleted()));
+    }
 
-        TaskStatus nextStatus = parseStatus(status);
-        task.setStatus(nextStatus);
-        taskRepository.save(task);
-        return toTaskSummary(task);
+    @Override
+    @Transactional
+    public TaskSummaryDto updateTaskStatus(Long taskId, String status, Long expectedTaskVersion, UUID requestId,
+            Long requesterUserId) {
+        Map<String, Object> values = new LinkedHashMap<>();
+        values.put("status", parseStatus(status));
+        PatchTaskCommand command = PatchTaskCommand.fromValues(taskId, expectedTaskVersion, requestId, values);
+        return toTaskSummary(taskCommandService.patchTask(command, requesterUserId));
     }
 
     @Override
     @Transactional
     public TaskSummaryDto updateTask(Long taskId, String title, String description, String status, String priority,
             Float position, List<Long> labelIds, Integer difficultyLevel, List<Long> requiredSkillIds,
-            Long assigneeId, String startDate, String dueDate, Long requesterUserId) {
-        TaskEntity task = findTask(taskId);
-        String email = getRequesterEmail(requesterUserId);
+            Long assigneeId, String startDate, String dueDate, Long expectedTaskVersion, UUID requestId,
+            Long requesterUserId) {
         UpdateTaskRequest request = new UpdateTaskRequest(
+                expectedTaskVersion,
+                requestId,
                 title,
                 description,
                 parseOptionalStatus(status),
@@ -211,16 +278,18 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
                 difficultyLevel,
                 requiredSkillIds,
                 assigneeId,
-                parseInstant(startDate),
-                parseInstant(dueDate));
-        return toTaskSummary(taskService.updateTask(taskId, request, email), task.getProjectId());
+                startDate,
+                dueDate,
+                null);
+        return toTaskSummary(taskService.updateTask(taskId, request, requesterUserId));
     }
 
     @Override
     @Transactional
     public TaskSummaryDto createTask(Long projectId, String title, String description, String priority, Float position,
             Long parentTaskId, Long sprintId, Integer difficultyLevel, List<Long> labelIds,
-            List<Long> requiredSkillIds, Long assigneeId, String startDate, String dueDate, Long requesterUserId) {
+            List<Long> requiredSkillIds, Long assigneeId, String startDate, String dueDate, UUID requestId,
+            Long requesterUserId) {
         CreateTaskRequest request = new CreateTaskRequest(
                 projectId,
                 parentTaskId,
@@ -233,22 +302,45 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
                 difficultyLevel,
                 requiredSkillIds,
                 assigneeId,
-                parseInstant(startDate),
-                parseInstant(dueDate));
-        return toTaskSummary(taskService.createTask(request, getRequesterEmail(requesterUserId)));
+                startDate,
+                dueDate,
+                requestId);
+        return toTaskSummary(taskCommandService.createTask(request, requesterUserId, requestId));
     }
 
     @Override
     @Transactional
-    public void deleteTask(Long taskId, Long requesterUserId) {
-        taskService.deleteTask(taskId, getRequesterEmail(requesterUserId));
+    public void deleteTask(Long taskId, Long expectedTaskVersion, UUID requestId, Long requesterUserId) {
+        taskCommandService.deleteTask(taskId, expectedTaskVersion, requestId, requesterUserId);
     }
 
     @Override
     @Transactional
-    public TaskSummaryDto moveTaskKanban(Long taskId, String status, Float position, Long requesterUserId) {
-        KanbanMoveRequest request = new KanbanMoveRequest(parseStatus(status), position);
-        return toTaskSummary(taskService.moveTaskKanban(taskId, request, getRequesterEmail(requesterUserId)));
+    public TaskSummaryDto moveTaskKanban(Long taskId, String status, Float position, Long expectedTaskVersion,
+            UUID requestId, Long requesterUserId) {
+        KanbanMoveRequest request = new KanbanMoveRequest(
+                parseStatus(status), position, expectedTaskVersion, requestId);
+        return toTaskSummary(taskCommandService.moveTaskKanban(taskId, request, requesterUserId));
+    }
+
+    @Override
+    @Transactional
+    public TaskSummaryDto createSuccessorTask(Long sourceTaskId, String title, String description, String priority,
+            Long sprintId, Integer difficultyLevel, Long assigneeId, String startDate, String dueDate,
+            UUID requestId, Long requesterUserId) {
+        CreateSuccessorTaskRequest request = new CreateSuccessorTaskRequest(
+                title,
+                description,
+                parseOptionalPriority(priority),
+                sprintId,
+                difficultyLevel,
+                null,
+                null,
+                assigneeId,
+                startDate,
+                dueDate,
+                requestId);
+        return toTaskSummary(taskCommandService.createSuccessorTask(sourceTaskId, request, requesterUserId, requestId));
     }
 
     @Override
@@ -266,7 +358,8 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
                             member.getRole() != null ? member.getRole().name() : null,
                             project.getStartDate() != null ? project.getStartDate().toString() : null,
                             project.getEndDate() != null ? project.getEndDate().toString() : null,
-                            member.getJoinedAt() != null ? member.getJoinedAt().toString() : null);
+                            member.getJoinedAt() != null ? member.getJoinedAt().toString() : null,
+                            project.getTimezoneId());
                 })
                 .toList();
     }
@@ -311,7 +404,7 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     @Override
     @Transactional(readOnly = true)
     public List<LabelSummaryDto> getProjectLabels(Long projectId, Long requesterUserId) {
-        return labelService.getLabelsByProject(projectId, getRequesterEmail(requesterUserId)).stream()
+        return labelService.getLabelsByProject(projectId, requesterUserId).stream()
                 .map(this::toLabelSummary)
                 .toList();
     }
@@ -320,19 +413,19 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     @Transactional
     public LabelSummaryDto createProjectLabel(Long projectId, String name, String color, Long requesterUserId) {
         return toLabelSummary(labelService.createLabel(projectId, new CreateLabelRequest(name, color),
-                getRequesterEmail(requesterUserId)));
+                requesterUserId));
     }
 
     @Override
     @Transactional
     public void deleteProjectLabel(Long projectId, Long labelId, Long requesterUserId) {
-        labelService.deleteLabel(projectId, labelId, getRequesterEmail(requesterUserId));
+        labelService.deleteLabel(projectId, labelId, requesterUserId);
     }
 
     @Override
     @Transactional
-    public ProjectOverviewDto createProject(String name, String description, String startDate, String endDate, Long requesterUserId) {
-        String email = getRequesterEmail(requesterUserId);
+    public ProjectOverviewDto createProject(String name, String description, String startDate, String endDate,
+            Long requesterUserId) {
         LocalDate start = parseLocalDate(startDate);
         LocalDate end = parseLocalDate(endDate);
 
@@ -341,10 +434,9 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
                 description,
                 null,
                 start,
-                end
-        );
+                end);
 
-        ProjectResponse response = projectService.createProject(request, email);
+        ProjectResponse response = projectService.createProject(request, requesterUserId);
         return new ProjectOverviewDto(
                 response.id(),
                 response.name(),
@@ -353,14 +445,14 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
                 "MANAGER",
                 response.startDate() != null ? response.startDate().toString() : null,
                 response.endDate() != null ? response.endDate().toString() : null,
-                response.createdAt() != null ? response.createdAt().toString() : null
-        );
+                response.createdAt() != null ? response.createdAt().toString() : null,
+                response.timezoneId());
     }
 
     @Override
     @Transactional
-    public ProjectOverviewDto updateProject(Long projectId, String name, String description, String status, String heuristicMode, String workflowMode, String startDate, String endDate, Long requesterUserId) {
-        String email = getRequesterEmail(requesterUserId);
+    public ProjectOverviewDto updateProject(Long projectId, String name, String description, String status,
+            String heuristicMode, String workflowMode, String startDate, String endDate, Long requesterUserId) {
         LocalDate start = parseLocalDate(startDate);
         LocalDate end = parseLocalDate(endDate);
 
@@ -371,10 +463,9 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
                 parseHeuristicMode(heuristicMode),
                 parseWorkflowMode(workflowMode),
                 start,
-                end
-        );
+                end);
 
-        ProjectResponse response = projectService.updateProject(projectId, request, email);
+        ProjectResponse response = projectService.updateProject(projectId, request, requesterUserId);
         return new ProjectOverviewDto(
                 response.id(),
                 response.name(),
@@ -383,86 +474,91 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
                 "MANAGER",
                 response.startDate() != null ? response.startDate().toString() : null,
                 response.endDate() != null ? response.endDate().toString() : null,
-                response.createdAt() != null ? response.createdAt().toString() : null
-        );
+                response.createdAt() != null ? response.createdAt().toString() : null,
+                response.timezoneId());
     }
 
     @Override
     @Transactional
     public Object joinProject(String projectCode, Long requesterUserId) {
-        String email = getRequesterEmail(requesterUserId);
         JoinProjectRequest request = new JoinProjectRequest(projectCode);
-        ProjectMemberResponse response = projectService.joinProject(request, email);
+        ProjectMemberResponse response = projectService.joinProject(request, requesterUserId);
         return response;
     }
 
     @Override
     @Transactional
     public void leaveProject(Long projectId, Long requesterUserId) {
-        String email = getRequesterEmail(requesterUserId);
-        projectService.leaveProject(projectId, email);
+        projectService.leaveProject(projectId, requesterUserId);
     }
 
     @Override
     @Transactional
     public void updateMemberRole(Long projectId, Long targetUserId, String role, Long requesterUserId) {
-        String email = getRequesterEmail(requesterUserId);
         MemberRole parsedRole = parseMemberRole(role);
-        projectService.updateMemberRole(projectId, targetUserId, parsedRole, email);
+        projectService.updateMemberRole(projectId, targetUserId, parsedRole, requesterUserId);
     }
 
     @Override
     @Transactional
     public void removeMember(Long projectId, Long targetUserId, Long requesterUserId) {
-        String email = getRequesterEmail(requesterUserId);
-        projectService.removeMember(projectId, targetUserId, email);
+        projectService.removeMember(projectId, targetUserId, requesterUserId);
     }
 
     @Override
     @Transactional
     public void archiveProject(Long projectId, Long requesterUserId) {
-        String email = getRequesterEmail(requesterUserId);
-        projectService.archiveProject(projectId, email);
+        projectService.archiveProject(projectId, requesterUserId);
     }
 
     @Override
     @Transactional
     public void restoreProject(Long projectId, Long requesterUserId) {
-        String email = getRequesterEmail(requesterUserId);
-        projectService.restoreProject(projectId, email);
+        projectService.restoreProject(projectId, requesterUserId);
     }
 
     @Override
     @Transactional
     public void deleteProject(Long projectId, Long requesterUserId) {
-        String email = getRequesterEmail(requesterUserId);
-        projectService.deleteProject(projectId, email);
+        projectService.deleteProject(projectId, requesterUserId);
+    }
+
+    @Override
+    @Transactional
+    public void deleteProject(Long projectId, String confirmationText, UUID requestId, Long requesterUserId) {
+        projectService.deleteProject(projectId, requesterUserId, confirmationText, requestId);
     }
 
     private ProjectStatus parseProjectStatus(String status) {
-        if (status == null || status.isBlank()) return null;
+        if (status == null || status.isBlank())
+            return null;
         try {
             return ProjectStatus.valueOf(status.trim().toUpperCase());
         } catch (IllegalArgumentException ex) {
-            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Invalid status. Use ACTIVE, COMPLETED, ARCHIVED");
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                    "Invalid status. Use ACTIVE, COMPLETED, ARCHIVED");
         }
     }
 
     private HeuristicMode parseHeuristicMode(String mode) {
-        if (mode == null || mode.isBlank()) return null;
+        if (mode == null || mode.isBlank())
+            return null;
         try {
             return HeuristicMode.valueOf(mode.trim().toUpperCase());
         } catch (IllegalArgumentException ex) {
-            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Invalid heuristic mode. Use BALANCED, SKILL_FIT_ONLY, WORKLOAD_ONLY");
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                    "Invalid heuristic mode. Use BALANCED, SKILL_FIT_ONLY, WORKLOAD_ONLY");
         }
     }
 
     private WorkflowMode parseWorkflowMode(String mode) {
-        if (mode == null || mode.isBlank()) return null;
+        if (mode == null || mode.isBlank())
+            return null;
         try {
             return WorkflowMode.valueOf(mode.trim().toUpperCase());
         } catch (IllegalArgumentException ex) {
-            throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Invalid workflow mode. Use STANDARD, SCRUM, KANBAN");
+            throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                    "Invalid workflow mode. Use STANDARD, SCRUM, KANBAN");
         }
     }
 
@@ -493,13 +589,15 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     @Transactional(readOnly = true)
     public MemberWorkloadDto getMemberWorkload(Long memberId, Long requesterUserId) {
         boolean hasSharedProject = projectMemberRepository.findByUserId(memberId).stream()
-                .anyMatch(member -> projectMemberRepository.existsByProjectIdAndUserId(member.getProjectId(), requesterUserId));
+                .anyMatch(member -> projectMemberRepository.existsByProjectIdAndUserId(member.getProjectId(),
+                        requesterUserId));
         if (!hasSharedProject) {
             throw new BusinessException(HttpStatus.FORBIDDEN.value(), "You do not share a project with this member");
         }
 
         List<TaskEntity> visibleTasks = taskRepository.findByAssigneeId(memberId).stream()
-                .filter(task -> projectMemberRepository.existsByProjectIdAndUserId(task.getProjectId(), requesterUserId))
+                .filter(task -> projectMemberRepository.existsByProjectIdAndUserId(task.getProjectId(),
+                        requesterUserId))
                 .toList();
         return toMemberWorkload(memberId, visibleTasks);
     }
@@ -517,74 +615,68 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     @Transactional(readOnly = true)
     public Object getSprintBacklog(Long projectId, Long requesterUserId) {
         validateProjectMember(projectId, requesterUserId);
-        String email = getRequesterEmail(requesterUserId);
-        return sprintService.getBacklog(projectId, email);
+        return sprintService.getBacklog(projectId, requesterUserId);
     }
 
     @Override
     @Transactional(readOnly = true)
     public Object getSprintBoard(Long projectId, Long requesterUserId) {
         validateProjectMember(projectId, requesterUserId);
-        String email = getRequesterEmail(requesterUserId);
-        return sprintService.getBoard(projectId, email);
+        return sprintService.getBoard(projectId, requesterUserId);
     }
 
     @Override
     @Transactional
-    public SprintSummaryDto createSprint(Long projectId, String name, String startDate, String endDate, String goal, Long requesterUserId) {
+    public SprintSummaryDto createSprint(Long projectId, String name, String startDate, String endDate, String goal,
+            Long requesterUserId) {
         validateProjectMember(projectId, requesterUserId);
-        String email = getRequesterEmail(requesterUserId);
         LocalDate start = parseLocalDate(startDate);
         LocalDate end = parseLocalDate(endDate);
         CreateSprintRequest request = new CreateSprintRequest(name, goal, start, end);
-        return toSprintSummary(sprintService.createSprint(projectId, request, email));
+        return toSprintSummary(sprintService.createSprint(projectId, request, requesterUserId));
     }
 
     @Override
     @Transactional
     public SprintSummaryDto updateSprint(Long projectId, Long sprintId, String name, String startDate, String endDate,
             String goal, Long requesterUserId) {
-        String email = getRequesterEmail(requesterUserId);
-        UpdateSprintRequest request = new UpdateSprintRequest(name, goal, parseLocalDate(startDate), parseLocalDate(endDate));
-        return toSprintSummary(sprintService.updateSprint(projectId, sprintId, request, email));
+        UpdateSprintRequest request = new UpdateSprintRequest(name, goal, parseLocalDate(startDate),
+                parseLocalDate(endDate));
+        return toSprintSummary(sprintService.updateSprint(projectId, sprintId, request, requesterUserId));
     }
 
     @Override
     @Transactional
     public void deleteSprint(Long projectId, Long sprintId, Long requesterUserId) {
-        sprintService.deleteSprint(projectId, sprintId, getRequesterEmail(requesterUserId));
+        sprintService.deleteSprint(projectId, sprintId, requesterUserId);
     }
 
     @Override
     @Transactional
     public SprintSummaryDto startSprint(Long projectId, Long sprintId, Long requesterUserId) {
         validateProjectMember(projectId, requesterUserId);
-        String email = getRequesterEmail(requesterUserId);
-        return toSprintSummary(sprintService.startSprint(projectId, sprintId, email));
+        return toSprintSummary(sprintService.startSprint(projectId, sprintId, requesterUserId));
     }
 
     @Override
     @Transactional
-    public SprintSummaryDto completeSprint(Long projectId, Long sprintId, Long requesterUserId) {
+    public SprintSummaryDto completeSprint(Long projectId, Long sprintId, Long expectedSprintVersion,
+            String carryoverDestination, Long targetSprintId, UUID requestId, Long requesterUserId) {
         validateProjectMember(projectId, requesterUserId);
-        String email = getRequesterEmail(requesterUserId);
-        return toSprintSummary(sprintService.completeSprint(projectId, sprintId, email));
+        CompleteSprintRequest request = new CompleteSprintRequest(
+                expectedSprintVersion,
+                requestId,
+                new CompleteSprintRequest.CarryoverSelection(carryoverDestination, targetSprintId),
+                null);
+        return toSprintSummary(sprintService.completeSprint(projectId, sprintId, request, requesterUserId, requestId));
     }
 
     @Override
     @Transactional
-    public Object assignTaskToSprint(Long taskId, Long sprintId, Long requesterUserId) {
-        TaskEntity task = findTask(taskId);
-        validateProjectMember(task.getProjectId(), requesterUserId);
-        String email = getRequesterEmail(requesterUserId);
-        UpdateTaskSprintRequest request = new UpdateTaskSprintRequest(sprintId);
-        return taskService.updateTaskSprint(taskId, request, email);
-    }
-
-    private String getRequesterEmail(Long requesterUserId) {
-        return userPort.findById(requesterUserId)
-                .map(UserProfileDto::email)
-                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
+    public Object assignTaskToSprint(Long taskId, Long sprintId, Long expectedTaskVersion, UUID requestId,
+            Long requesterUserId) {
+        UpdateTaskSprintRequest request = new UpdateTaskSprintRequest(sprintId, expectedTaskVersion, requestId);
+        return taskCommandService.updateTaskSprint(taskId, request, requesterUserId);
     }
 
     private LocalDate parseLocalDate(String value) {
@@ -600,7 +692,7 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     }
 
     private TaskEntity findTask(Long taskId) {
-        return taskRepository.findById(taskId)
+        return taskRepository.findActiveById(taskId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Task not found"));
     }
 
@@ -610,7 +702,8 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     }
 
     private void validateProjectMember(Long projectId, Long userId) {
-        if (projectId == null || userId == null || !projectMemberRepository.existsByProjectIdAndUserId(projectId, userId)) {
+        if (projectId == null || userId == null
+                || !projectMemberRepository.existsByProjectIdAndUserId(projectId, userId)) {
             throw new BusinessException(HttpStatus.FORBIDDEN.value(), "You are not a member of this project");
         }
     }
@@ -646,6 +739,7 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     private TaskSummaryDto toTaskSummary(TaskEntity task) {
         UserProfileDto assignee = task.getAssigneeId() == null ? null
                 : userPort.findById(task.getAssigneeId()).orElse(null);
+        String projectTimezoneId = resolveProjectTimezone(task.getProjectId());
         return new TaskSummaryDto(
                 task.getId(),
                 task.getProjectId(),
@@ -658,9 +752,12 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
                 task.getDifficultyLevel(),
                 task.getAssigneeId(),
                 assignee != null ? assignee.fullName() : null,
+                task.getStartDate() != null ? task.getStartDate().toString() : null,
                 task.getDueDate() != null ? task.getDueDate().toString() : null,
                 task.getCreatedAt() != null ? task.getCreatedAt().toString() : null,
-                task.getUpdatedAt() != null ? task.getUpdatedAt().toString() : null);
+                task.getUpdatedAt() != null ? task.getUpdatedAt().toString() : null,
+                task.effectiveVersion(),
+                projectTimezoneId);
     }
 
     private TaskSummaryDto toTaskSummary(TaskDto task) {
@@ -670,9 +767,13 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     private TaskSummaryDto toTaskSummary(TaskDto task, Long fallbackProjectId) {
         UserProfileDto assignee = task.assigneeId() == null ? null
                 : userPort.findById(task.assigneeId()).orElse(null);
+        Long resolvedProjectId = task.projectId() != null ? task.projectId() : fallbackProjectId;
+        String projectTimezoneId = task.projectTimezoneId() != null
+                ? task.projectTimezoneId()
+                : resolveProjectTimezone(resolvedProjectId);
         return new TaskSummaryDto(
                 task.id(),
-                task.projectId() != null ? task.projectId() : fallbackProjectId,
+                resolvedProjectId,
                 task.parentId(),
                 task.sprintId(),
                 task.title(),
@@ -682,9 +783,12 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
                 task.difficultyLevel(),
                 task.assigneeId(),
                 assignee != null ? assignee.fullName() : null,
+                task.startDate() != null ? task.startDate().toString() : null,
                 task.dueDate() != null ? task.dueDate().toString() : null,
                 task.createdAt() != null ? task.createdAt().toString() : null,
-                task.updatedAt() != null ? task.updatedAt().toString() : null);
+                task.updatedAt() != null ? task.updatedAt().toString() : null,
+                task.version(),
+                projectTimezoneId);
     }
 
     private LabelSummaryDto toLabelSummary(LabelDto label) {
@@ -708,9 +812,21 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
                 task.getPriority() != null ? task.getPriority().name() : null,
                 task.getDifficultyLevel(),
                 requiredSkills,
+                task.getStartDate() != null ? task.getStartDate().toString() : null,
                 task.getDueDate() != null ? task.getDueDate().toString() : null,
                 assignee != null ? assignee.fullName() : null,
-                task.getAssigneeId());
+                task.getAssigneeId(),
+                task.effectiveVersion(),
+                resolveProjectTimezone(task.getProjectId()));
+    }
+
+    private String resolveProjectTimezone(Long projectId) {
+        if (projectId == null) {
+            return TaskDatePolicy.DEFAULT_PROJECT_TIMEZONE_ID;
+        }
+        return projectRepository.findById(projectId)
+                .map(ProjectEntity::getTimezoneId)
+                .orElse(TaskDatePolicy.DEFAULT_PROJECT_TIMEZONE_ID);
     }
 
     private SprintSummaryDto toSprintSummary(SprintEntity sprint) {
@@ -722,7 +838,8 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
                 sprint.getStatus() != null ? sprint.getStatus().name() : null,
                 sprint.getStartDate() != null ? sprint.getStartDate().toString() : null,
                 sprint.getEndDate() != null ? sprint.getEndDate().toString() : null,
-                sprint.getHeuristicMode() != null ? sprint.getHeuristicMode().name() : null);
+                sprint.getHeuristicMode() != null ? sprint.getHeuristicMode().name() : null,
+                sprint.effectiveVersion());
     }
 
     private SprintSummaryDto toSprintSummary(com.taskpilot.projects.sprints.dto.SprintDto sprint) {
@@ -734,7 +851,8 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
                 sprint.status() != null ? sprint.status().name() : null,
                 sprint.startDate() != null ? sprint.startDate().toString() : null,
                 sprint.endDate() != null ? sprint.endDate().toString() : null,
-                null);
+                null,
+                sprint.version() != null ? sprint.version() : 0L);
     }
 
     private MemberWorkloadDto toMemberWorkload(Long memberId, List<TaskEntity> assignedTasks) {
@@ -793,9 +911,10 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     }
 
     private boolean isOverdue(TaskEntity task) {
-        return task.getDueDate() != null
-                && task.getDueDate().isBefore(Instant.now())
-                && task.getStatus() != TaskStatus.DONE;
+        return TaskDatePolicy.isOverdue(
+                task.getDueDate(),
+                task.getStatus() != null ? task.getStatus().name() : null,
+                clock);
     }
 
     private TaskStatus parseStatus(String status) {
@@ -828,33 +947,10 @@ public class AiQueryModuleAdapter implements TaskCommandPort, ProjectInsightsPor
     }
 
     private String normalizeEnum(String value) {
-        return value == null ? "" : value.trim()
-                .replaceAll("[\\p{Pd}\\s]+", "_")
-                .toUpperCase(Locale.ROOT);
-    }
-
-    private Integer safeDifficulty(Integer difficultyLevel) {
-        if (difficultyLevel == null) {
-            return 1;
-        }
-        return Math.max(1, Math.min(10, difficultyLevel));
-    }
-
-    private Instant parseInstant(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        String trimmed = value.trim();
-        try {
-            return Instant.parse(trimmed);
-        } catch (DateTimeParseException ignored) {
-            try {
-                return LocalDate.parse(trimmed).atStartOfDay().toInstant(ZoneOffset.UTC);
-            } catch (DateTimeParseException ex) {
-                throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
-                        "Invalid dueDate. Use ISO-8601 instant or YYYY-MM-DD");
-            }
-        }
+        return value == null ? ""
+                : value.trim()
+                        .replaceAll("[\\p{Pd}\\s]+", "_")
+                        .toUpperCase(Locale.ROOT);
     }
 
     private String normalizeReason(String reason, String fallback) {

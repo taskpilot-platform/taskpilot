@@ -31,11 +31,16 @@ public class InMemoryOAuth2OneTimeCodeStore implements OAuth2OneTimeCodeStore {
         this.clock = clock != null ? clock : Clock.systemUTC();
     }
 
-    private record CodeEntry(Long userId, Instant expiresAt) {
+    private record CodeEntry(ExchangePayload payload, Instant expiresAt) {
     }
 
     @Override
     public String generateAndStore(Long userId) {
+        return generateAndStore(ExchangePayload.authenticated(userId));
+    }
+
+    @Override
+    public String generateAndStore(ExchangePayload payload) {
         cleanupExpired();
 
         byte[] randomBytes = new byte[32];
@@ -45,13 +50,21 @@ public class InMemoryOAuth2OneTimeCodeStore implements OAuth2OneTimeCodeStore {
         int ttl = Math.max(10, oAuth2Properties.getCodeTtlSeconds());
         Instant expiresAt = Instant.now(clock).plusSeconds(ttl);
 
-        store.put(code, new CodeEntry(userId, expiresAt));
-        log.debug("Generated OAuth2 one-time code for userId={}, expires in {}s", userId, ttl);
+        store.put(code, new CodeEntry(payload, expiresAt));
+        log.debug("Generated OAuth2 one-time code for outcome={}, userId={}, expires in {}s",
+                payload.outcome(), payload.userId(), ttl);
         return code;
     }
 
     @Override
     public Optional<Long> consume(String code) {
+        return consumePayload(code)
+                .filter(p -> p.outcome() == OutcomeType.AUTHENTICATED)
+                .map(ExchangePayload::userId);
+    }
+
+    @Override
+    public Optional<ExchangePayload> consumePayload(String code) {
         if (code == null || code.isBlank()) {
             return Optional.empty();
         }
@@ -63,12 +76,13 @@ public class InMemoryOAuth2OneTimeCodeStore implements OAuth2OneTimeCodeStore {
         }
 
         if (Instant.now(clock).isAfter(entry.expiresAt())) {
-            log.warn("OAuth2 one-time code expired for userId={}", entry.userId());
+            log.warn("OAuth2 one-time code expired for userId={}", entry.payload().userId());
             return Optional.empty();
         }
 
-        log.info("OAuth2 one-time code successfully consumed for userId={}", entry.userId());
-        return Optional.of(entry.userId());
+        log.info("OAuth2 one-time code successfully consumed for outcome={}, userId={}",
+                entry.payload().outcome(), entry.payload().userId());
+        return Optional.of(entry.payload());
     }
 
     private void cleanupExpired() {

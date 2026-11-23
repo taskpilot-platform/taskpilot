@@ -6,6 +6,7 @@ import com.taskpilot.contracts.aiquery.dto.ProjectStatusDto;
 import com.taskpilot.contracts.aiquery.dto.LabelSummaryDto;
 
 import java.util.List;
+import java.util.UUID;
 
 public interface ProjectInsightsPort {
     List<ProjectOverviewDto> getMyProjects(Long requesterUserId);
@@ -20,6 +21,9 @@ public interface ProjectInsightsPort {
     void archiveProject(Long projectId, Long requesterUserId);
     void restoreProject(Long projectId, Long requesterUserId);
     void deleteProject(Long projectId, Long requesterUserId);
+    default void deleteProject(Long projectId, String confirmationText, UUID requestId, Long requesterUserId) {
+        deleteProject(projectId, requesterUserId);
+    }
     List<LabelSummaryDto> getProjectLabels(Long projectId, Long requesterUserId);
     LabelSummaryDto createProjectLabel(Long projectId, String name, String color, Long requesterUserId);
     void deleteProjectLabel(Long projectId, Long labelId, Long requesterUserId);

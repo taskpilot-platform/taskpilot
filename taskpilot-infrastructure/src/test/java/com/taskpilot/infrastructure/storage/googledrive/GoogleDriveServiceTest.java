@@ -1,28 +1,44 @@
 package com.taskpilot.infrastructure.storage.googledrive;
 
-import com.google.api.client.googleapis.media.MediaHttpUploader;
-import com.google.api.client.http.AbstractInputStreamContent;
+import com.google.api.client.googleapis.json.GoogleJsonError;
+import com.google.api.client.googleapis.json.GoogleJsonResponseException;
+import com.google.api.client.http.HttpHeaders;
+import com.google.api.client.http.HttpResponse;
+import com.google.api.client.http.HttpResponseException;
+import com.google.api.client.http.InputStreamContent;
+import com.google.api.client.util.DateTime;
 import com.google.api.services.drive.Drive;
 import com.google.api.services.drive.model.File;
+import com.google.api.services.drive.model.FileList;
+import com.taskpilot.infrastructure.storage.range.ByteRange;
+import com.taskpilot.infrastructure.storage.range.StorageDeleteOutcome;
+import com.taskpilot.infrastructure.storage.range.StorageDeleteResult;
+import com.taskpilot.infrastructure.storage.range.StorageObjectStat;
+import com.taskpilot.infrastructure.storage.range.StorageReadResult;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
 
 import java.io.ByteArrayInputStream;
-import java.nio.charset.StandardCharsets;
+import com.google.api.client.googleapis.media.MediaHttpUploader;
+import com.google.api.client.http.AbstractInputStreamContent;
 import java.security.MessageDigest;
 import java.util.HexFormat;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class GoogleDriveServiceTest {
@@ -57,6 +73,150 @@ class GoogleDriveServiceTest {
         assertThatThrownBy(() -> service.uploadFile(emptyFile))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Cannot upload empty file");
+    }
+
+    @Test
+    void uploadFile_neverCreatesPublicPermissionOrExposesLinksAndSetsOperationId() throws IOException {
+        Drive.Files files = mock(Drive.Files.class);
+        Drive.Files.Create createReq = mock(Drive.Files.Create.class);
+        when(drive.files()).thenReturn(files);
+        when(files.create(any(File.class), any(InputStreamContent.class))).thenReturn(createReq);
+        when(createReq.setFields(anyString())).thenReturn(createReq);
+
+        File returned = new File()
+                .setId("drive-file-99")
+                .setName("recording.webm")
+                .setMimeType("video/webm")
+                .setSize(1234L)
+                .setMd5Checksum("abc123md5")
+                .setModifiedTime(new DateTime(1700000000000L));
+        when(createReq.execute()).thenReturn(returned);
+
+        UUID operationId = UUID.randomUUID();
+        GoogleDriveService service = new GoogleDriveService(drive, "folder-xyz");
+        MockMultipartFile file = new MockMultipartFile("file", "recording.webm", "video/webm", "video-bytes".getBytes());
+
+        GoogleDriveFileDto dto = service.uploadFile(file, null, operationId);
+
+        ArgumentCaptor<File> metaCaptor = ArgumentCaptor.forClass(File.class);
+        verify(files).create(metaCaptor.capture(), any(InputStreamContent.class));
+        assertThat(metaCaptor.getValue().getParents()).containsExactly("folder-xyz");
+        assertThat(metaCaptor.getValue().getAppProperties()).containsEntry("taskpilotOperationId", operationId.toString());
+
+        ArgumentCaptor<String> fieldsCaptor = ArgumentCaptor.forClass(String.class);
+        verify(createReq).setFields(fieldsCaptor.capture());
+        assertThat(fieldsCaptor.getValue()).doesNotContain("webViewLink").doesNotContain("webContentLink");
+
+        verify(drive, never()).permissions();
+        assertThat(dto.getFileId()).isEqualTo("drive-file-99");
+        assertThat(dto.getWebViewLink()).isNull();
+        assertThat(dto.getWebContentLink()).isNull();
+    }
+
+    @Test
+    void findFilesByOperationId_queriesAppProperties() throws IOException {
+        Drive.Files files = mock(Drive.Files.class);
+        Drive.Files.List listReq = mock(Drive.Files.List.class);
+        when(drive.files()).thenReturn(files);
+        when(files.list()).thenReturn(listReq);
+        when(listReq.setQ(anyString())).thenReturn(listReq);
+        when(listReq.setPageSize(anyInt())).thenReturn(listReq);
+        when(listReq.setFields(anyString())).thenReturn(listReq);
+
+        UUID opId = UUID.randomUUID();
+        when(listReq.execute()).thenReturn(new FileList().setFiles(List.of(
+                new File().setId("orphan-drive-1").setName("clip.webm").setSize(42L)
+        )));
+
+        GoogleDriveService service = new GoogleDriveService(drive, "folder-xyz");
+        List<GoogleDriveFileDto> found = service.findFilesByOperationId(opId);
+
+        ArgumentCaptor<String> qCaptor = ArgumentCaptor.forClass(String.class);
+        verify(listReq).setQ(qCaptor.capture());
+        assertThat(qCaptor.getValue()).contains("taskpilotOperationId").contains(opId.toString());
+        assertThat(found).hasSize(1);
+        assertThat(found.get(0).getFileId()).isEqualTo("orphan-drive-1");
+    }
+
+    @Test
+    void readObject_passesExactRangeAndDisconnectsOnClose() throws IOException {
+        Drive.Files files = mock(Drive.Files.class);
+        Drive.Files.Get getReq = mock(Drive.Files.Get.class);
+        HttpHeaders reqHeaders = new HttpHeaders();
+        HttpResponse httpResponse = mock(HttpResponse.class);
+        HttpHeaders respHeaders = new HttpHeaders()
+                .setContentRange("bytes 2-5/10")
+                .setContentLength(4L)
+                .setETag("\"drive-etag\"");
+
+        when(drive.files()).thenReturn(files);
+        when(files.get("drive-1")).thenReturn(getReq);
+        when(getReq.getRequestHeaders()).thenReturn(reqHeaders);
+        when(getReq.executeMedia()).thenReturn(httpResponse);
+        when(httpResponse.getStatusCode()).thenReturn(206);
+        when(httpResponse.getHeaders()).thenReturn(respHeaders);
+        when(httpResponse.getContentType()).thenReturn("video/webm");
+        when(httpResponse.getContent()).thenReturn(new ByteArrayInputStream("2345".getBytes(StandardCharsets.UTF_8)));
+
+        GoogleDriveService service = new GoogleDriveService(drive, "folder-xyz");
+        StorageReadResult result = service.readObject("drive-1", Optional.of(new ByteRange(2, 5)));
+
+        assertThat(reqHeaders.getRange()).isEqualTo("bytes=2-5");
+        assertThat(result.totalBytes()).isEqualTo(10L);
+        assertThat(result.responseBytes()).isEqualTo(4L);
+        assertThat(result.etag()).contains("\"drive-etag\"");
+        assertThat(new String(result.body().readAllBytes(), StandardCharsets.UTF_8)).isEqualTo("2345");
+
+        result.body().close();
+        verify(httpResponse).disconnect();
+    }
+
+    @Test
+    void statObject_returnsMd5EtagAndModifiedTime() throws IOException {
+        Drive.Files files = mock(Drive.Files.class);
+        Drive.Files.Get getReq = mock(Drive.Files.Get.class);
+        when(drive.files()).thenReturn(files);
+        when(files.get("drive-1")).thenReturn(getReq);
+        when(getReq.setFields(anyString())).thenReturn(getReq);
+        when(getReq.execute()).thenReturn(new File()
+                .setId("drive-1")
+                .setSize(100L)
+                .setMimeType("video/mp4")
+                .setMd5Checksum("deadbeef")
+                .setModifiedTime(new DateTime(1700000000000L)));
+
+        GoogleDriveService service = new GoogleDriveService(drive, "folder-xyz");
+        Optional<StorageObjectStat> stat = service.statObject("drive-1");
+
+        assertThat(stat).isPresent();
+        assertThat(stat.get().totalBytes()).isEqualTo(100L);
+        assertThat(stat.get().etag()).contains("\"deadbeef\"");
+        assertThat(stat.get().lastModified()).isPresent();
+    }
+
+    @Test
+    void deleteObject_handles404AsIdempotentSuccessAnd403AsAuthFailure() throws IOException {
+        Drive.Files files = mock(Drive.Files.class);
+        Drive.Files.Delete del404 = mock(Drive.Files.Delete.class);
+        Drive.Files.Delete del403 = mock(Drive.Files.Delete.class);
+        when(drive.files()).thenReturn(files);
+        when(files.delete("missing")).thenReturn(del404);
+        when(files.delete("forbidden")).thenReturn(del403);
+
+        HttpResponseException.Builder b404 = new HttpResponseException.Builder(404, "Not Found", new HttpHeaders());
+        when(del404.execute()).thenThrow(new GoogleJsonResponseException(b404, new GoogleJsonError()));
+
+        HttpResponseException.Builder b403 = new HttpResponseException.Builder(403, "Forbidden", new HttpHeaders());
+        when(del403.execute()).thenThrow(new GoogleJsonResponseException(b403, new GoogleJsonError()));
+
+        GoogleDriveService service = new GoogleDriveService(drive, "folder-xyz");
+        StorageDeleteResult r404 = service.deleteObject("missing");
+        StorageDeleteResult r403 = service.deleteObject("forbidden");
+
+        assertThat(r404.isSuccess()).isTrue();
+        assertThat(r404.outcome()).isEqualTo(StorageDeleteOutcome.NOT_FOUND);
+        assertThat(r403.isSuccess()).isFalse();
+        assertThat(r403.outcome()).isEqualTo(StorageDeleteOutcome.AUTH_FAILURE);
     }
 
     @Test

@@ -1,5 +1,6 @@
 package com.taskpilot.projects.sprints.dto;
 
+import java.time.Instant;
 import java.time.LocalDate;
 
 import com.taskpilot.projects.common.entity.SprintEntity;
@@ -12,8 +13,16 @@ public record SprintDto(
         String goal,
         SprintStatus status,
         LocalDate startDate,
-        LocalDate endDate) {
+        LocalDate endDate,
+        Long version,
+        Instant completedAt,
+        Long completedByUserId,
+        SprintClosureSnapshotDto closureSnapshot) {
     public static SprintDto fromEntity(SprintEntity entity) {
+        return fromEntity(entity, null);
+    }
+
+    public static SprintDto fromEntity(SprintEntity entity, SprintClosureSnapshotDto closureSnapshot) {
         return new SprintDto(
                 entity.getId(),
                 entity.getProjectId(),
@@ -21,6 +30,10 @@ public record SprintDto(
                 entity.getGoal(),
                 entity.getStatus(),
                 entity.getStartDate(),
-                entity.getEndDate());
+                entity.getEndDate(),
+                entity.effectiveVersion(),
+                entity.getCompletedAt(),
+                entity.getCompletedByUserId(),
+                closureSnapshot);
     }
 }

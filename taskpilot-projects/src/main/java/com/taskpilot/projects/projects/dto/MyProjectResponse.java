@@ -14,6 +14,8 @@ public record MyProjectResponse(
         MemberRole myRole,
         LocalDate startDate,
         LocalDate endDate,
+        String timezoneId,
+        String timezoneProvenance,
         Instant joinedAt
 ) {
 }

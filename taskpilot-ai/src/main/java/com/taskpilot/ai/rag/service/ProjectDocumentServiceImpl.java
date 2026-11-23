@@ -7,26 +7,36 @@ import com.taskpilot.ai.rag.entity.DocumentEntity;
 import com.taskpilot.ai.rag.repository.DocumentChunkRepository;
 import com.taskpilot.ai.rag.repository.DocumentRepository;
 import com.taskpilot.contracts.assignment.port.out.ProjectMemberPort;
+import com.taskpilot.contracts.storage.ProjectStorageInventoryContributor;
+import com.taskpilot.contracts.storage.StorageObjectLocator;
+import com.taskpilot.contracts.storage.StorageProviderKind;
+import com.taskpilot.contracts.storage.StorageTargetDomain;
+import com.taskpilot.contracts.storage.StorageUploadOperationDto;
+import com.taskpilot.contracts.storage.StorageUploadOperationPort;
+import com.taskpilot.contracts.storage.StorageUploadReservationCommand;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.infrastructure.storage.StorageService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
-public class ProjectDocumentServiceImpl implements ProjectDocumentService {
+public class ProjectDocumentServiceImpl implements ProjectDocumentService, ProjectStorageInventoryContributor {
 
     private static final long MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
+    private static final String RAG_BUCKET = "documents";
     private static final Set<String> ALLOWED_EXTENSIONS = Set.of(
             "pdf", "docx", "doc", "txt", "md", "markdown", "csv", "json", "html", "htm", "xml", "rtf"
     );
@@ -37,37 +47,188 @@ public class ProjectDocumentServiceImpl implements ProjectDocumentService {
     private final ProjectKnowledgeService projectKnowledgeService;
     private final StorageService storageService;
     private final ProjectMemberPort projectMemberPort;
+    private final StorageUploadOperationPort uploadOperationPort;
+    private final TransactionTemplate transactionTemplate;
+
+    public ProjectDocumentServiceImpl(
+            DocumentRepository documentRepository,
+            DocumentChunkRepository documentChunkRepository,
+            DocumentIngestionService documentIngestionService,
+            ProjectKnowledgeService projectKnowledgeService,
+            StorageService storageService,
+            ProjectMemberPort projectMemberPort) {
+        this(documentRepository, documentChunkRepository, documentIngestionService,
+                projectKnowledgeService, storageService, projectMemberPort, null, null);
+    }
+
+    @Autowired
+    public ProjectDocumentServiceImpl(
+            DocumentRepository documentRepository,
+            DocumentChunkRepository documentChunkRepository,
+            DocumentIngestionService documentIngestionService,
+            ProjectKnowledgeService projectKnowledgeService,
+            StorageService storageService,
+            ProjectMemberPort projectMemberPort,
+            @Autowired(required = false) StorageUploadOperationPort uploadOperationPort,
+            @Autowired(required = false) PlatformTransactionManager transactionManager) {
+        this.documentRepository = documentRepository;
+        this.documentChunkRepository = documentChunkRepository;
+        this.documentIngestionService = documentIngestionService;
+        this.projectKnowledgeService = projectKnowledgeService;
+        this.storageService = storageService;
+        this.projectMemberPort = projectMemberPort;
+        this.uploadOperationPort = uploadOperationPort;
+        this.transactionTemplate = transactionManager != null ? new TransactionTemplate(transactionManager) : null;
+    }
+
+    @Override
+    public String sourceType() {
+        return "RAG_DOCUMENT";
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<StorageObjectLocator> listProjectOwnedObjects(long projectId) {
+        return documentRepository.findByProjectId(projectId).stream()
+                .filter(doc -> doc.getStorageKey() != null && !doc.getStorageKey().isBlank())
+                .map(doc -> StorageObjectLocator.of(RAG_BUCKET, doc.getStorageKey()))
+                .toList();
+    }
 
     @Override
     public DocumentResponse uploadDocument(Long projectId, MultipartFile file, Long userId) {
-        validateProjectManager(projectId, userId);
+        validateActiveProjectManager(projectId, userId);
         validateFile(file);
 
         String originalFilename = file.getOriginalFilename();
+        String safeFilename = originalFilename != null ? originalFilename : "unknown_file";
         String folder = "projects/" + projectId + "/documents";
 
-        String storageKey;
+        if (uploadOperationPort == null) {
+            String storageKey;
+            try {
+                storageKey = storageService.uploadFile(file, folder, RAG_BUCKET);
+            } catch (IOException e) {
+                log.error("Failed to upload file to storage for project {}: {}", projectId, e.getMessage(), e);
+                throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR.value(), "File storage upload failed: " + e.getMessage());
+            }
+            DocumentEntity saved = persistQueuedDocument(projectId, file, safeFilename, storageKey, userId);
+            return toResponse(saved);
+        }
+
+        String plannedKey = storageService.planObjectKey(folder, safeFilename);
+        if (plannedKey == null || plannedKey.isBlank()) {
+            plannedKey = folder + "/" + UUID.randomUUID() + "-" + safeFilename.replaceAll("[^a-zA-Z0-9._-]", "_");
+        }
+
+        StorageUploadOperationDto reservation = uploadOperationPort.reserve(new StorageUploadReservationCommand(
+                userId,
+                projectId,
+                StorageTargetDomain.RAG_DOCUMENT,
+                StorageProviderKind.S3,
+                RAG_BUCKET,
+                plannedKey,
+                safeFilename,
+                file.getContentType(),
+                file.getSize()
+        ));
+
+        String resolvedKey;
         try {
-            storageKey = storageService.uploadFile(file, folder, "documents");
-        } catch (IOException e) {
-            log.error("Failed to upload file to storage for project {}: {}", projectId, e.getMessage(), e);
+            String uploadedKey = storageService.uploadFileAtKey(file, RAG_BUCKET, plannedKey);
+            resolvedKey = (uploadedKey != null && !uploadedKey.isBlank()) ? uploadedKey : plannedKey;
+            uploadOperationPort.markProviderWritten(reservation.operationId(), resolvedKey);
+        } catch (IOException | RuntimeException e) {
+            uploadOperationPort.compensateFailedUpload(
+                    reservation.operationId(),
+                    StorageObjectLocator.of(RAG_BUCKET, plannedKey),
+                    "S3_UPLOAD_FAILED",
+                    e.getMessage()
+            );
+            log.error("Failed to upload RAG document to storage for project {}: {}", projectId, e.getMessage(), e);
             throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR.value(), "File storage upload failed: " + e.getMessage());
         }
 
+        DocumentEntity saved;
+        try {
+            saved = attachUploadedDocument(projectId, file, safeFilename, resolvedKey, userId, reservation.operationId());
+        } catch (RuntimeException ex) {
+            uploadOperationPort.compensateFailedUpload(
+                    reservation.operationId(),
+                    StorageObjectLocator.of(RAG_BUCKET, resolvedKey),
+                    "RAG_METADATA_ATTACH_FAILED",
+                    ex.getMessage()
+            );
+            throw ex;
+        }
+
+        log.info("Document registered and queued id={}, project={}, file={}", saved.getId(), projectId, saved.getOriginalFilename());
+        return toResponse(saved);
+    }
+
+    private DocumentEntity attachUploadedDocument(
+            Long projectId,
+            MultipartFile file,
+            String safeFilename,
+            String resolvedKey,
+            Long userId,
+            UUID operationId
+    ) {
+        if (transactionTemplate != null) {
+            return transactionTemplate.execute(status ->
+                    doAttachDocumentInTx(projectId, file, safeFilename, resolvedKey, userId, operationId));
+        }
+        return doAttachDocumentInTx(projectId, file, safeFilename, resolvedKey, userId, operationId);
+    }
+
+    private DocumentEntity doAttachDocumentInTx(
+            Long projectId,
+            MultipartFile file,
+            String safeFilename,
+            String resolvedKey,
+            Long userId,
+            UUID operationId
+    ) {
+        projectMemberPort.lockProjectForStorageWrite(projectId);
+        validateActiveProjectManager(projectId, userId);
+
+        if (uploadOperationPort != null) {
+            uploadOperationPort.registerRollbackCompensation(
+                    operationId,
+                    StorageObjectLocator.of(RAG_BUCKET, resolvedKey),
+                    "RAG_METADATA_ROLLBACK",
+                    "RAG document attach transaction rolled back"
+            );
+        }
+
+        DocumentEntity saved = persistQueuedDocument(projectId, file, safeFilename, resolvedKey, userId);
+        if (uploadOperationPort != null && operationId != null) {
+            uploadOperationPort.markAttachedInCurrentTransaction(operationId, saved.getId());
+        }
+        return saved;
+    }
+
+    private DocumentEntity persistQueuedDocument(
+            Long projectId,
+            MultipartFile file,
+            String safeFilename,
+            String storageKey,
+            Long userId
+    ) {
         DocumentEntity document = DocumentEntity.builder()
                 .projectId(projectId)
                 .storageKey(storageKey)
-                .originalFilename(originalFilename != null ? originalFilename : "unknown_file")
+                .originalFilename(safeFilename)
                 .contentType(file.getContentType())
                 .fileSize(file.getSize())
                 .status(DocumentStatus.QUEUED)
                 .createdBy(userId)
                 .build();
-
         DocumentEntity saved = documentRepository.save(document);
-        log.info("Document registered and queued id={}, project={}, file={}", saved.getId(), projectId, saved.getOriginalFilename());
-
-        return toResponse(saved);
+        if (uploadOperationPort != null) {
+            documentRepository.flush();
+        }
+        return saved;
     }
 
     @Override
@@ -91,7 +252,8 @@ public class ProjectDocumentServiceImpl implements ProjectDocumentService {
     @Override
     @Transactional
     public void deleteDocument(Long projectId, Long documentId, Long userId) {
-        validateProjectManager(projectId, userId);
+        projectMemberPort.lockProjectForStorageWrite(projectId);
+        validateActiveProjectManager(projectId, userId);
         DocumentEntity document = documentRepository.findByIdAndProjectId(documentId, projectId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Document not found: " + documentId));
 
@@ -102,7 +264,8 @@ public class ProjectDocumentServiceImpl implements ProjectDocumentService {
     @Override
     @Transactional
     public DocumentResponse retryIngestion(Long projectId, Long documentId, Long userId) {
-        validateProjectManager(projectId, userId);
+        projectMemberPort.lockProjectForStorageWrite(projectId);
+        validateActiveProjectManager(projectId, userId);
         DocumentEntity document = documentRepository.findByIdAndProjectId(documentId, projectId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND.value(), "Document not found: " + documentId));
 
@@ -122,6 +285,13 @@ public class ProjectDocumentServiceImpl implements ProjectDocumentService {
     public List<ScoredChunk> searchDocuments(Long projectId, String query, int limit, double minScore, Long userId) {
         validateProjectMembership(projectId, userId);
         return projectKnowledgeService.searchKnowledge(projectId, userId, query, limit, minScore);
+    }
+
+    private void validateActiveProjectManager(Long projectId, Long userId) {
+        validateProjectManager(projectId, userId);
+        if (projectMemberPort.isProjectArchived(projectId)) {
+            throw new BusinessException(HttpStatus.CONFLICT.value(), "Project is archived");
+        }
     }
 
     private void validateProjectManager(Long projectId, Long userId) {

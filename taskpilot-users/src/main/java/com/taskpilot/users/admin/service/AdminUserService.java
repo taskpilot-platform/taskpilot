@@ -1,38 +1,39 @@
 package com.taskpilot.users.admin.service;
 
+import com.taskpilot.contracts.user.dto.SecurityChangeReason;
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.infrastructure.util.PageableUtils;
 import com.taskpilot.users.admin.dto.AdminCreateUserRequest;
 import com.taskpilot.users.admin.dto.AdminUpdateUserRequest;
 import com.taskpilot.users.admin.dto.AdminUserResponse;
-import com.taskpilot.users.common.repository.PasswordResetTokenRepository;
+import com.taskpilot.users.auth.service.EmailChallengeService;
+import com.taskpilot.users.auth.service.UserLifecycleRecoveryOutboxDispatcher;
+import com.taskpilot.users.auth.service.UserSessionService;
 import com.taskpilot.users.auth.service.email.EmailService;
-import com.taskpilot.users.common.entity.PasswordResetTokenEntity;
 import com.taskpilot.users.common.entity.UserEntity;
+import com.taskpilot.users.common.enums.AccountLifecycle;
+import com.taskpilot.users.common.enums.EmailTokenPurpose;
 import com.taskpilot.users.common.enums.UserRole;
 import com.taskpilot.users.common.enums.UserStatus;
+import com.taskpilot.users.common.repository.PasswordResetTokenRepository;
 import com.taskpilot.users.common.repository.UserRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Locale;
-import java.util.Set;
-import java.util.UUID;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class AdminUserService {
 
@@ -40,12 +41,42 @@ public class AdminUserService {
     private final PasswordEncoder passwordEncoder;
     private final EmailService emailService;
     private final PasswordResetTokenRepository passwordResetTokenRepository;
+    private final UserSessionService userSessionService;
+    private final EmailChallengeService emailChallengeService;
+    private final UserLifecycleRecoveryOutboxDispatcher outboxDispatcher;
 
     @Value("${application.security.password-reset.expiration:900000}")
-    private long passwordResetExpirationMs;
+    private long passwordResetExpirationMs = 900_000L;
 
-    private static final String DEFAULT_PASSWORD_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@#$!";
-    private static final int DEFAULT_PASSWORD_LENGTH = 12;
+    public AdminUserService(
+            UserRepository userRepository,
+            PasswordEncoder passwordEncoder,
+            EmailService emailService,
+            PasswordResetTokenRepository passwordResetTokenRepository,
+            UserSessionService userSessionService) {
+        this(userRepository, passwordEncoder, emailService, passwordResetTokenRepository, userSessionService,
+                new EmailChallengeService(passwordResetTokenRepository, userRepository), null);
+    }
+
+    @Autowired
+    public AdminUserService(
+            UserRepository userRepository,
+            PasswordEncoder passwordEncoder,
+            EmailService emailService,
+            PasswordResetTokenRepository passwordResetTokenRepository,
+            UserSessionService userSessionService,
+            EmailChallengeService emailChallengeService,
+            UserLifecycleRecoveryOutboxDispatcher outboxDispatcher) {
+        this.userRepository = userRepository;
+        this.passwordEncoder = passwordEncoder;
+        this.emailService = emailService;
+        this.passwordResetTokenRepository = passwordResetTokenRepository;
+        this.userSessionService = userSessionService;
+        this.emailChallengeService = emailChallengeService != null
+                ? emailChallengeService
+                : new EmailChallengeService(passwordResetTokenRepository, userRepository);
+        this.outboxDispatcher = outboxDispatcher;
+    }
 
     public Page<AdminUserResponse> getAllUsers(String keyword, Pageable pageable) {
         Pageable safePageable = PageableUtils.sanitize(pageable, "id", Sort.Direction.ASC,
@@ -71,26 +102,39 @@ public class AdminUserService {
                     "Email is already registered!");
         }
 
-        String defaultPassword = generateRandomPassword();
+        // Admin-provisioned accounts start unverified with no temporary password; owner verifies & chooses password.
+        UserEntity user = UserEntity.builder()
+                .email(email)
+                .fullName(request.fullName().trim())
+                .password(null)
+                .role(request.role())
+                .status(UserStatus.AVAILABLE)
+                .accountState(AccountLifecycle.PENDING_EMAIL)
+                .emailVerified(Boolean.FALSE)
+                .emailVerificationProvenance("ADMIN_PROVISIONED_UNVERIFIED")
+                .tokenVersion(0L)
+                .build();
 
-        UserEntity user = UserEntity.builder().email(email).fullName(request.fullName())
-                .password(passwordEncoder.encode(defaultPassword)).role(request.role()).build();
+        user = userRepository.saveAndFlush(user);
 
-        userRepository.save(user);
-
-        // Send password reset email so user can set their own password
-        issuePasswordResetAndNotify(user);
+        EmailChallengeService.IssuedChallenge challenge = emailChallengeService.issueForLockedUser(
+                user, EmailTokenPurpose.EMAIL_VERIFY, passwordResetExpirationMs, null);
+        try {
+            emailService.sendEmailVerificationEmail(user.getEmail(), challenge.rawToken(), passwordResetExpirationMs);
+        } catch (Exception ex) {
+            log.error("Failed to send onboarding verification email to userId={}", user.getId(), ex);
+        }
 
         return AdminUserResponse.fromEntity(user);
     }
 
     @Transactional
     public AdminUserResponse updateUser(Long id, AdminUpdateUserRequest request) {
-        UserEntity user = userRepository.findById(id).orElseThrow(
+        UserEntity user = userRepository.findByIdForUpdate(id).orElseThrow(
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
 
-        String currentEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        if (user.getEmail().equalsIgnoreCase(currentEmail)) {
+        long currentUserId = CurrentActorResolver.userId(SecurityContextHolder.getContext().getAuthentication());
+        if (user.getId().equals(currentUserId)) {
             if (request.status() == UserStatus.DEACTIVATED) {
                 throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Cannot deactivate your own account");
             }
@@ -99,6 +143,24 @@ public class AdminUserService {
             }
         }
 
+        if (request.status() == UserStatus.DEACTIVATED) {
+            // Compatibility bridge: route DEACTIVATED status update to immediate admin suspension + outbox.
+            if (request.role() != null && request.role() != user.getRole()) {
+                user.setRole(request.role());
+            }
+            if (request.currentWorkload() != null) {
+                user.setCurrentWorkload(request.currentWorkload());
+            }
+            return suspendUserInternal(user, currentUserId, "ADMIN_SUSPENDED");
+        }
+
+        // Availability edits (AVAILABLE/BUSY/OOO) must NEVER reactivate a suspended/deactivated/pending account.
+        if (request.status() != null && user.getAccountState() != AccountLifecycle.ACTIVE) {
+            throw new BusinessException(HttpStatus.CONFLICT.value(),
+                    "Cannot change availability for non-active account. Use explicit reactivate action.");
+        }
+
+        boolean roleChanged = request.role() != null && request.role() != user.getRole();
         if (request.role() != null) {
             user.setRole(request.role());
         }
@@ -109,61 +171,108 @@ public class AdminUserService {
             user.setCurrentWorkload(request.currentWorkload());
         }
 
-        userRepository.save(user);
+        userRepository.saveAndFlush(user);
+
+        if (roleChanged) {
+            userSessionService.invalidateAll(user.getId(), SecurityChangeReason.ROLE_CHANGED);
+        }
+
         return AdminUserResponse.fromEntity(user);
     }
 
     @Transactional
     public void deactivateUser(Long id) {
-        UserEntity user = userRepository.findById(id).orElseThrow(
+        suspendUser(id, "ADMIN_SUSPENDED");
+    }
+
+    @Transactional
+    public AdminUserResponse suspendUser(Long id, String reason) {
+        UserEntity user = userRepository.findByIdForUpdate(id).orElseThrow(
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
 
-        String currentEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        if (user.getEmail().equalsIgnoreCase(currentEmail)) {
+        long currentUserId = CurrentActorResolver.userId(SecurityContextHolder.getContext().getAuthentication());
+        if (user.getId().equals(currentUserId)) {
             throw new BusinessException(HttpStatus.BAD_REQUEST.value(), "Cannot deactivate your own account");
         }
+        return suspendUserInternal(user, currentUserId,
+                reason != null && !reason.isBlank() ? reason.trim() : "ADMIN_SUSPENDED");
+    }
 
-        user.setStatus(UserStatus.DEACTIVATED);
-        userRepository.save(user);
+    @Transactional
+    public AdminUserResponse reactivateUser(Long id, String reason) {
+        UserEntity user = userRepository.findByIdForUpdate(id).orElseThrow(
+                () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
+
+        long currentUserId = CurrentActorResolver.userId(SecurityContextHolder.getContext().getAuthentication());
+        if (user.getAccountState() == AccountLifecycle.PENDING_EMAIL) {
+            throw new BusinessException(HttpStatus.CONFLICT.value(),
+                    "Pending email accounts must complete email verification instead of reactivation");
+        }
+        if (!Boolean.TRUE.equals(user.getEmailVerified())) {
+            throw new BusinessException(HttpStatus.CONFLICT.value(),
+                    "Account email is not verified; require email verification before reactivation");
+        }
+
+        user.setAccountState(AccountLifecycle.ACTIVE);
+        if (user.getStatus() == null || user.getStatus() == UserStatus.DEACTIVATED) {
+            user.setStatus(UserStatus.AVAILABLE);
+        }
+        user.setLegacyReviewRequired(Boolean.FALSE);
+        user.setLifecycleChangedAt(Instant.now());
+        user.setLifecycleReason(reason != null && !reason.isBlank() ? reason.trim() : "ADMIN_REACTIVATED");
+        user.setLifecycleChangedBy(currentUserId);
+        userRepository.saveAndFlush(user);
+
+        long nextVersion = userSessionService.invalidateAll(user.getId(), SecurityChangeReason.USER_RESTORED);
+        if (outboxDispatcher != null) {
+            outboxDispatcher.enqueueInCurrentTx(user.getId(), nextVersion, AccountLifecycle.ACTIVE.name());
+        }
+        return AdminUserResponse.fromEntity(user);
     }
 
     @Transactional
     public void resetPassword(Long id) {
-        UserEntity user = userRepository.findById(id).orElseThrow(
+        UserEntity user = userRepository.findByIdForUpdate(id).orElseThrow(
                 () -> new BusinessException(HttpStatus.NOT_FOUND.value(), "User not found"));
 
-        String newPassword = generateRandomPassword();
-        user.setPassword(passwordEncoder.encode(newPassword));
-        userRepository.save(user);
+        // Immediately clear existing password hash and invalidate sessions/tokens; never generate/mail temp password.
+        user.setPassword(null);
+        userRepository.saveAndFlush(user);
 
-        // Send password reset email so user can set a new password
-        issuePasswordResetAndNotify(user);
-    }
+        userSessionService.invalidateAll(user.getId(), SecurityChangeReason.PASSWORD_RESET);
 
-    private void issuePasswordResetAndNotify(UserEntity user) {
-        passwordResetTokenRepository.deleteByUser(user);
-
-        PasswordResetTokenEntity resetToken = PasswordResetTokenEntity.builder().user(user)
-                .token(UUID.randomUUID().toString())
-                .expiryDate(Instant.now().plusMillis(passwordResetExpirationMs)).used(false)
-                .build();
-
-        PasswordResetTokenEntity savedToken = passwordResetTokenRepository.save(resetToken);
+        // Reload locked user at new tokenVersion before issuing purpose-bound link.
+        UserEntity updatedUser = userRepository.findByIdForUpdate(id).orElseThrow();
+        EmailTokenPurpose purpose = Boolean.TRUE.equals(updatedUser.getEmailVerified())
+                ? EmailTokenPurpose.PASSWORD_RESET
+                : EmailTokenPurpose.EMAIL_VERIFY;
+        EmailChallengeService.IssuedChallenge challenge = emailChallengeService.issueForLockedUser(
+                updatedUser, purpose, passwordResetExpirationMs, null);
 
         try {
-            emailService.sendPasswordResetEmail(user.getEmail(), savedToken.getToken(), passwordResetExpirationMs);
+            if (purpose == EmailTokenPurpose.EMAIL_VERIFY) {
+                emailService.sendEmailVerificationEmail(updatedUser.getEmail(), challenge.rawToken(), passwordResetExpirationMs);
+            } else {
+                emailService.sendPasswordResetEmail(updatedUser.getEmail(), challenge.rawToken(), passwordResetExpirationMs);
+            }
         } catch (Exception ex) {
-            log.error("Failed to send password reset email to {}", user.getEmail(), ex);
+            log.error("Failed to send password reset/verify email to userId={}", updatedUser.getId(), ex);
         }
     }
 
-    private String generateRandomPassword() {
-        SecureRandom random = new SecureRandom();
-        StringBuilder sb = new StringBuilder(DEFAULT_PASSWORD_LENGTH);
-        for (int i = 0; i < DEFAULT_PASSWORD_LENGTH; i++) {
-            sb.append(
-                    DEFAULT_PASSWORD_CHARS.charAt(random.nextInt(DEFAULT_PASSWORD_CHARS.length())));
+    private AdminUserResponse suspendUserInternal(UserEntity user, long actorAdminId, String reason) {
+        // Users-only suspension transaction: never acquires project locks or blocks on project guard.
+        user.setStatus(UserStatus.DEACTIVATED);
+        user.setAccountState(AccountLifecycle.ADMIN_SUSPENDED);
+        user.setLifecycleChangedAt(Instant.now());
+        user.setLifecycleReason(reason);
+        user.setLifecycleChangedBy(actorAdminId);
+        userRepository.saveAndFlush(user);
+
+        long nextVersion = userSessionService.invalidateAll(user.getId(), SecurityChangeReason.USER_SUSPENDED);
+        if (outboxDispatcher != null) {
+            outboxDispatcher.enqueueInCurrentTx(user.getId(), nextVersion, AccountLifecycle.ADMIN_SUSPENDED.name());
         }
-        return sb.toString();
+        return AdminUserResponse.fromEntity(user);
     }
 }

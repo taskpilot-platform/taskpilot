@@ -2,15 +2,20 @@ package com.taskpilot.ai.service;
 
 import com.taskpilot.ai.config.AiModelConfig;
 import com.taskpilot.ai.gatekeeper.GatekeeperService;
+import com.taskpilot.ai.routing.CandidateChainBuilder;
+import com.taskpilot.ai.routing.CopilotRoutingProperties;
+import com.taskpilot.ai.routing.ModelCandidate;
 import com.taskpilot.ai.util.TokenEstimationUtil;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import jakarta.annotation.Nullable;
 import org.springframework.stereotype.Service;
 
 import java.text.Normalizer;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
@@ -53,6 +58,8 @@ public class SmartRoutingService {
     private final GatekeeperService gatekeeperService;
     private final com.taskpilot.contracts.assignment.port.out.SystemSettingPort systemSettingPort;
     private final AiModelConfig aiModelConfig;
+    private final CopilotRoutingProperties copilotRoutingProperties;
+    private final CandidateChainBuilder candidateChainBuilder;
 
     @Value("${ai.gemini.model-name:gemini-3.5-flash}")
     private String geminiModelName;
@@ -81,8 +88,8 @@ public class SmartRoutingService {
     @Value("${ai.gemini.waterfall-max-attempts:4}")
     private int geminiWaterfallMaxAttempts;
 
-    @Value("${ai.gemini.use-for-tools:false}")
-    private boolean useGeminiForTools;
+    @Value("${ai.gemini.use-for-tools:true}")
+    private boolean useGeminiForTools = true;
 
     @Value("${ai.groq.reasoning-model:openai/gpt-oss-120b}")
     private String groqReasoningModelName;
@@ -93,34 +100,34 @@ public class SmartRoutingService {
     @Value("${ai.groq.enabled:false}")
     private boolean groqEnabled;
 
-    @Value("${ai.openrouter.reasoning-model:google/gemma-4-31b-it:free}")
+    @Value("${ai.openrouter.reasoning-model:}")
     private String openRouterReasoningModelName;
 
-    @Value("${ai.openrouter.reasoning-fallback1-model:nvidia/nemotron-3-ultra-550b-a55b:free}")
+    @Value("${ai.openrouter.reasoning-fallback1-model:}")
     private String openRouterReasoningFallback1ModelName;
 
-    @Value("${ai.openrouter.reasoning-fallback2-model:poolside/laguna-m.1:free}")
+    @Value("${ai.openrouter.reasoning-fallback2-model:}")
     private String openRouterReasoningFallback2ModelName;
 
-    @Value("${ai.openrouter.reasoning-fallback3-model:openai/gpt-oss-120b:free}")
+    @Value("${ai.openrouter.reasoning-fallback3-model:}")
     private String openRouterReasoningFallback3ModelName;
 
-    @Value("${ai.openrouter.reasoning-fallback4-model:moonshotai/kimi-k2.6:free}")
+    @Value("${ai.openrouter.reasoning-fallback4-model:}")
     private String openRouterReasoningFallback4ModelName;
 
-    @Value("${ai.openrouter.reasoning-fallback5-model:z-ai/glm-4.5-air:free}")
+    @Value("${ai.openrouter.reasoning-fallback5-model:}")
     private String openRouterReasoningFallback5ModelName;
 
-    @Value("${ai.openrouter.reasoning-fallback6-model:poolside/laguna-xs.2:free}")
+    @Value("${ai.openrouter.reasoning-fallback6-model:}")
     private String openRouterReasoningFallback6ModelName;
 
-    @Value("${ai.openrouter.reasoning-fallback7-model:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free}")
+    @Value("${ai.openrouter.reasoning-fallback7-model:}")
     private String openRouterReasoningFallback7ModelName;
 
-    @Value("${ai.openrouter.reasoning-fallback8-model:google/gemma-4-26b-a4b-it:free}")
+    @Value("${ai.openrouter.reasoning-fallback8-model:}")
     private String openRouterReasoningFallback8ModelName;
 
-    @Value("${ai.openrouter.reasoning-fallback9-model:openai/gpt-oss-20b:free}")
+    @Value("${ai.openrouter.reasoning-fallback9-model:}")
     private String openRouterReasoningFallback9ModelName;
 
     @Value("${ai.openrouter.reasoning-fallback10-model:}")
@@ -128,6 +135,9 @@ public class SmartRoutingService {
 
     @Value("${ai.openrouter.enabled:false}")
     private boolean openRouterEnabled;
+
+    @Value("${ai.openrouter.allow-paid-models:false}")
+    private boolean openRouterAllowPaidModels;
 
     @Value("${ai.routing.token-threshold:8000}")
     private int tokenThreshold;
@@ -170,6 +180,50 @@ public class SmartRoutingService {
             GatekeeperService gatekeeperService,
             com.taskpilot.contracts.assignment.port.out.SystemSettingPort systemSettingPort,
             AiModelConfig aiModelConfig) {
+        this(
+                geminiPrimaryModel, geminiFallback1Model, geminiFallback2Model, geminiFallback3Model,
+                geminiFallback4Model, geminiFallback5Model, geminiFallback6Model, geminiFallback7Model,
+                groqOssReasoningModel, groqOssReasoningFallback1Model,
+                openRouterReasoningModel, openRouterReasoningFallback1Model, openRouterReasoningFallback2Model,
+                openRouterReasoningFallback3Model, openRouterReasoningFallback4Model, openRouterReasoningFallback5Model,
+                openRouterReasoningFallback6Model, openRouterReasoningFallback7Model, openRouterReasoningFallback8Model,
+                openRouterReasoningFallback9Model, openRouterReasoningFallback10Model,
+                groqOssReasoningTextModel, groqOssReasoningFallback1TextModel, openRouterReasoningTextModel,
+                tokenEstimationUtil, gatekeeperService, systemSettingPort, aiModelConfig,
+                new CopilotRoutingProperties());
+    }
+
+    @Autowired
+    public SmartRoutingService(
+            @Qualifier("geminiFlashModel") StreamingChatModel geminiPrimaryModel,
+            @Qualifier("geminiFallback1Model") StreamingChatModel geminiFallback1Model,
+            @Qualifier("geminiFallback2Model") StreamingChatModel geminiFallback2Model,
+            @Qualifier("geminiFallback3Model") StreamingChatModel geminiFallback3Model,
+            @Qualifier("geminiFallback4Model") StreamingChatModel geminiFallback4Model,
+            @Qualifier("geminiFallback5Model") StreamingChatModel geminiFallback5Model,
+            @Qualifier("geminiFallback6Model") StreamingChatModel geminiFallback6Model,
+            @Qualifier("geminiFallback7Model") StreamingChatModel geminiFallback7Model,
+            @Qualifier("groqOssReasoningModel") @Nullable StreamingChatModel groqOssReasoningModel,
+            @Qualifier("groqOssReasoningFallback1Model") @Nullable StreamingChatModel groqOssReasoningFallback1Model,
+            @Qualifier("openRouterReasoningModel") @Nullable StreamingChatModel openRouterReasoningModel,
+            @Qualifier("openRouterReasoningFallback1Model") @Nullable StreamingChatModel openRouterReasoningFallback1Model,
+            @Qualifier("openRouterReasoningFallback2Model") @Nullable StreamingChatModel openRouterReasoningFallback2Model,
+            @Qualifier("openRouterReasoningFallback3Model") @Nullable StreamingChatModel openRouterReasoningFallback3Model,
+            @Qualifier("openRouterReasoningFallback4Model") @Nullable StreamingChatModel openRouterReasoningFallback4Model,
+            @Qualifier("openRouterReasoningFallback5Model") @Nullable StreamingChatModel openRouterReasoningFallback5Model,
+            @Qualifier("openRouterReasoningFallback6Model") @Nullable StreamingChatModel openRouterReasoningFallback6Model,
+            @Qualifier("openRouterReasoningFallback7Model") @Nullable StreamingChatModel openRouterReasoningFallback7Model,
+            @Qualifier("openRouterReasoningFallback8Model") @Nullable StreamingChatModel openRouterReasoningFallback8Model,
+            @Qualifier("openRouterReasoningFallback9Model") @Nullable StreamingChatModel openRouterReasoningFallback9Model,
+            @Qualifier("openRouterReasoningFallback10Model") @Nullable StreamingChatModel openRouterReasoningFallback10Model,
+            @Qualifier("groqOssReasoningTextModel") @Nullable StreamingChatModel groqOssReasoningTextModel,
+            @Qualifier("groqOssReasoningFallback1TextModel") @Nullable StreamingChatModel groqOssReasoningFallback1TextModel,
+            @Qualifier("openRouterReasoningTextModel") @Nullable StreamingChatModel openRouterReasoningTextModel,
+            TokenEstimationUtil tokenEstimationUtil,
+            GatekeeperService gatekeeperService,
+            com.taskpilot.contracts.assignment.port.out.SystemSettingPort systemSettingPort,
+            AiModelConfig aiModelConfig,
+            @Nullable CopilotRoutingProperties copilotRoutingProperties) {
         this.geminiPrimaryModel = geminiPrimaryModel;
         this.geminiFallback1Model = geminiFallback1Model;
         this.geminiFallback2Model = geminiFallback2Model;
@@ -198,9 +252,79 @@ public class SmartRoutingService {
         this.gatekeeperService = gatekeeperService;
         this.systemSettingPort = systemSettingPort;
         this.aiModelConfig = aiModelConfig;
+        this.copilotRoutingProperties = copilotRoutingProperties != null ? copilotRoutingProperties : new CopilotRoutingProperties();
+        this.candidateChainBuilder = new CandidateChainBuilder(systemSettingPort, aiModelConfig, this.copilotRoutingProperties);
     }
 
-    public record RoutingDecision(StreamingChatModel model, String modelName, boolean requiresAHP, boolean requiresTools) {
+    public record RoutingDecision(
+            StreamingChatModel model,
+            String modelName,
+            boolean requiresAHP,
+            boolean requiresTools,
+            List<ModelCandidate> chain) {
+        public RoutingDecision(StreamingChatModel model, String modelName, boolean requiresAHP, boolean requiresTools) {
+            this(model, modelName, requiresAHP, requiresTools, List.of());
+        }
+    }
+
+    public List<ModelCandidate> candidateChain(boolean requiresTools) {
+        return candidateChainBuilder.build(requiresTools, buildProviderSlots());
+    }
+
+    public int maxModelAttempts(List<ModelCandidate> chain) {
+        return candidateChainBuilder.maxModelAttempts(chain);
+    }
+
+    public int turnDeadlineSeconds() {
+        return candidateChainBuilder.deadlineSeconds();
+    }
+
+    public StreamingChatModel resolveCandidateModel(ModelCandidate candidate, String type) {
+        if (candidate == null) {
+            return null;
+        }
+        String effectiveType = (type == null || type.isBlank()) ? "reasoning" : type;
+        return getModelByProviderAndName(candidate.provider(), candidate.model(), effectiveType);
+    }
+
+    private CandidateChainBuilder.ProviderSlots buildProviderSlots() {
+        List<String> geminiModels = new ArrayList<>();
+        addIfPresent(geminiModels, geminiModelName);
+        addIfPresent(geminiModels, geminiFallback1ModelName);
+        addIfPresent(geminiModels, geminiFallback2ModelName);
+        addIfPresent(geminiModels, geminiFallback3ModelName);
+        addIfPresent(geminiModels, geminiFallback4ModelName);
+        addIfPresent(geminiModels, geminiFallback5ModelName);
+        addIfPresent(geminiModels, geminiFallback6ModelName);
+        addIfPresent(geminiModels, geminiFallback7ModelName);
+
+        List<String> openRouterModels = new ArrayList<>();
+        addIfPresent(openRouterModels, openRouterReasoningModelName);
+        addIfPresent(openRouterModels, openRouterReasoningFallback1ModelName);
+        addIfPresent(openRouterModels, openRouterReasoningFallback2ModelName);
+        addIfPresent(openRouterModels, openRouterReasoningFallback3ModelName);
+        addIfPresent(openRouterModels, openRouterReasoningFallback4ModelName);
+        addIfPresent(openRouterModels, openRouterReasoningFallback5ModelName);
+        addIfPresent(openRouterModels, openRouterReasoningFallback6ModelName);
+        addIfPresent(openRouterModels, openRouterReasoningFallback7ModelName);
+        addIfPresent(openRouterModels, openRouterReasoningFallback8ModelName);
+        addIfPresent(openRouterModels, openRouterReasoningFallback9ModelName);
+        addIfPresent(openRouterModels, openRouterReasoningFallback10ModelName);
+
+        return new CandidateChainBuilder.ProviderSlots(
+                groqEnabled,
+                groqReasoningModelName,
+                useGeminiForTools,
+                geminiModels,
+                openRouterEnabled,
+                openRouterAllowPaidModels,
+                openRouterModels);
+    }
+
+    private static void addIfPresent(List<String> list, String value) {
+        if (value != null && !value.isBlank()) {
+            list.add(value.trim());
+        }
     }
 
     public RoutingDecision route(String userMessage) {
@@ -231,41 +355,35 @@ public class SmartRoutingService {
                 || containsAny(normalized, splitKeywords(toolKeywordsRaw));
         boolean heavyContext = estimatedTokens > tokenThreshold;
 
+        boolean branchRequiresTools;
+        String tierLabel;
         if (requiresAHP) {
-            StreamingChatModel reasoningModel = getReasoningModel();
-            String name = getModelName(reasoningModel);
-            log.info("[SmartRouting] Gatekeeper requires AHP -> REASONING model ({})", name);
-            return new RoutingDecision(reasoningModel, name, true, true);
+            branchRequiresTools = true;
+            tierLabel = "REASONING";
+        } else if (heavyContext) {
+            branchRequiresTools = likelyNeedsTools;
+            tierLabel = "REASONING";
+        } else if (likelyNeedsTools) {
+            branchRequiresTools = true;
+            tierLabel = "TOOL-FRIENDLY";
+        } else {
+            branchRequiresTools = false;
+            tierLabel = "LIGHT";
         }
 
-        if (heavyContext) {
-            StreamingChatModel reasoningModel = getReasoningModel();
-            String name = getModelName(reasoningModel);
-            log.info("[SmartRouting] Routing to REASONING model ({}) - tokens: {}", name, estimatedTokens);
-            // Heavy context: pass tools through so model can still call them if needed
-            return new RoutingDecision(reasoningModel, name, false, likelyNeedsTools);
+        List<ModelCandidate> chain = candidateChain(branchRequiresTools);
+        if (chain.isEmpty()) {
+            log.warn("[SmartRouting] Routing to {} tier but candidate chain is empty (requiresAHP={}, requiresTools={}, tokens={})",
+                    tierLabel, requiresAHP, branchRequiresTools, estimatedTokens);
+            return new RoutingDecision(null, "none", requiresAHP, branchRequiresTools, List.of());
         }
 
-        if (likelyNeedsTools) {
-            if (!useGeminiForTools) {
-                StreamingChatModel fallback = getFallbackModel();
-                String fallbackName = getModelName(fallback);
-                log.info("[SmartRouting] Routing tool workflow directly to fallback model ({}) - Gemini tool streaming disabled",
-                        fallbackName);
-                return new RoutingDecision(fallback, fallbackName, false, true);
-            }
-            StreamingChatModel primary = getPrimaryModel();
-            String primaryName = getModelName(primary);
-            log.info("[SmartRouting] Routing to TOOL-FRIENDLY model ({}) - tokens: {}",
-                    primaryName, estimatedTokens);
-            return new RoutingDecision(primary, primaryName, false, true);
-        }
-
-        // LIGHT model: no tools needed
-        StreamingChatModel fallback = getFallbackModel();
-        String fallbackName = getModelName(fallback);
-        log.info("[SmartRouting] Routing to LIGHT model ({}) - tokens: {} requiresTools=false", fallbackName, estimatedTokens);
-        return new RoutingDecision(fallback, fallbackName, false, false);
+        ModelCandidate first = chain.get(0);
+        StreamingChatModel selectedModel = resolveCandidateModel(first, "reasoning");
+        String selectedName = selectedModel != null ? getModelName(selectedModel) : first.model();
+        log.info("[SmartRouting] Routing to {} model ({} / {}) - requiresAHP={}, requiresTools={}, tokens={}",
+                tierLabel, first.provider(), selectedName, requiresAHP, branchRequiresTools, estimatedTokens);
+        return new RoutingDecision(selectedModel, selectedName, requiresAHP, branchRequiresTools, chain);
     }
 
     public Set<ToolScope> detectScopes(String message) {
@@ -324,105 +442,47 @@ public class SmartRoutingService {
      * Quality-first, then response-first. By default, only the primary and two
      * fast Gemini fallbacks are attempted before switching to the external model.
      */
-    public StreamingChatModel getNextGeminiFallback(StreamingChatModel currentModel) {
-        if (currentModel == geminiPrimaryModel) {
-            log.info("[SmartRouting] Gemini primary failed -> Switch directly to OpenRouter fallback");
-            return externalFallbackAfter("primary");
-        }
-        return externalFallbackAfter(getModelName(currentModel));
-    }
-
-    private int maxGeminiAttempts() {
-        return Math.max(1, Math.min(8, geminiWaterfallMaxAttempts));
-    }
-
-    private StreamingChatModel externalFallbackAfter(String previousModelName) {
-        StreamingChatModel fallback = getFallbackModel();
-        String fallbackName = getModelName(fallback);
-        log.info("[SmartRouting] Gemini waterfall stopping after {} -> external fallback: {}",
-                previousModelName, fallbackName);
-        return fallback;
-    }
-
     public StreamingChatModel getNextStreamingFallback(StreamingChatModel currentModel) {
-        StreamingChatModel next = getNextStreamingFallbackInternal(currentModel);
-        if (isOpenRouterReasoningModel(currentModel)) {
-            log.info("[SmartRouting] OpenRouter reasoning waterfall: {} -> {}",
-                    getModelName(currentModel), getModelName(next));
-        }
-        return next;
+        return getNextStreamingFallbackInternal(currentModel);
     }
 
     private StreamingChatModel getNextStreamingFallbackInternal(StreamingChatModel currentModel) {
+        if (currentModel == null) {
+            return null;
+        }
         String currentType = getModelType(currentModel);
         String targetType = ("text".equalsIgnoreCase(currentType) || currentType.endsWith("text")) ? "text" : "reasoning";
+        boolean requiresTools = !"text".equals(targetType);
 
-        try {
-            java.util.Optional<java.util.Map<String, Object>> priorityRaw = systemSettingPort.findJsonObjectByKey("ai.model_priority");
-            if (priorityRaw.isPresent() && !priorityRaw.get().isEmpty()) {
-                Object modelsObj = priorityRaw.get().get("models");
-                if (modelsObj instanceof List<?> list) {
-                    String currentProvider = getModelProvider(currentModel);
-                    String currentModelName = getModelName(currentModel);
+        List<ModelCandidate> chain = candidateChain(requiresTools);
+        if (chain.isEmpty()) {
+            return currentModel;
+        }
 
-                    int currentIndex = -1;
-                    if (!"UNKNOWN".equalsIgnoreCase(currentProvider) && !"Unknown".equalsIgnoreCase(currentModelName)) {
-                        for (int i = 0; i < list.size(); i++) {
-                            Object item = list.get(i);
-                            if (item instanceof java.util.Map<?, ?> map) {
-                                String provider = map.containsKey("provider") ? String.valueOf(map.get("provider")).trim() : "";
-                                String modelName = map.containsKey("model") ? String.valueOf(map.get("model")).trim() : "";
-                                if (provider.equalsIgnoreCase(currentProvider) && modelName.equalsIgnoreCase(currentModelName)) {
-                                    currentIndex = i;
-                                    break;
-                                }
-                            }
-                        }
-                    }
+        String currentProvider = getModelProvider(currentModel);
+        String currentModelName = getModelName(currentModel);
+        String currentIdentity = ModelCandidate.identityOf(currentProvider, currentModelName);
 
-                    if (currentIndex != -1) {
-                        for (int i = currentIndex + 1; i < list.size(); i++) {
-                            Object item = list.get(i);
-                            if (item instanceof java.util.Map<?, ?> map) {
-                                String provider = map.containsKey("provider") ? String.valueOf(map.get("provider")).trim() : "";
-                                String modelName = map.containsKey("model") ? String.valueOf(map.get("model")).trim() : "";
-                                if (isRetiredModel(modelName)) {
-                                    continue;
-                                }
-                                if (provider.equalsIgnoreCase(currentProvider) && modelName.equalsIgnoreCase(currentModelName)) {
-                                    continue;
-                                }
-                                StreamingChatModel resolved = getModelByProviderAndName(provider, modelName, targetType);
-                                if (resolved != null && resolved != currentModel) {
-                                    return resolved;
-                                }
-                            }
-                        }
-                        return currentModel;
-                    }
+        int currentIndex = -1;
+        if (!"UNKNOWN".equalsIgnoreCase(currentProvider) && !"Unknown".equalsIgnoreCase(currentModelName)) {
+            for (int i = 0; i < chain.size(); i++) {
+                if (chain.get(i).identity().equals(currentIdentity)) {
+                    currentIndex = i;
+                    break;
                 }
             }
-        } catch (Exception e) {
-            log.warn("[SmartRouting] Failed to resolve next fallback model from DB settings: {}", e.getMessage());
         }
 
-        if (isGeminiModel(currentModel)) {
-            return getNextGeminiFallback(currentModel);
-        }
-        if (isOpenRouterReasoningModel(currentModel)) {
-            return getNextOpenRouterReasoningFallback(currentModel);
-        }
-        if (currentModel == groqOssReasoningModel) {
-            return groqOssReasoningModel;
-        }
-        if (currentModel == groqOssReasoningFallback1Model) {
-            return currentModel;
-        }
-        if (currentModel == groqOssReasoningTextModel) {
-            return groqOssReasoningTextModel;
-        }
-        if (currentModel == groqOssReasoningFallback1TextModel) {
-            return currentModel;
+        int start = currentIndex >= 0 ? currentIndex + 1 : 0;
+        for (int i = start; i < chain.size(); i++) {
+            ModelCandidate candidate = chain.get(i);
+            if (candidate.identity().equals(currentIdentity)) {
+                continue;
+            }
+            StreamingChatModel resolved = resolveCandidateModel(candidate, targetType);
+            if (resolved != null && resolved != currentModel) {
+                return resolved;
+            }
         }
         return currentModel;
     }

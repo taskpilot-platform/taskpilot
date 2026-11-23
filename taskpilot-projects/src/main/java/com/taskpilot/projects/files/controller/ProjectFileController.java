@@ -1,9 +1,9 @@
 package com.taskpilot.projects.files.controller;
 
 import com.taskpilot.infrastructure.config.security.FileStreamTokenService;
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.infrastructure.dto.ApiResponse;
-import com.taskpilot.projects.files.dto.FileDownloadResource;
-import com.taskpilot.projects.files.dto.FileStreamResource;
+import com.taskpilot.projects.files.dto.ProjectFileDownloadResult;
 import com.taskpilot.projects.files.dto.ProjectFileResponse;
 import com.taskpilot.projects.files.service.ProjectFileService;
 import com.taskpilot.projects.files.service.RecordingArchiveWorker;
@@ -25,6 +25,8 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+import jakarta.servlet.http.HttpServletRequest;
+import java.io.IOException;
 import java.io.InputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -54,7 +56,7 @@ public class ProjectFileController {
             @RequestParam("file") MultipartFile file,
             @RequestParam(value = "description", required = false) String description) {
         return ApiResponse.created("File uploaded successfully",
-                projectFileService.uploadFile(projectId, authentication.getName(), file, description));
+                projectFileService.uploadFile(projectId, CurrentActorResolver.resolve(authentication), file, description));
     }
 
     @Operation(summary = "List project files", description = "Get paginated list of project files with optional search keyword")
@@ -65,31 +67,69 @@ public class ProjectFileController {
             @RequestParam(required = false) String keyword,
             @PageableDefault(size = 20) Pageable pageable) {
         return ApiResponse.ok("Files retrieved successfully",
-                projectFileService.listFiles(projectId, authentication.getName(), keyword, pageable));
+                projectFileService.listFiles(projectId, CurrentActorResolver.userId(authentication), keyword, pageable));
     }
 
-    @Operation(summary = "Download project file", description = "Stream download a project file")
+    @Operation(summary = "Download project file", description = "Stream download a project file with single-range HTTP 206/416 support")
     @GetMapping("/{fileId}/download")
     public ResponseEntity<Resource> downloadFile(
             @PathVariable Long projectId,
             @PathVariable Long fileId,
+            @RequestHeader(value = HttpHeaders.RANGE, required = false) String rangeHeader,
+            @RequestHeader(value = HttpHeaders.IF_RANGE, required = false) String ifRangeHeader,
             Authentication authentication) {
-        FileDownloadResource resource = projectFileService.downloadFile(projectId, fileId, authentication.getName());
+        ProjectFileDownloadResult result = projectFileService.downloadFileWithRange(
+                projectId,
+                fileId,
+                CurrentActorResolver.userId(authentication),
+                rangeHeader,
+                ifRangeHeader
+        );
 
-        String encodedFilename = URLEncoder.encode(resource.fileName(), StandardCharsets.UTF_8).replace("+", "%20");
-        MediaType mediaType = MediaType.APPLICATION_OCTET_STREAM;
-        if (resource.contentType() != null && !resource.contentType().isBlank()) {
-            try {
-                mediaType = MediaType.parseMediaType(resource.contentType());
-            } catch (Exception ignored) {
+        try {
+            if (result.status() == ProjectFileDownloadResult.Status.RANGE_NOT_SATISFIABLE_416) {
+                closeQuietly(result.inputStream());
+                return ResponseEntity.status(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                        .header(HttpHeaders.ACCEPT_RANGES, "bytes")
+                        .header(HttpHeaders.CONTENT_RANGE, "bytes */" + result.totalBytes())
+                        .build();
             }
-        }
 
-        return ResponseEntity.ok()
-                .contentType(mediaType)
-                .contentLength(resource.fileSize())
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + encodedFilename)
-                .body(new InputStreamResource(resource.inputStream()));
+            String encodedFilename = URLEncoder.encode(result.fileName(), StandardCharsets.UTF_8).replace("+", "%20");
+            MediaType mediaType = MediaType.APPLICATION_OCTET_STREAM;
+            if (result.contentType() != null && !result.contentType().isBlank()) {
+                try {
+                    mediaType = MediaType.parseMediaType(result.contentType());
+                } catch (Exception ignored) {
+                }
+            }
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.set(HttpHeaders.ACCEPT_RANGES, "bytes");
+            headers.set(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + encodedFilename);
+            result.etag().ifPresent(headers::setETag);
+            result.lastModified().ifPresent(lastModified -> headers.setLastModified(lastModified.toEpochMilli()));
+
+            if (result.status() == ProjectFileDownloadResult.Status.PARTIAL_206 && result.servedRange().isPresent()) {
+                headers.set(HttpHeaders.CONTENT_RANGE, result.servedRange().get().toContentRangeHeader(result.totalBytes()));
+                return ResponseEntity.status(HttpStatus.PARTIAL_CONTENT)
+                        .headers(headers)
+                        .contentType(mediaType)
+                        .contentLength(result.responseBytes())
+                        .body(new InputStreamResource(result.inputStream()));
+            }
+
+            ResponseEntity.BodyBuilder okBuilder = ResponseEntity.ok()
+                    .headers(headers)
+                    .contentType(mediaType);
+            if (result.totalBytes() >= 0) {
+                okBuilder.contentLength(result.totalBytes());
+            }
+            return okBuilder.body(new InputStreamResource(result.inputStream()));
+        } catch (RuntimeException ex) {
+            closeQuietly(result.inputStream());
+            throw ex;
+        }
     }
 
     @Operation(summary = "Stream project file with HTTP Range support",
@@ -99,76 +139,80 @@ public class ProjectFileController {
             @PathVariable Long projectId,
             @PathVariable Long fileId,
             @RequestHeader(value = HttpHeaders.RANGE, required = false) String rangeHeader,
+            @RequestHeader(value = HttpHeaders.IF_RANGE, required = false) String ifRangeHeader,
             @RequestParam(value = "token", required = false) String streamToken,
             @RequestParam(value = "download", required = false, defaultValue = "false") boolean download,
-            Authentication authentication) {
-
-        String userEmail = resolveAuthenticatedEmail(authentication, streamToken, projectId, fileId);
-        if (userEmail == null) {
+            Authentication authentication,
+            HttpServletRequest request) {
+        Long userId = resolveAuthenticatedUserId(authentication, streamToken, projectId, fileId);
+        if (userId == null) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
-
-        FileStreamResource streamResource;
+        boolean headOnly = request != null && "HEAD".equalsIgnoreCase(request.getMethod());
+        ProjectFileDownloadResult result = projectFileService.streamFileWithRange(
+                projectId, fileId, userId, rangeHeader, ifRangeHeader, headOnly);
         try {
-            streamResource = projectFileService.streamFile(projectId, fileId, userEmail, rangeHeader);
-        } catch (ProjectFileService.RangeNotSatisfiableException ex) {
-            return ResponseEntity.status(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
-                    .header(HttpHeaders.CONTENT_RANGE, "bytes */" + ex.getTotalSize())
-                    .build();
-        }
-
-        MediaType mediaType = MediaType.APPLICATION_OCTET_STREAM;
-        if (streamResource.contentType() != null && !streamResource.contentType().isBlank()) {
-            try {
-                mediaType = MediaType.parseMediaType(streamResource.contentType());
-            } catch (Exception ignored) {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set(HttpHeaders.ACCEPT_RANGES, "bytes");
+            result.etag().ifPresent(headers::setETag);
+            result.lastModified().ifPresent(value -> headers.setLastModified(value.toEpochMilli()));
+            if (result.status() == ProjectFileDownloadResult.Status.RANGE_NOT_SATISFIABLE_416) {
+                closeQuietly(result.inputStream());
+                headers.set(HttpHeaders.CONTENT_RANGE, "bytes */" + result.totalBytes());
+                return ResponseEntity.status(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE).headers(headers).build();
             }
-        }
-
-        String encodedFilename = URLEncoder.encode(streamResource.fileName(), StandardCharsets.UTF_8).replace("+", "%20");
-        String dispositionType = download ? "attachment" : "inline";
-        StreamingResponseBody body = outputStream -> {
-            try (InputStream inputStream = streamResource.streamOpener().open()) {
-                inputStream.transferTo(outputStream);
+            MediaType mediaType = MediaType.APPLICATION_OCTET_STREAM;
+            if (result.contentType() != null && !result.contentType().isBlank()) {
+                try { mediaType = MediaType.parseMediaType(result.contentType()); } catch (IllegalArgumentException ignored) { }
             }
-        };
-
-        ResponseEntity.BodyBuilder builder = ResponseEntity
-                .status(streamResource.partial() ? HttpStatus.PARTIAL_CONTENT : HttpStatus.OK)
-                .contentType(mediaType)
-                .header(HttpHeaders.ACCEPT_RANGES, "bytes")
-                .header(HttpHeaders.CONTENT_DISPOSITION, dispositionType + "; filename*=UTF-8''" + encodedFilename);
-
-        if (streamResource.totalSize() > 0) {
-            builder.contentLength(streamResource.contentLength());
+            String encodedFilename = URLEncoder.encode(result.fileName(), StandardCharsets.UTF_8).replace("+", "%20");
+            headers.set(HttpHeaders.CONTENT_DISPOSITION,
+                    (download ? "attachment" : "inline") + "; filename*=UTF-8''" + encodedFilename);
+            if (result.responseBytes() >= 0) {
+                headers.setContentLength(result.responseBytes());
+            }
+            boolean partial = result.status() == ProjectFileDownloadResult.Status.PARTIAL_206;
+            if (partial) {
+                headers.set(HttpHeaders.CONTENT_RANGE, result.servedRange().orElseThrow().toContentRangeHeader(result.totalBytes()));
+            }
+            ResponseEntity.BodyBuilder builder = ResponseEntity.status(partial ? HttpStatus.PARTIAL_CONTENT : HttpStatus.OK)
+                    .headers(headers).contentType(mediaType);
+            if (headOnly) {
+                closeQuietly(result.inputStream());
+                return builder.build();
+            }
+            StreamingResponseBody body = outputStream -> {
+                try (InputStream inputStream = result.inputStream()) {
+                    inputStream.transferTo(outputStream);
+                }
+            };
+            return builder.body(body);
+        } catch (RuntimeException ex) {
+            closeQuietly(result.inputStream());
+            throw ex;
         }
-        if (streamResource.partial()) {
-            builder.header(HttpHeaders.CONTENT_RANGE,
-                    "bytes " + streamResource.rangeStart() + "-" + streamResource.rangeEnd() + "/" + streamResource.totalSize());
-        }
-
-        return builder.body(body);
     }
 
-    ResponseEntity<StreamingResponseBody> streamFile(
-            Long projectId,
-            Long fileId,
-            String rangeHeader,
-            String streamToken,
-            Authentication authentication) {
+    ResponseEntity<StreamingResponseBody> streamFile(Long projectId, Long fileId, String rangeHeader,
+                                                    String streamToken, boolean download, Authentication authentication) {
+        return streamFile(projectId, fileId, rangeHeader, null, streamToken, download, authentication, null);
+    }
+
+    ResponseEntity<StreamingResponseBody> streamFile(Long projectId, Long fileId, String rangeHeader,
+                                                    String streamToken, Authentication authentication) {
         return streamFile(projectId, fileId, rangeHeader, streamToken, false, authentication);
     }
 
-    private String resolveAuthenticatedEmail(Authentication authentication, String streamToken, Long projectId, Long fileId) {
+    private Long resolveAuthenticatedUserId(Authentication authentication, String streamToken, Long projectId, Long fileId) {
         if (authentication != null
                 && authentication.isAuthenticated()
                 && authentication.getName() != null
                 && !"anonymousUser".equals(authentication.getName())) {
-            return authentication.getName();
+            return CurrentActorResolver.userId(authentication);
         }
         Optional<FileStreamTokenService.StreamTokenClaims> claims =
                 fileStreamTokenService.verifyToken(streamToken, projectId, fileId);
-        return claims.map(FileStreamTokenService.StreamTokenClaims::userEmail).orElse(null);
+        return claims.map(FileStreamTokenService.StreamTokenClaims::userId).orElse(null);
     }
 
     @Operation(summary = "Delete project file", description = "Delete a project file (Uploader or Project Manager only)")
@@ -177,7 +221,7 @@ public class ProjectFileController {
             @PathVariable Long projectId,
             @PathVariable Long fileId,
             Authentication authentication) {
-        projectFileService.deleteFile(projectId, fileId, authentication.getName());
+        projectFileService.deleteFile(projectId, fileId, CurrentActorResolver.userId(authentication));
         return ApiResponse.ok("File deleted successfully", null);
     }
 
@@ -192,12 +236,21 @@ public class ProjectFileController {
             throw new com.taskpilot.infrastructure.exception.BusinessException(
                     HttpStatus.SERVICE_UNAVAILABLE.value(), "Archive worker is not available");
         }
-        boolean archived = recordingArchiveWorker.archiveFileNow(projectId, fileId, authentication.getName());
+        boolean archived = recordingArchiveWorker.archiveFileNow(projectId, fileId, CurrentActorResolver.userId(authentication));
         if (!archived) {
             throw new com.taskpilot.infrastructure.exception.BusinessException(
                     HttpStatus.BAD_GATEWAY.value(),
                     "Archive transfer did not complete; check archive_error or retry shortly");
         }
         return ApiResponse.ok("File archived to private Google Drive", true);
+    }
+
+    private static void closeQuietly(InputStream stream) {
+        if (stream != null) {
+            try {
+                stream.close();
+            } catch (IOException ignored) {
+            }
+        }
     }
 }

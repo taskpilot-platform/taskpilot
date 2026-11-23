@@ -46,7 +46,7 @@ class OAuth2UserInfoMapperTest {
     }
 
     @Test
-    @DisplayName("Should correctly map GitHub user attributes with public verified email")
+    @DisplayName("Should NOT fabricate emailVerified=true from GitHub public email when accessToken is absent")
     void testMapGithubWithPublicEmail() {
         OAuth2User principal = mock(OAuth2User.class);
         when(principal.getAttributes()).thenReturn(Map.of(
@@ -63,9 +63,32 @@ class OAuth2UserInfoMapperTest {
         assertEquals(AuthProvider.GITHUB, info.provider());
         assertEquals("987654", info.providerSubject());
         assertEquals("octocat@github.com", info.email());
-        assertTrue(info.emailVerified());
+        assertFalse(info.emailVerified());
         assertEquals("The Octocat", info.fullName());
         assertEquals("https://avatars.githubusercontent.com/u/987654", info.avatarUrl());
+    }
+
+    @Test
+    @DisplayName("Should trust GitHub /user/emails verified primary email only when verified claim returned")
+    void testMapGithubUsesVerifiedEmailClient() {
+        GitHubVerifiedEmailClient client = mock(GitHubVerifiedEmailClient.class);
+        when(client.fetchVerifiedEmail("gh-token")).thenReturn(java.util.Optional.of("verified@github.com"));
+        OAuth2UserInfoMapper verifiedMapper = new OAuth2UserInfoMapper(client);
+
+        OAuth2User principal = mock(OAuth2User.class);
+        when(principal.getAttributes()).thenReturn(Map.of(
+                "id", 42,
+                "login", "verifieddev",
+                "email", "untrusted-public@github.com"
+        ));
+
+        OAuth2UserInfo verifiedInfo = verifiedMapper.mapGithub(principal, "gh-token");
+        assertEquals("verified@github.com", verifiedInfo.email());
+        assertTrue(verifiedInfo.emailVerified());
+
+        when(client.fetchVerifiedEmail("gh-fail-token")).thenReturn(java.util.Optional.empty());
+        OAuth2UserInfo failedInfo = verifiedMapper.mapGithub(principal, "gh-fail-token");
+        assertFalse(failedInfo.emailVerified());
     }
 
     @Test

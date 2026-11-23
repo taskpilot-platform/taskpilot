@@ -1,28 +1,19 @@
 package com.taskpilot.projects.meetings.service;
 
-import com.taskpilot.contracts.user.dto.UserIdentityDto;
+import com.taskpilot.contracts.user.dto.CurrentActor;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.infrastructure.exception.BusinessException;
-import com.taskpilot.projects.common.entity.ProjectEntity;
-import com.taskpilot.projects.common.entity.ProjectFileEntity;
 import com.taskpilot.projects.common.entity.ProjectMeetingEntity;
 import com.taskpilot.projects.common.entity.ProjectMeetingParticipantEntity;
-import com.taskpilot.projects.common.entity.ProjectMemberEntity;
-import com.taskpilot.projects.common.enums.MemberRole;
-import com.taskpilot.projects.common.enums.ProjectMeetingRole;
 import com.taskpilot.projects.common.enums.ProjectMeetingStatus;
-import com.taskpilot.projects.common.repository.ProjectFileRepository;
 import com.taskpilot.projects.common.repository.ProjectMeetingParticipantRepository;
 import com.taskpilot.projects.common.repository.ProjectMeetingRepository;
 import com.taskpilot.projects.common.repository.ProjectMemberRepository;
 import com.taskpilot.projects.common.service.ProjectSecurityService;
 import com.taskpilot.projects.meetings.dto.CreateMeetingRequest;
-import com.taskpilot.projects.meetings.dto.MeetingParticipantResponse;
 import com.taskpilot.projects.meetings.dto.MeetingTokenResponse;
 import com.taskpilot.projects.meetings.dto.ProjectMeetingResponse;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -51,32 +42,27 @@ class ProjectMeetingServiceTest {
     private ProjectMemberRepository projectMemberRepository;
 
     @Mock
-    private ProjectFileRepository projectFileRepository;
-
-    @Mock
     private ProjectSecurityService projectSecurityService;
 
     @Mock
     private LiveKitTokenService liveKitTokenService;
 
     @Mock
-    private UserIdentityPort userIdentityPort;
+    private UserProfilePort userProfilePort;
 
     @Mock
-    private UserProfilePort userProfilePort;
+    private MeetingRoomGateway roomGateway;
+    @Mock
+    private MeetingRoomLifecycle roomLifecycle;
+    @Mock
+    private ClientMeetingRecordingService recordingService;
 
     @InjectMocks
     private ProjectMeetingService projectMeetingService;
 
     private final Long projectId = 10L;
     private final Long userId = 100L;
-    private final String email = "developer@taskpilot.io";
-
-    @BeforeEach
-    void setUp() {
-        lenient().when(userIdentityPort.findByEmail(email))
-                .thenReturn(Optional.of(new UserIdentityDto(userId, email)));
-    }
+    private final CurrentActor actor = new CurrentActor(userId, "developer@taskpilot.io", "USER", 1L);
 
     @Test
     void createMeeting_success() {
@@ -90,10 +76,8 @@ class ProjectMeetingServiceTest {
 
         UserProfileLiteDto profile = new UserProfileLiteDto(userId, "Alice Dev", "https://avatar.url");
         when(userProfilePort.findLiteById(userId)).thenReturn(Optional.of(profile));
-        when(participantRepository.countByMeetingIdAndLeftAtIsNull(1L)).thenReturn(1L);
-        when(participantRepository.countByMeetingId(1L)).thenReturn(1L);
 
-        ProjectMeetingResponse response = projectMeetingService.createMeeting(projectId, email, request);
+        ProjectMeetingResponse response = projectMeetingService.createMeeting(projectId, userId, request);
 
         assertNotNull(response);
         assertEquals(1L, response.id());
@@ -101,7 +85,7 @@ class ProjectMeetingServiceTest {
         assertEquals(ProjectMeetingStatus.ACTIVE, response.status());
         assertTrue(response.isHost());
         assertTrue(response.recordingEnabled());
-        verify(participantRepository).save(any(ProjectMeetingParticipantEntity.class));
+        verify(participantRepository, never()).save(any(ProjectMeetingParticipantEntity.class));
     }
 
     @Test
@@ -117,23 +101,22 @@ class ProjectMeetingServiceTest {
                 .startedAt(Instant.now().minusSeconds(60))
                 .build();
 
-        when(meetingRepository.findByIdAndProjectId(meetingId, projectId)).thenReturn(Optional.of(meeting));
-        when(participantRepository.findFirstByMeetingIdAndUserIdAndLeftAtIsNullOrderByJoinedAtDesc(meetingId, userId))
-                .thenReturn(Optional.empty());
+        when(meetingRepository.findForUpdate(meetingId, projectId)).thenReturn(Optional.of(meeting));
         when(userProfilePort.findLiteById(userId))
                 .thenReturn(Optional.of(new UserProfileLiteDto(userId, "Alice Dev", null)));
+        when(roomGateway.ensureRoom(meeting.getRoomName())).thenReturn(MeetingRoomGateway.Outcome.SUCCESS);
         when(liveKitTokenService.getLivekitUrl()).thenReturn("wss://livekit.cloud");
         when(liveKitTokenService.createAccessToken(eq("tp-proj-10-room-abc"), eq("user_100"), anyString(), eq(true), anyMap()))
                 .thenReturn("mock-signed-jwt-token");
 
-        MeetingTokenResponse tokenResponse = projectMeetingService.joinMeeting(projectId, meetingId, email);
+        MeetingTokenResponse tokenResponse = projectMeetingService.joinMeeting(projectId, meetingId, actor);
 
         assertNotNull(tokenResponse);
         assertEquals("mock-signed-jwt-token", tokenResponse.token());
         assertEquals("wss://livekit.cloud", tokenResponse.livekitUrl());
         assertEquals("tp-proj-10-room-abc", tokenResponse.roomName());
         assertTrue(tokenResponse.isHost());
-        verify(participantRepository).save(any(ProjectMeetingParticipantEntity.class));
+        verify(participantRepository, never()).save(any(ProjectMeetingParticipantEntity.class));
     }
 
     @Test
@@ -148,141 +131,40 @@ class ProjectMeetingServiceTest {
                 .status(ProjectMeetingStatus.ENDED)
                 .build();
 
-        when(meetingRepository.findByIdAndProjectId(meetingId, projectId)).thenReturn(Optional.of(meeting));
+        when(meetingRepository.findForUpdate(meetingId, projectId)).thenReturn(Optional.of(meeting));
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> projectMeetingService.joinMeeting(projectId, meetingId, email));
+                () -> projectMeetingService.joinMeeting(projectId, meetingId, actor));
 
-        assertEquals(HttpStatus.BAD_REQUEST.value(), ex.getStatus());
+        assertEquals(HttpStatus.CONFLICT.value(), ex.getStatus());
         assertTrue(ex.getMessage().contains("ended"));
     }
 
     @Test
-    void endMeeting_byHost_success() {
+    void endMeetingReflectsPendingProviderTermination() {
         Long meetingId = 4L;
-        ProjectMeetingEntity meeting = ProjectMeetingEntity.builder()
-                .id(meetingId)
-                .projectId(projectId)
-                .hostId(userId)
-                .title("Ad-hoc")
-                .roomName("room-adhoc")
-                .status(ProjectMeetingStatus.ACTIVE)
-                .startedAt(Instant.now().minusSeconds(300))
-                .build();
+        ProjectMeetingEntity pending = ProjectMeetingEntity.builder()
+                .id(meetingId).projectId(projectId).hostId(userId).roomName("room-adhoc")
+                .status(ProjectMeetingStatus.ENDING).build();
+        when(meetingRepository.findByIdAndProjectId(meetingId, projectId)).thenReturn(Optional.of(pending));
 
-        when(meetingRepository.findByIdAndProjectId(meetingId, projectId)).thenReturn(Optional.of(meeting));
-        when(participantRepository.findByMeetingIdAndLeftAtIsNullOrderByJoinedAtAsc(meetingId))
-                .thenReturn(List.of(ProjectMeetingParticipantEntity.builder()
-                        .meetingId(meetingId)
-                        .userId(userId)
-                        .joinedAt(Instant.now().minusSeconds(300))
-                        .build()));
+        MeetingRecordingService cloudRecordings = mock(MeetingRecordingService.class);
+        projectMeetingService.setMeetingRecordingService(cloudRecordings);
+        var response = projectMeetingService.endMeeting(projectId, meetingId, userId);
+        verify(cloudRecordings).stopRecordingIfActive(pending);
 
-        ProjectMeetingResponse response = projectMeetingService.endMeeting(projectId, meetingId, email);
-
-        assertNotNull(response);
-        assertEquals(ProjectMeetingStatus.ENDED, meeting.getStatus());
-        assertNotNull(meeting.getEndedAt());
-        verify(meetingRepository).markMeetingEnded(eq(meetingId), any(Instant.class), any(Instant.class));
-        verify(participantRepository).saveAll(anyList());
+        verify(roomLifecycle).requestEnd(projectId, meetingId, userId);
+        assertEquals(ProjectMeetingStatus.ENDING, response.status());
+        assertNull(response.endedAt());
     }
 
     @Test
-    void endMeeting_byNonHostNonManager_throwsForbidden() {
+    void legacyLinkUsesTheSameRecordingScope() {
         Long meetingId = 5L;
-        ProjectMeetingEntity meeting = ProjectMeetingEntity.builder()
-                .id(meetingId)
-                .projectId(projectId)
-                .hostId(999L) // different host
-                .title("Private")
-                .roomName("room-priv")
-                .status(ProjectMeetingStatus.ACTIVE)
-                .build();
-
-        when(meetingRepository.findByIdAndProjectId(meetingId, projectId)).thenReturn(Optional.of(meeting));
-        when(projectMemberRepository.findByProjectIdAndUserId(projectId, userId))
-                .thenReturn(Optional.of(ProjectMemberEntity.builder()
-                        .role(MemberRole.MEMBER) // regular member
-                        .build()));
-
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> projectMeetingService.endMeeting(projectId, meetingId, email));
-
-        assertEquals(HttpStatus.FORBIDDEN.value(), ex.getStatus());
-        verify(meetingRepository, never()).save(any());
-    }
-
-    @Test
-    void updateRecordingFile_endedMeeting_linksRecordingSuccessfully() {
-        Long meetingId = 6L;
-        Long recordingFileId = 77L;
-        ProjectMeetingEntity meeting = ProjectMeetingEntity.builder()
-                .id(meetingId)
-                .projectId(projectId)
-                .hostId(userId)
-                .title("Demo Recording")
-                .roomName("room-demo")
-                .status(ProjectMeetingStatus.ENDED)
-                .recordingEnabled(false)
-                .build();
-
-        when(meetingRepository.findByIdAndProjectId(meetingId, projectId)).thenReturn(Optional.of(meeting));
-        when(projectFileRepository.findByIdAndProjectId(recordingFileId, projectId))
-                .thenReturn(Optional.of(ProjectFileEntity.builder().id(recordingFileId).projectId(projectId).build()));
-        when(meetingRepository.save(any(ProjectMeetingEntity.class))).thenAnswer(inv -> inv.getArgument(0));
-
-        ProjectMeetingResponse res = projectMeetingService.updateRecordingFile(projectId, meetingId, email, recordingFileId);
-
-        assertNotNull(res);
-        assertEquals(recordingFileId, res.recordingFileId());
-        assertTrue(res.recordingEnabled());
-        verify(meetingRepository).save(meeting);
-    }
-
-    @Test
-    void updateRecordingFile_fileNotInProject_throwsNotFound() {
-        Long meetingId = 7L;
-        Long recordingFileId = 88L;
-        ProjectMeetingEntity meeting = ProjectMeetingEntity.builder()
-                .id(meetingId)
-                .projectId(projectId)
-                .hostId(userId)
-                .title("Demo Recording")
-                .roomName("room-demo-2")
-                .status(ProjectMeetingStatus.ENDED)
-                .build();
-
-        when(meetingRepository.findByIdAndProjectId(meetingId, projectId)).thenReturn(Optional.of(meeting));
-        when(projectFileRepository.findByIdAndProjectId(recordingFileId, projectId)).thenReturn(Optional.empty());
-
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> projectMeetingService.updateRecordingFile(projectId, meetingId, email, recordingFileId));
-
-        assertEquals(HttpStatus.NOT_FOUND.value(), ex.getStatus());
-        verify(meetingRepository, never()).save(any());
-    }
-
-    @Test
-    void updateRecordingFile_overwriteByNonHostNonManager_throwsForbidden() {
-        Long meetingId = 8L;
-        ProjectMeetingEntity meeting = ProjectMeetingEntity.builder()
-                .id(meetingId)
-                .projectId(projectId)
-                .hostId(999L)
-                .title("Protected Recording")
-                .roomName("room-prot")
-                .status(ProjectMeetingStatus.ENDED)
-                .recordingFileId(100L)
-                .build();
-
-        when(meetingRepository.findByIdAndProjectId(meetingId, projectId)).thenReturn(Optional.of(meeting));
-        when(projectMemberRepository.findByProjectIdAndUserId(projectId, userId))
-                .thenReturn(Optional.of(ProjectMemberEntity.builder().role(MemberRole.MEMBER).build()));
-
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> projectMeetingService.updateRecordingFile(projectId, meetingId, email, 101L));
-
-        assertEquals(HttpStatus.FORBIDDEN.value(), ex.getStatus());
-        verify(meetingRepository, never()).save(any());
+        doThrow(new BusinessException(403, "Only the host can update the recording"))
+                .when(recordingService).linkLegacy(projectId, meetingId, userId, 99L);
+        assertEquals(403, assertThrows(BusinessException.class,
+                () -> projectMeetingService.updateRecordingFile(projectId, meetingId, userId, 99L)).getStatus());
+        verifyNoInteractions(meetingRepository);
     }
 }

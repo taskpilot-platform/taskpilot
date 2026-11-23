@@ -32,7 +32,8 @@ public class UserAssignmentAdapter implements UserPort, UserSkillPort, SystemSet
                 user.getFullName(),
                 user.getEmail(),
                 user.getStatus().name(),
-                user.getCurrentWorkload() != null ? user.getCurrentWorkload() : 0));
+                user.getCurrentWorkload() != null ? user.getCurrentWorkload() : 0,
+                user.isActiveAccount() && Boolean.TRUE.equals(user.getEmailVerified())));
     }
 
     @Override

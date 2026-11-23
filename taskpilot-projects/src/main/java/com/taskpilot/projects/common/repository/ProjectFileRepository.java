@@ -18,6 +18,8 @@ import java.util.Optional;
 @Repository
 public interface ProjectFileRepository extends JpaRepository<ProjectFileEntity, Long> {
 
+    List<ProjectFileEntity> findByProjectId(Long projectId);
+
     Page<ProjectFileEntity> findByProjectId(Long projectId, Pageable pageable);
 
     Page<ProjectFileEntity> findByProjectIdOrderByCreatedAtDesc(Long projectId, Pageable pageable);
@@ -31,6 +33,7 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFileEntity, 
     Optional<ProjectFileEntity> findBySourceEgressId(String sourceEgressId);
 
     Optional<ProjectFileEntity> findByProjectIdAndStorageKey(Long projectId, String storageKey);
+    boolean existsByProjectIdAndUploaderIdAndOriginalNameIn(Long projectId, Long uploaderId, List<String> originalNames);
 
     long countByProjectId(Long projectId);
 

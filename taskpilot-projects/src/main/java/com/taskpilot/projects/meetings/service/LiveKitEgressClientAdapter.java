@@ -23,7 +23,7 @@ import java.util.Optional;
 @Component
 public class LiveKitEgressClientAdapter {
 
-    public record ParsedWebhookEvent(String eventName, EgressSnapshot egressSnapshot) {}
+    public record ParsedWebhookEvent(String eventName, String roomName, EgressSnapshot egressSnapshot) {}
 
     private final String livekitHttpUrl;
     private final String apiKey;
@@ -132,7 +132,7 @@ public class LiveKitEgressClientAdapter {
         try {
             LivekitWebhook.WebhookEvent event = getWebhookReceiver().receive(rawBody, authorizationHeader);
             EgressSnapshot snapshot = event.hasEgressInfo() ? toSnapshot(event.getEgressInfo()) : null;
-            return new ParsedWebhookEvent(event.getEvent(), snapshot);
+            return new ParsedWebhookEvent(event.getEvent(), event.hasRoom() ? event.getRoom().getName() : null, snapshot);
         } catch (SecurityException e) {
             throw e;
         } catch (IllegalArgumentException e) {

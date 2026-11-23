@@ -2,23 +2,33 @@ package com.taskpilot.users.auth.oauth2;
 
 import com.taskpilot.users.common.enums.AuthProvider;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.ParameterizedTypeReference;
-import org.springframework.http.*;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientService;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestTemplate;
 
-import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 
 @Slf4j
 @Component
 public class OAuth2UserInfoMapper {
 
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final GitHubVerifiedEmailClient gitHubVerifiedEmailClient;
+
+    public OAuth2UserInfoMapper() {
+        this(new GitHubVerifiedEmailClient());
+    }
+
+    @Autowired
+    public OAuth2UserInfoMapper(GitHubVerifiedEmailClient gitHubVerifiedEmailClient) {
+        this.gitHubVerifiedEmailClient = gitHubVerifiedEmailClient != null
+                ? gitHubVerifiedEmailClient
+                : new GitHubVerifiedEmailClient();
+    }
 
     public OAuth2UserInfo map(OAuth2AuthenticationToken authenticationToken,
             OAuth2AuthorizedClientService authorizedClientService) {
@@ -49,17 +59,21 @@ public class OAuth2UserInfoMapper {
     public OAuth2UserInfo mapGoogle(OAuth2User principal) {
         Map<String, Object> attributes = principal.getAttributes();
         String subject = (String) attributes.get("sub");
-        String email = (String) attributes.get("email");
-        Boolean emailVerified = (Boolean) attributes.get("email_verified");
+        String rawEmail = (String) attributes.get("email");
+        String normalizedEmail = (rawEmail != null && !rawEmail.isBlank())
+                ? rawEmail.trim().toLowerCase(Locale.ROOT)
+                : null;
+        Boolean emailVerifiedAttr = (Boolean) attributes.get("email_verified");
+        boolean emailVerified = Boolean.TRUE.equals(emailVerifiedAttr) && normalizedEmail != null;
         String name = (String) attributes.get("name");
         String picture = (String) attributes.get("picture");
 
         return new OAuth2UserInfo(
                 AuthProvider.GOOGLE,
                 subject,
-                email != null ? email.trim().toLowerCase() : null,
-                Boolean.TRUE.equals(emailVerified),
-                name != null && !name.isBlank() ? name.trim() : (email != null ? email.split("@")[0] : "Google User"),
+                normalizedEmail,
+                emailVerified,
+                name != null && !name.isBlank() ? name.trim() : (normalizedEmail != null ? normalizedEmail.split("@")[0] : "Google User"),
                 picture);
     }
 
@@ -70,54 +84,15 @@ public class OAuth2UserInfoMapper {
         String login = (String) attributes.get("login");
         String name = (String) attributes.get("name");
         String avatarUrl = (String) attributes.get("avatar_url");
-        String email = (String) attributes.get("email");
+        String publicEmailRaw = (String) attributes.get("email");
+        String publicEmail = (publicEmailRaw != null && !publicEmailRaw.isBlank())
+                ? publicEmailRaw.trim().toLowerCase(Locale.ROOT)
+                : null;
 
-        boolean emailVerified = false;
-
-        if (email != null && !email.isBlank()) {
-            emailVerified = true;
-        } else if (accessToken != null && !accessToken.isBlank()) {
-            try {
-                HttpHeaders headers = new HttpHeaders();
-                headers.setBearerAuth(accessToken);
-                headers.setAccept(List.of(MediaType.APPLICATION_JSON));
-                HttpEntity<Void> entity = new HttpEntity<>(headers);
-
-                ResponseEntity<List<Map<String, Object>>> response = restTemplate.exchange(
-                        "https://api.github.com/user/emails",
-                        HttpMethod.GET,
-                        entity,
-                        new ParameterizedTypeReference<>() {
-                        });
-
-                if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
-                    for (Map<String, Object> emailObj : response.getBody()) {
-                        Boolean verified = (Boolean) emailObj.get("verified");
-                        Boolean primary = (Boolean) emailObj.get("primary");
-                        String emailVal = (String) emailObj.get("email");
-
-                        if (Boolean.TRUE.equals(primary) && Boolean.TRUE.equals(verified) && emailVal != null) {
-                            email = emailVal;
-                            emailVerified = true;
-                            break;
-                        }
-                    }
-                    if (!emailVerified) {
-                        for (Map<String, Object> emailObj : response.getBody()) {
-                            Boolean verified = (Boolean) emailObj.get("verified");
-                            String emailVal = (String) emailObj.get("email");
-                            if (Boolean.TRUE.equals(verified) && emailVal != null) {
-                                email = emailVal;
-                                emailVerified = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-            } catch (Exception ex) {
-                log.warn("Failed to fetch private emails from GitHub API: {}", ex.getMessage());
-            }
-        }
+        // Public /user.email is NEVER treated as verified proof; require explicit /user/emails verification.
+        Optional<String> verifiedEmailOpt = gitHubVerifiedEmailClient.fetchVerifiedEmail(accessToken);
+        boolean emailVerified = verifiedEmailOpt.isPresent();
+        String effectiveEmail = verifiedEmailOpt.orElse(publicEmail);
 
         String displayName = name != null && !name.isBlank() ? name.trim()
                 : (login != null ? login.trim() : "GitHub User");
@@ -125,7 +100,7 @@ public class OAuth2UserInfoMapper {
         return new OAuth2UserInfo(
                 AuthProvider.GITHUB,
                 subject,
-                email != null ? email.trim().toLowerCase() : null,
+                effectiveEmail,
                 emailVerified,
                 displayName,
                 avatarUrl);

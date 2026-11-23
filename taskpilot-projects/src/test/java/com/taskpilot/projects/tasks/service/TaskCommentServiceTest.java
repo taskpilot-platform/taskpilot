@@ -29,10 +29,8 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 
 import com.taskpilot.contracts.user.dto.NotificationTypeDto;
-import com.taskpilot.contracts.user.dto.UserIdentityDto;
 import com.taskpilot.contracts.user.dto.UserProfileLiteDto;
 import com.taskpilot.contracts.user.event.TaskCommentedEvent;
-import com.taskpilot.contracts.user.port.out.UserIdentityPort;
 import com.taskpilot.contracts.user.port.out.UserProfilePort;
 import com.taskpilot.contracts.assignment.port.out.UserPort;
 import org.springframework.context.ApplicationEventPublisher;
@@ -57,7 +55,6 @@ import com.taskpilot.projects.tasks.dto.UpdateTaskCommentRequest;
 @ExtendWith(MockitoExtension.class)
 class TaskCommentServiceTest {
 
-    private static final String EMAIL = "actor@example.com";
     private static final Long PROJECT_ID = 10L;
     private static final Long TASK_ID = 20L;
     private static final Long COMMENT_ID = 30L;
@@ -74,8 +71,6 @@ class TaskCommentServiceTest {
     private ProjectRepository projectRepository;
     @Mock
     private ProjectMemberRepository projectMemberRepository;
-    @Mock
-    private UserIdentityPort userIdentityPort;
     @Mock
     private UserPort userPort;
     @Mock
@@ -95,7 +90,6 @@ class TaskCommentServiceTest {
                 taskRepository,
                 projectRepository,
                 projectMemberRepository,
-                userIdentityPort,
                 userPort,
                 userProfilePort,
                 eventPublisher,
@@ -104,12 +98,11 @@ class TaskCommentServiceTest {
 
     @Test
     void getCommentsRejectsNonProjectMember() {
-        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task()));
-        when(userIdentityPort.findByEmail(EMAIL)).thenReturn(Optional.of(new UserIdentityDto(ACTOR_ID, EMAIL)));
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task()));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(false);
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.getComments(TASK_ID, EMAIL));
+                () -> service.getComments(TASK_ID, ACTOR_ID));
 
         assertEquals(403, ex.getStatus());
     }
@@ -120,8 +113,7 @@ class TaskCommentServiceTest {
         task.setAssigneeId(2L);
         task.setReporterId(3L);
 
-        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task));
-        when(userIdentityPort.findByEmail(EMAIL)).thenReturn(Optional.of(new UserIdentityDto(ACTOR_ID, EMAIL)));
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
         when(projectMemberRepository.findMembers(PROJECT_ID)).thenReturn(members(1L, 2L, 3L, 4L, 5L));
@@ -136,7 +128,7 @@ class TaskCommentServiceTest {
         when(userProfilePort.findLiteByIds(anySet())).thenAnswer(invocation -> profiles(invocation.getArgument(0)));
         when(commentRepository.findParticipantUserIdsByTaskId(TASK_ID)).thenReturn(Set.of(ACTOR_ID, 4L));
 
-        service.createComment(TASK_ID, new CreateTaskCommentRequest(" Please review ", null, Set.of(2L, 5L)), EMAIL);
+        service.createComment(TASK_ID, new CreateTaskCommentRequest(" Please review ", null, Set.of(2L, 5L)), ACTOR_ID);
 
         ArgumentCaptor<TaskCommentedEvent> captor = ArgumentCaptor
                 .forClass(TaskCommentedEvent.class);
@@ -158,10 +150,10 @@ class TaskCommentServiceTest {
         TaskEntity task = task();
         CommentEntity parent = comment(2L, PARENT_COMMENT_ID, TASK_ID);
 
-        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task));
-        when(userIdentityPort.findByEmail(EMAIL)).thenReturn(Optional.of(new UserIdentityDto(ACTOR_ID, EMAIL)));
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
+        when(projectMemberRepository.findMembers(PROJECT_ID)).thenReturn(members(1L, 2L));
         when(commentRepository.findByIdAndTaskId(PARENT_COMMENT_ID, TASK_ID)).thenReturn(Optional.of(parent));
         when(commentRepository.save(any(CommentEntity.class))).thenAnswer(invocation -> {
             CommentEntity comment = invocation.getArgument(0);
@@ -175,7 +167,7 @@ class TaskCommentServiceTest {
         when(commentRepository.findParticipantUserIdsByTaskId(TASK_ID)).thenReturn(Set.of(ACTOR_ID, 2L));
 
         TaskCommentDto dto = service.createComment(TASK_ID,
-                new CreateTaskCommentRequest("Nested reply", PARENT_COMMENT_ID, Set.of()), EMAIL);
+                new CreateTaskCommentRequest("Nested reply", PARENT_COMMENT_ID, Set.of()), ACTOR_ID);
 
         assertEquals(PARENT_COMMENT_ID, dto.parentCommentId());
 
@@ -184,9 +176,48 @@ class TaskCommentServiceTest {
         verify(eventPublisher).publishEvent(captor.capture());
 
         TaskCommentedEvent event = captor.getValue();
+        assertEquals(PROJECT_ID, event.projectId());
+        assertEquals(TASK_ID, event.taskId());
+        assertEquals(COMMENT_ID, event.commentId());
         assertEquals(2L, event.targetUserId());
         assertEquals(NotificationTypeDto.REPLY, event.type());
         assertEquals("/tasks?taskId=" + TASK_ID + "&commentId=" + COMMENT_ID, event.linkAction());
+    }
+
+    @Test
+    void createCommentExcludesHistoricalNonMembersFromNotificationEvents() {
+        TaskEntity task = task();
+        task.setAssigneeId(2L);
+        task.setReporterId(99L); // former reporter removed from project
+        CommentEntity parent = comment(98L, PARENT_COMMENT_ID, TASK_ID); // former commenter removed
+
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task));
+        when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
+        when(projectMemberRepository.findMembers(PROJECT_ID)).thenReturn(members(1L, 2L));
+        when(commentRepository.findByIdAndTaskId(PARENT_COMMENT_ID, TASK_ID)).thenReturn(Optional.of(parent));
+        when(commentRepository.save(any(CommentEntity.class))).thenAnswer(invocation -> {
+            CommentEntity comment = invocation.getArgument(0);
+            comment.setId(COMMENT_ID);
+            comment.setCreatedAt(Instant.parse("2026-05-13T00:00:00Z"));
+            comment.setUpdatedAt(Instant.parse("2026-05-13T00:00:00Z"));
+            return comment;
+        });
+        when(commentMentionRepository.findByCommentIdIn(anyCollection())).thenReturn(List.of());
+        when(userProfilePort.findLiteByIds(anySet())).thenAnswer(invocation -> profiles(invocation.getArgument(0)));
+        when(commentRepository.findParticipantUserIdsByTaskId(TASK_ID)).thenReturn(Set.of(ACTOR_ID, 2L, 97L, 98L));
+
+        service.createComment(TASK_ID,
+                new CreateTaskCommentRequest("Check current members", PARENT_COMMENT_ID, Set.of()), ACTOR_ID);
+
+        ArgumentCaptor<TaskCommentedEvent> captor = ArgumentCaptor.forClass(TaskCommentedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+
+        TaskCommentedEvent event = captor.getValue();
+        assertEquals(2L, event.targetUserId());
+        assertEquals(PROJECT_ID, event.projectId());
+        assertEquals(TASK_ID, event.taskId());
+        assertEquals(COMMENT_ID, event.commentId());
     }
 
     @Test
@@ -194,8 +225,7 @@ class TaskCommentServiceTest {
         TaskEntity task = task();
         CommentEntity parent = comment(2L, PARENT_COMMENT_ID, TASK_ID);
 
-        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task));
-        when(userIdentityPort.findByEmail(EMAIL)).thenReturn(Optional.of(new UserIdentityDto(ACTOR_ID, EMAIL)));
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
         when(projectMemberRepository.findMembers(PROJECT_ID)).thenReturn(members(1L, 2L));
@@ -212,7 +242,7 @@ class TaskCommentServiceTest {
         when(commentRepository.findParticipantUserIdsByTaskId(TASK_ID)).thenReturn(Set.of(1L, 2L));
 
         service.createComment(TASK_ID,
-                new CreateTaskCommentRequest("Mention parent author", PARENT_COMMENT_ID, Set.of(2L)), EMAIL);
+                new CreateTaskCommentRequest("Mention parent author", PARENT_COMMENT_ID, Set.of(2L)), ACTOR_ID);
 
         ArgumentCaptor<TaskCommentedEvent> captor = ArgumentCaptor
                 .forClass(TaskCommentedEvent.class);
@@ -225,15 +255,14 @@ class TaskCommentServiceTest {
 
     @Test
     void createReplyToCommentInDifferentTaskIsRejected() {
-        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task()));
-        when(userIdentityPort.findByEmail(EMAIL)).thenReturn(Optional.of(new UserIdentityDto(ACTOR_ID, EMAIL)));
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task()));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
         when(commentRepository.findByIdAndTaskId(PARENT_COMMENT_ID, TASK_ID)).thenReturn(Optional.empty());
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.createComment(TASK_ID,
-                        new CreateTaskCommentRequest("Wrong parent", PARENT_COMMENT_ID, Set.of()), EMAIL));
+                        new CreateTaskCommentRequest("Wrong parent", PARENT_COMMENT_ID, Set.of()), ACTOR_ID));
 
         assertEquals(404, ex.getStatus());
     }
@@ -243,15 +272,14 @@ class TaskCommentServiceTest {
         CommentEntity parent = comment(2L, PARENT_COMMENT_ID, TASK_ID);
         parent.setDeletedAt(Instant.parse("2026-05-13T01:00:00Z"));
 
-        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task()));
-        when(userIdentityPort.findByEmail(EMAIL)).thenReturn(Optional.of(new UserIdentityDto(ACTOR_ID, EMAIL)));
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task()));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
         when(commentRepository.findByIdAndTaskId(PARENT_COMMENT_ID, TASK_ID)).thenReturn(Optional.of(parent));
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.createComment(TASK_ID,
-                        new CreateTaskCommentRequest("Deleted parent", PARENT_COMMENT_ID, Set.of()), EMAIL));
+                        new CreateTaskCommentRequest("Deleted parent", PARENT_COMMENT_ID, Set.of()), ACTOR_ID));
 
         assertEquals(409, ex.getStatus());
     }
@@ -260,9 +288,8 @@ class TaskCommentServiceTest {
     void updateCommentOnlyNotifiesNewMentions() {
         CommentEntity comment = comment(ACTOR_ID);
 
-        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task()));
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task()));
         when(commentRepository.findByIdAndTaskId(COMMENT_ID, TASK_ID)).thenReturn(Optional.of(comment));
-        when(userIdentityPort.findByEmail(EMAIL)).thenReturn(Optional.of(new UserIdentityDto(ACTOR_ID, EMAIL)));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
         when(commentMentionRepository.findByCommentId(COMMENT_ID)).thenReturn(mentions(2L));
@@ -272,7 +299,7 @@ class TaskCommentServiceTest {
         when(userProfilePort.findLiteByIds(anySet())).thenAnswer(invocation -> profiles(invocation.getArgument(0)));
 
         service.updateComment(TASK_ID, COMMENT_ID,
-                new UpdateTaskCommentRequest("Updated", Set.of(2L, 3L)), EMAIL);
+                new UpdateTaskCommentRequest("Updated", Set.of(2L, 3L)), ACTOR_ID);
 
         ArgumentCaptor<TaskCommentedEvent> captor = ArgumentCaptor
                 .forClass(TaskCommentedEvent.class);
@@ -289,15 +316,14 @@ class TaskCommentServiceTest {
         CommentEntity comment = comment(2L);
         comment.setParentCommentId(PARENT_COMMENT_ID);
 
-        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task()));
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task()));
         when(commentRepository.findByIdAndTaskId(COMMENT_ID, TASK_ID)).thenReturn(Optional.of(comment));
-        when(userIdentityPort.findByEmail(EMAIL)).thenReturn(Optional.of(new UserIdentityDto(ACTOR_ID, EMAIL)));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.updateComment(TASK_ID, COMMENT_ID,
-                        new UpdateTaskCommentRequest("Nope", Set.of()), EMAIL));
+                        new UpdateTaskCommentRequest("Nope", Set.of()), ACTOR_ID));
 
         assertEquals(403, ex.getStatus());
     }
@@ -307,9 +333,8 @@ class TaskCommentServiceTest {
         CommentEntity comment = comment(2L);
         comment.setParentCommentId(PARENT_COMMENT_ID);
 
-        when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task()));
+        when(taskRepository.findActiveById(TASK_ID)).thenReturn(Optional.of(task()));
         when(commentRepository.findByIdAndTaskId(COMMENT_ID, TASK_ID)).thenReturn(Optional.of(comment));
-        when(userIdentityPort.findByEmail(EMAIL)).thenReturn(Optional.of(new UserIdentityDto(ACTOR_ID, EMAIL)));
         when(projectMemberRepository.existsByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(true);
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project(ProjectStatus.ACTIVE)));
         when(projectMemberRepository.findByProjectIdAndUserId(PROJECT_ID, ACTOR_ID)).thenReturn(Optional.of(
@@ -322,7 +347,7 @@ class TaskCommentServiceTest {
         when(commentMentionRepository.findByCommentIdIn(anyCollection())).thenReturn(mentions(2L));
         when(userProfilePort.findLiteByIds(anySet())).thenAnswer(invocation -> profiles(invocation.getArgument(0)));
 
-        TaskCommentDto dto = service.deleteComment(TASK_ID, COMMENT_ID, EMAIL);
+        TaskCommentDto dto = service.deleteComment(TASK_ID, COMMENT_ID, ACTOR_ID);
 
         assertTrue(dto.deleted());
         assertNull(dto.content());
@@ -337,7 +362,6 @@ class TaskCommentServiceTest {
         CommentEntity deletedComment = comment(3L, 31L, TASK_ID);
         deletedComment.setDeletedAt(Instant.parse("2026-05-13T02:00:00Z"));
 
-        when(userIdentityPort.findByEmail(EMAIL)).thenReturn(Optional.of(new UserIdentityDto(ACTOR_ID, EMAIL)));
         when(commentRepository.searchAccessibleComments(
                 eq(ACTOR_ID),
                 eq(false),
@@ -361,7 +385,7 @@ class TaskCommentServiceTest {
                 null,
                 null,
                 false,
-                EMAIL,
+                ACTOR_ID,
                 PageRequest.of(0, 20));
 
         assertEquals(2, page.getTotalElements());

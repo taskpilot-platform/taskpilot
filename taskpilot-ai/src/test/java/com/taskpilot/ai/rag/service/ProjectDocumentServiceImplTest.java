@@ -7,6 +7,13 @@ import com.taskpilot.ai.rag.entity.DocumentEntity;
 import com.taskpilot.ai.rag.repository.DocumentChunkRepository;
 import com.taskpilot.ai.rag.repository.DocumentRepository;
 import com.taskpilot.contracts.assignment.port.out.ProjectMemberPort;
+import com.taskpilot.contracts.storage.StorageObjectLocator;
+import com.taskpilot.contracts.storage.StorageProviderKind;
+import com.taskpilot.contracts.storage.StorageTargetDomain;
+import com.taskpilot.contracts.storage.StorageUploadOperationDto;
+import com.taskpilot.contracts.storage.StorageUploadOperationPort;
+import com.taskpilot.contracts.storage.StorageUploadOperationStatus;
+import com.taskpilot.contracts.storage.StorageUploadReservationCommand;
 import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.infrastructure.storage.StorageService;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,6 +29,7 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -43,6 +51,8 @@ class ProjectDocumentServiceImplTest {
     private StorageService storageService;
     @Mock
     private ProjectMemberPort projectMemberPort;
+    @Mock
+    private StorageUploadOperationPort uploadOperationPort;
 
     private ProjectDocumentServiceImpl projectDocumentService;
 
@@ -54,12 +64,14 @@ class ProjectDocumentServiceImplTest {
                 documentIngestionService,
                 projectKnowledgeService,
                 storageService,
-                projectMemberPort
+                projectMemberPort,
+                uploadOperationPort,
+                null
         );
     }
 
     @Test
-    @DisplayName("Verify document upload succeeds for active project member and triggers async ingestion")
+    @DisplayName("Verify document upload succeeds with durable reservation and attach for active project manager")
     void testUploadDocumentSuccess() throws IOException {
         Long projectId = 100L;
         Long userId = 42L;
@@ -69,16 +81,24 @@ class ProjectDocumentServiceImplTest {
                 "application/pdf",
                 "Architecture spec content".getBytes()
         );
+        UUID opId = UUID.randomUUID();
+        String plannedKey = "projects/100/documents/u1-architecture.pdf";
 
         when(projectMemberPort.isProjectMember(projectId, userId)).thenReturn(true);
         when(projectMemberPort.isProjectManager(projectId, userId)).thenReturn(true);
-        when(storageService.uploadFile(eq(file), eq("projects/100/documents"), eq("documents")))
-                .thenReturn("projects/100/documents/arch.pdf");
+        when(projectMemberPort.isProjectArchived(projectId)).thenReturn(false);
+        when(storageService.planObjectKey("projects/100/documents", "architecture.pdf")).thenReturn(plannedKey);
+        when(uploadOperationPort.reserve(any(StorageUploadReservationCommand.class))).thenReturn(
+                new StorageUploadOperationDto(opId, userId, projectId, StorageTargetDomain.RAG_DOCUMENT,
+                        StorageProviderKind.S3, "documents", plannedKey, null,
+                        StorageUploadOperationStatus.RESERVED, null, Instant.now().plusSeconds(600))
+        );
+        when(storageService.uploadFileAtKey(file, "documents", plannedKey)).thenReturn(plannedKey);
 
         DocumentEntity savedEntity = DocumentEntity.builder()
                 .id(1L)
                 .projectId(projectId)
-                .storageKey("https://s3.example.com/projects/100/documents/arch.pdf")
+                .storageKey(plannedKey)
                 .originalFilename("architecture.pdf")
                 .contentType("application/pdf")
                 .fileSize((long) file.getBytes().length)
@@ -97,6 +117,85 @@ class ProjectDocumentServiceImplTest {
         assertThat(response.projectId()).isEqualTo(projectId);
         assertThat(response.originalFilename()).isEqualTo("architecture.pdf");
         assertThat(response.status()).isEqualTo(DocumentStatus.QUEUED);
+        verify(uploadOperationPort).reserve(any());
+        verify(uploadOperationPort).markProviderWritten(opId, plannedKey);
+        verify(uploadOperationPort).markAttachedInCurrentTransaction(opId, 1L);
+    }
+
+    @Test
+    @DisplayName("Verify metadata save failure triggers durable upload compensation for RAG document")
+    void testUploadDocumentMetadataFailureCompensates() throws IOException {
+        Long projectId = 100L;
+        Long userId = 42L;
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "spec.pdf", "application/pdf", "Spec content".getBytes()
+        );
+        UUID opId = UUID.randomUUID();
+        String plannedKey = "projects/100/documents/u2-spec.pdf";
+
+        when(projectMemberPort.isProjectMember(projectId, userId)).thenReturn(true);
+        when(projectMemberPort.isProjectManager(projectId, userId)).thenReturn(true);
+        when(projectMemberPort.isProjectArchived(projectId)).thenReturn(false);
+        when(storageService.planObjectKey("projects/100/documents", "spec.pdf")).thenReturn(plannedKey);
+        when(uploadOperationPort.reserve(any())).thenReturn(
+                new StorageUploadOperationDto(opId, userId, projectId, StorageTargetDomain.RAG_DOCUMENT,
+                        StorageProviderKind.S3, "documents", plannedKey, null,
+                        StorageUploadOperationStatus.RESERVED, null, Instant.now().plusSeconds(600))
+        );
+        when(storageService.uploadFileAtKey(file, "documents", plannedKey)).thenReturn(plannedKey);
+        when(documentRepository.save(any(DocumentEntity.class))).thenThrow(new RuntimeException("DB write failed"));
+
+        assertThatThrownBy(() -> projectDocumentService.uploadDocument(projectId, file, userId))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("DB write failed");
+
+        verify(uploadOperationPort).compensateFailedUpload(
+                eq(opId),
+                argThat(loc -> loc != null && plannedKey.equals(loc.objectKey())),
+                eq("RAG_METADATA_ATTACH_FAILED"),
+                contains("DB write failed")
+        );
+    }
+
+    @Test
+    @DisplayName("Verify archived project rejects RAG upload, delete, and retry")
+    void testArchivedProjectRejectsRagMutations() {
+        Long projectId = 100L;
+        Long userId = 42L;
+        MockMultipartFile file = new MockMultipartFile("file", "spec.pdf", "application/pdf", "Spec".getBytes());
+
+        when(projectMemberPort.isProjectMember(projectId, userId)).thenReturn(true);
+        when(projectMemberPort.isProjectManager(projectId, userId)).thenReturn(true);
+        when(projectMemberPort.isProjectArchived(projectId)).thenReturn(true);
+
+        assertThatThrownBy(() -> projectDocumentService.uploadDocument(projectId, file, userId))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Project is archived");
+        assertThatThrownBy(() -> projectDocumentService.deleteDocument(projectId, 1L, userId))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Project is archived");
+        assertThatThrownBy(() -> projectDocumentService.retryIngestion(projectId, 1L, userId))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Project is archived");
+
+        verifyNoInteractions(storageService);
+        verifyNoInteractions(uploadOperationPort);
+        verifyNoInteractions(documentIngestionService);
+    }
+
+    @Test
+    @DisplayName("Verify listProjectOwnedObjects returns all non-blank RAG document locators")
+    void testListProjectOwnedObjects() {
+        DocumentEntity doc1 = DocumentEntity.builder().id(1L).projectId(100L).storageKey("projects/100/documents/a.pdf").build();
+        DocumentEntity doc2 = DocumentEntity.builder().id(2L).projectId(100L).storageKey("projects/100/documents/b.md").build();
+        when(documentRepository.findByProjectId(100L)).thenReturn(List.of(doc1, doc2));
+
+        List<StorageObjectLocator> locators = projectDocumentService.listProjectOwnedObjects(100L);
+
+        assertThat(locators).containsExactly(
+                StorageObjectLocator.of("documents", "projects/100/documents/a.pdf"),
+                StorageObjectLocator.of("documents", "projects/100/documents/b.md")
+        );
     }
 
     @Test
@@ -267,7 +366,7 @@ class ProjectDocumentServiceImplTest {
     }
 
     @Test
-    @DisplayName("Verify retryIngestion marks document PROCESSING and triggers async ingestion")
+    @DisplayName("Verify retryIngestion marks document QUEUED and resets error state")
     void testRetryIngestionSuccess() {
         Long projectId = 100L;
         Long documentId = 1L;
@@ -321,4 +420,3 @@ class ProjectDocumentServiceImplTest {
         verify(projectKnowledgeService).searchKnowledge(projectId, userId, "query", 5, 0.5);
     }
 }
-

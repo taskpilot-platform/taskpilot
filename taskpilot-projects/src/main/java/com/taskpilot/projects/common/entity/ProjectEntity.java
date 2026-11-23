@@ -2,6 +2,7 @@ package com.taskpilot.projects.common.entity;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.UUID;
 
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
@@ -67,6 +68,41 @@ public class ProjectEntity {
     @Column(name = "end_date")
     private LocalDate endDate;
 
+    @Builder.Default
+    @Column(name = "timezone_id", nullable = false, length = 64)
+    private String timezoneId = "Asia/Ho_Chi_Minh";
+
+    @Builder.Default
+    @Column(name = "timezone_provenance", nullable = false, length = 64)
+    private String timezoneProvenance = "PROJECT_DEFAULT";
+
     @Column(name = "created_at", insertable = false, updatable = false)
     private Instant createdAt;
+
+    @Builder.Default
+    @Column(name = "roster_version", nullable = false)
+    private Long rosterVersion = 0L;
+
+    @Builder.Default
+    @Column(name = "needs_manager_attention", nullable = false)
+    private Boolean needsManagerAttention = Boolean.FALSE;
+
+    @Column(name = "management_attention_reason", length = 64)
+    private String managementAttentionReason;
+
+    @Column(name = "management_attention_since")
+    private Instant managementAttentionSince;
+
+    @Column(name = "management_attention_event_id")
+    private UUID managementAttentionEventId;
+
+    public long effectiveRosterVersion() {
+        return rosterVersion != null ? rosterVersion : 0L;
+    }
+
+    public long bumpRosterVersion() {
+        long next = effectiveRosterVersion() + 1L;
+        this.rosterVersion = next;
+        return next;
+    }
 }

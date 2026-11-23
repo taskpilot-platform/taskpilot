@@ -28,15 +28,24 @@ public class ToolCallingRegistryService {
     private final TaskPilotAiTools taskPilotAiTools;
     private final SmartRoutingService smartRoutingService;
     private final ToolSelectionPolicy toolSelectionPolicy;
+    private final AiToolAccessPolicy accessPolicy;
+    private final AiToolResultCache localCache;
+    private final Map<Long,Instant> warmupTimes = new java.util.LinkedHashMap<>();
 
     @org.springframework.beans.factory.annotation.Autowired
     public ToolCallingRegistryService(
             TaskPilotAiTools taskPilotAiTools,
             SmartRoutingService smartRoutingService,
-            ToolSelectionPolicy toolSelectionPolicy) {
+            ToolSelectionPolicy toolSelectionPolicy, AiToolAccessPolicy accessPolicy, AiToolResultCache localCache) {
         this.taskPilotAiTools = taskPilotAiTools;
         this.smartRoutingService = smartRoutingService;
         this.toolSelectionPolicy = toolSelectionPolicy != null ? toolSelectionPolicy : new ToolSelectionPolicy();
+        this.accessPolicy = accessPolicy;
+        this.localCache = localCache;
+    }
+
+    public ToolCallingRegistryService(TaskPilotAiTools tools, SmartRoutingService routing, ToolSelectionPolicy selection) {
+        this(tools, routing, selection, null, new AiToolResultCache());
     }
 
     public ToolCallingRegistryService(
@@ -88,6 +97,7 @@ public class ToolCallingRegistryService {
         register("queryTasks", Set.of(ToolScope.TASK, ToolScope.PROJECT, ToolScope.ASSIGNMENT), List.of("list task", "danh sach task", "cac cong viec", "cv", "nv", "unassigned", "not assigned", "chua gan", "chua phan cong", "chua duoc phan cong", "trong", "ch"), 60, true);
         register("getSubtasks", Set.of(ToolScope.TASK), List.of("subtask", "task con"), 20, false);
         register("createTask", Set.of(ToolScope.TASK), List.of("create task", "new task", "tao task", "tạo task", "tao cong viec", "tạo công việc", "them task", "them cong viec"), 60, false);
+        register("createSuccessorTask", Set.of(ToolScope.TASK), List.of("successor", "follow up", "follow-up", "bug tiep theo", "task ke tiep"), 35, false);
         register("updateTask", Set.of(ToolScope.TASK), List.of("update task", "cap nhat cong viec", "sua task"), 30, false);
         register("patchTask", Set.of(ToolScope.TASK, ToolScope.ASSIGNMENT), List.of("update task", "cap nhat cong viec", "sua task", "deadline", "due date", "han chot", "hạn chót", "doi han", "đổi hạn", "reassign", "phan cong lai", "phân công lại", "assign", "giao task", "gan cho", "giao cho", "gán task", "phân công"), 65, false);
         register("updateTaskStatus", Set.of(ToolScope.TASK), List.of("status", "trang thai", "hoan thanh", "done", "todo", "chuyen", "chuyen trang thai", "chuyen sang"), 40, false);
@@ -256,7 +266,6 @@ public class ToolCallingRegistryService {
                 .collect(Collectors.toList());
     }
 
-    private final LocalCache localCache = new LocalCache();
 
     private boolean isReadOnlyTool(String toolName) {
         if (toolName == null) return false;
@@ -275,38 +284,9 @@ public class ToolCallingRegistryService {
                 && !lower.contains("add");
     }
 
-    private static class LocalCache {
-        private record CacheKey(Long userId, Long sessionId, String toolName, String arguments) {}
-        private record CacheValue(String val, Instant expiry) {}
-        private final ConcurrentHashMap<CacheKey, CacheValue> map = new ConcurrentHashMap<>();
+    public String execute(ToolExecutionRequest request) { return execute(request, false); }
 
-        public Map<CacheKey, CacheValue> getAllEntries() {
-            return Map.copyOf(map);
-        }
-
-        public void put(Long userId, Long sessionId, String toolName, String arguments, String val, long ttlSeconds) {
-            CacheKey key = new CacheKey(userId, sessionId, toolName, arguments);
-            map.put(key, new CacheValue(val, Instant.now().plusSeconds(ttlSeconds)));
-        }
-
-        public String get(Long userId, Long sessionId, String toolName, String arguments) {
-            CacheKey key = new CacheKey(userId, sessionId, toolName, arguments);
-            CacheValue cv = map.get(key);
-            if (cv == null) return null;
-            if (Instant.now().isAfter(cv.expiry())) {
-                map.remove(key);
-                return null;
-            }
-            return cv.val();
-        }
-
-        public void invalidateSession(Long sessionId) {
-            if (sessionId == null) return;
-            map.keySet().removeIf(key -> sessionId.equals(key.sessionId()));
-        }
-    }
-
-    public String execute(ToolExecutionRequest request) {
+    private String execute(ToolExecutionRequest request, boolean bypassCache) {
         String toolName = request.name();
         if (toolName != null && toolName.contains(":")) {
             String originalName = toolName;
@@ -375,11 +355,16 @@ public class ToolCallingRegistryService {
                 }
             }
 
-            if (isReadOnlyTool(toolName)) {
-                String cached = localCache.get(userId, sessionId, toolName, finalArgs);
-                if (cached != null) {
-                    log.info("[LocalCache] HIT for read tool {} (session={}, user={})", toolName, sessionId, userId);
-                    return cached;
+            AiToolResultCache.Key cacheKey = null;
+            if (accessPolicy != null) {
+                accessPolicy.authorizeSession(userId, sessionId);
+                if (accessPolicy.cacheable(toolName)) {
+                    var parsed = COMPACT_MAPPER.readValue(finalArgs.isBlank() ? "{}" : finalArgs,
+                            new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>() {});
+                    String revision = accessPolicy.fingerprint(toolName, parsed, userId, sessionId, false);
+                    cacheKey = new AiToolResultCache.Key(userId, sessionId, toolName, finalArgs, revision);
+                    String cached = bypassCache ? null : localCache.get(cacheKey);
+                    if (cached != null) return cached;
                 }
             }
 
@@ -395,14 +380,11 @@ public class ToolCallingRegistryService {
             String result = executor.execute(request, null);
             String minimizedResult = minimizeJson(result);
 
-            if (isReadOnlyTool(toolName)) {
-                // Cache read-only tool results for 120 seconds
-                localCache.put(userId, sessionId, toolName, finalArgs, minimizedResult, 120);
-                log.debug("[LocalCache] MISS & CACHED for read tool {}", toolName);
-            } else {
-                // Invalidate cache for session on data-modifying write tools
+            if (cacheKey != null && minimizedResult != null && !minimizedResult.startsWith("ERROR")
+                    && !minimizedResult.startsWith("Tool execution failed")) {
+                localCache.put(cacheKey, minimizedResult);
+            } else if (!isReadOnlyTool(toolName)) {
                 localCache.invalidateSession(sessionId);
-                log.info("[LocalCache] INVALIDATED session cache {} due to write tool {}", sessionId, toolName);
             }
 
             return minimizedResult;
@@ -519,151 +501,43 @@ public class ToolCallingRegistryService {
         }
     }
 
+    public void reserveWarmup(Long userId, Long sessionId) {
+        if (accessPolicy == null) throw new IllegalStateException("Warmup requires current authorization");
+        accessPolicy.authorizeSession(userId, sessionId);
+        synchronized (warmupTimes) {
+            Instant now=Instant.now();
+            warmupTimes.entrySet().removeIf(e -> e.getValue().isBefore(now.minusSeconds(60)));
+            if (warmupTimes.containsKey(userId) || warmupTimes.size() >= 1000)
+                throw new com.taskpilot.infrastructure.exception.BusinessException(429, "Warmup budget exhausted; retry later");
+            warmupTimes.put(userId, now);
+        }
+    }
+
     @org.springframework.scheduling.annotation.Async
     public void warmupCache(Long userId, Long sessionId) {
-        log.info("[Cache Warming] Starting cache warmup for user {} in session {}", userId, sessionId);
-        
-        // 1. Warm up queryProjects to get the user's projects
-        String projectsJson = null;
+        if (accessPolicy == null) return;
+        // Recheck after enqueue: a deleted session/revoked account must never be warmed.
+        accessPolicy.authorizeSession(userId, sessionId);
         try {
             ToolExecutionContext.set(new ToolExecutionContext.Context(userId, sessionId, ""));
-            ToolExecutionRequest req = ToolExecutionRequest.builder()
-                    .name("queryProjects")
-                    .arguments("{}")
-                    .build();
-            projectsJson = this.execute(req);
-        } catch (Exception e) {
-            log.warn("[Cache Warming] Failed to warmup queryProjects: {}", e.getMessage());
-        } finally {
-            ToolExecutionContext.clear();
-        }
-
-        // 2. Pre-warm getMyNotifications
-        try {
-            ToolExecutionContext.set(new ToolExecutionContext.Context(userId, sessionId, ""));
-            ToolExecutionRequest req = ToolExecutionRequest.builder()
-                    .name("getMyNotifications")
-                    .arguments("{}")
-                    .build();
-            this.execute(req);
-        } catch (Exception e) {
-            log.warn("[Cache Warming] Failed to warmup getMyNotifications: {}", e.getMessage());
-        } finally {
-            ToolExecutionContext.clear();
-        }
-
-        // 3. Pre-warm getMySkills
-        try {
-            ToolExecutionContext.set(new ToolExecutionContext.Context(userId, sessionId, ""));
-            ToolExecutionRequest req = ToolExecutionRequest.builder()
-                    .name("getMySkills")
-                    .arguments("{}")
-                    .build();
-            this.execute(req);
-        } catch (Exception e) {
-            log.warn("[Cache Warming] Failed to warmup getMySkills: {}", e.getMessage());
-        } finally {
-            ToolExecutionContext.clear();
-        }
-
-        // 4. Parse projectsJson and pre-warm queryTasks and getSprintsByProject for each project
-        if (projectsJson != null && !projectsJson.isBlank() && !projectsJson.contains("failed")) {
-            try {
-                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-                com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(projectsJson);
-                
-                // Inspect if it is an array or has a list structure
-                com.fasterxml.jackson.databind.JsonNode listNode = root.isArray() ? root : null;
-                if (listNode == null && root.has("data")) {
-                    listNode = root.get("data");
-                }
-                if (listNode == null && root.has("content")) {
-                    listNode = root.get("content");
-                }
-                
-                if (listNode != null && listNode.isArray()) {
-                    for (com.fasterxml.jackson.databind.JsonNode projNode : listNode) {
-                        if (projNode.has("id")) {
-                            long projectId = projNode.get("id").asLong();
-                            
-                            // Warm up queryTasks
-                            try {
-                                ToolExecutionContext.set(new ToolExecutionContext.Context(userId, sessionId, ""));
-                                ToolExecutionRequest req = ToolExecutionRequest.builder()
-                                        .name("queryTasks")
-                                        .arguments("{\"projectId\":" + projectId + "}")
-                                        .build();
-                                this.execute(req);
-                            } catch (Exception ignored) {}
-                            
-                            // Warm up getSprintsByProject
-                            try {
-                                ToolExecutionContext.set(new ToolExecutionContext.Context(userId, sessionId, ""));
-                                ToolExecutionRequest req = ToolExecutionRequest.builder()
-                                        .name("getSprintsByProject")
-                                        .arguments("{\"projectId\":" + projectId + "}")
-                                        .build();
-                                this.execute(req);
-                            } catch (Exception ignored) {}
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                log.warn("[Cache Warming] Failed to parse queryProjects response for nested warmup: {}", e.getMessage());
-            } finally {
-                ToolExecutionContext.clear();
-            }
-        }
-        log.info("[Cache Warming] Cache warmup completed for user {} in session {}", userId, sessionId);
+            execute(ToolExecutionRequest.builder().name("queryProjects").arguments("{}").build());
+        } finally { ToolExecutionContext.clear(); }
     }
 
-    @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
-    public void warmupGlobalCache() {
-        log.info("[Cache Warming] Startup: loading global skills directory into cache...");
-        try {
-            ToolExecutionContext.set(new ToolExecutionContext.Context(-1L, -1L, ""));
-            ToolExecutionRequest req = ToolExecutionRequest.builder()
-                    .name("searchSystemSkills")
-                    .arguments("{\"keyword\":\"\"}")
-                    .build();
-            this.execute(req);
-            log.info("[Cache Warming] Global skills directory pre-cached successfully.");
-        } catch (Exception e) {
-            log.warn("[Cache Warming] Failed to pre-cache global skills: {}", e.getMessage());
-        } finally {
-            ToolExecutionContext.clear();
-        }
-    }
-
-    @org.springframework.scheduling.annotation.Scheduled(fixedRate = 60000)
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelay = 60000)
     public void refreshActiveCache() {
-        log.debug("[Cache Warming] Checking for active cache entries to refresh...");
-        Instant threshold = Instant.now().plusSeconds(25); // Refresh if expiring in 25 seconds
-        
-        for (Map.Entry<LocalCache.CacheKey, LocalCache.CacheValue> entry : localCache.getAllEntries().entrySet()) {
-            LocalCache.CacheKey key = entry.getKey();
-            LocalCache.CacheValue val = entry.getValue();
-            
-            // Do not refresh global dummy caches (-1L)
-            if (key.userId() == -1L || key.sessionId() == -1L) {
-                continue;
-            }
-            
-            if (Instant.now().isBefore(val.expiry()) && val.expiry().isBefore(threshold)) {
-                log.info("[Cache Warming] Proactively refreshing cache key: {} for user {} in session {}", key.toolName(), key.userId(), key.sessionId());
-                try {
-                    ToolExecutionContext.set(new ToolExecutionContext.Context(key.userId(), key.sessionId(), ""));
-                    ToolExecutionRequest req = ToolExecutionRequest.builder()
-                            .name(key.toolName())
-                            .arguments(key.arguments())
-                            .build();
-                    this.execute(req);
-                } catch (Exception e) {
-                    log.warn("[Cache Warming] Failed to refresh cache key {}: {}", key.toolName(), e.getMessage());
-                } finally {
-                    ToolExecutionContext.clear();
-                }
-            }
+        localCache.prune();
+        if (accessPolicy == null) return;
+        for (AiToolResultCache.Key key : localCache.claimRefreshes()) {
+            try {
+                accessPolicy.authorizeSession(key.userId(), key.sessionId());
+                ToolExecutionContext.set(new ToolExecutionContext.Context(key.userId(), key.sessionId(), ""));
+                localCache.remove(key);
+                execute(ToolExecutionRequest.builder().name(key.tool()).arguments(key.arguments()).build(), true);
+            } catch (RuntimeException ex) {
+                localCache.invalidateSession(key.sessionId());
+                log.debug("Cache refresh no longer eligible: {}", ex.getClass().getSimpleName());
+            } finally { ToolExecutionContext.clear(); }
         }
     }
 }

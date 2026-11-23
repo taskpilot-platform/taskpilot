@@ -77,21 +77,34 @@ spring:
 application:
   security:
     jwt:
-      secret-key: ${JWT_SECRET:404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
-      expiration: ${JWT_EXPIRATION:86400000}
+      secret-key: ${JWT_SECRET:}
+      expiration: ${JWT_EXPIRATION:900000}
+      issuer: ${JWT_ISSUER:taskpilot}
+      audience: ${JWT_AUDIENCE:taskpilot-api}
       blocklist:
         provider: ${JWT_BLOCKLIST_PROVIDER:memory}
     password-reset:
       expiration: ${PASSWORD_RESET_EXPIRATION:900000}
       frontend-reset-url: ${PASSWORD_RESET_FRONTEND_URL:http://localhost:5173/reset-password}
+      frontend-verify-url: ${EMAIL_VERIFY_FRONTEND_URL:http://localhost:5173/verify-email}
+      frontend-setup-url: ${PASSWORD_SETUP_FRONTEND_URL:http://localhost:5173/setup-password}
       rate-limit:
         provider: ${PASSWORD_RESET_RATE_LIMIT_PROVIDER:${JWT_BLOCKLIST_PROVIDER:memory}}
         cooldown-seconds: ${PASSWORD_RESET_COOLDOWN_SECONDS:60}
         max-per-email-per-hour: ${PASSWORD_RESET_MAX_PER_EMAIL_PER_HOUR:5}
         max-per-ip-per-hour: ${PASSWORD_RESET_MAX_PER_IP_PER_HOUR:20}
+    trusted-proxy:
+      trust-forwarded-headers: ${TRUST_FORWARDED_HEADERS:false}
+      max-header-length: 1024
+      max-hops: 10
     oauth2:
       success-redirect-uri: ${OAUTH2_SUCCESS_REDIRECT_URI:http://localhost:5173/auth/callback}
+      allowed-redirect-origins: ${OAUTH2_ALLOWED_REDIRECT_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
       code-ttl-seconds: ${OAUTH2_CODE_TTL_SECONDS:60}
+      request-ttl-seconds: ${OAUTH2_REQUEST_TTL_SECONDS:300}
+      max-pending-requests: ${OAUTH2_MAX_PENDING_REQUESTS:10000}
+      max-pending-cookies-per-browser: ${OAUTH2_MAX_PENDING_COOKIES_PER_BROWSER:5}
+      cookie-secure: ${OAUTH2_COOKIE_SECURE:false}
       google:
         client-id: ${GOOGLE_OAUTH_CLIENT_ID:}
         client-secret: ${GOOGLE_OAUTH_CLIENT_SECRET:}
@@ -159,9 +172,8 @@ ai:
   gemini:
     api-key: ${GEMINI_API_KEY:}
     api-keys: ${GEMINI_API_KEYS:}
-    # Quality-first primary. Fallbacks prefer models that currently have text-out quota.
+    # Copilot Gemini fallback order. All verified models in ai.copilot.verified-models are tried in this order.
     model-name: ${AI_GEMINI_MODEL:gemini-3.5-flash}
-    # Queue: primary -> callable text-out fallbacks -> quota-limited fallbacks -> external fallback.
     fallback1-model: ${AI_GEMINI_FALLBACK1_MODEL:gemini-2.5-flash}
     fallback2-model: ${AI_GEMINI_FALLBACK2_MODEL:gemini-3.1-flash-lite}
     fallback3-model: ${AI_GEMINI_FALLBACK3_MODEL:gemini-2.5-flash-lite}
@@ -169,7 +181,9 @@ ai:
     fallback5-model: ${AI_GEMINI_FALLBACK5_MODEL:gemini-3.5-flash-lite}
     fallback6-model: ${AI_GEMINI_FALLBACK6_MODEL:gemini-3.8-flash}
     fallback7-model: ${AI_GEMINI_FALLBACK7_MODEL:gemini-3.1-pro-preview}
+    # Retained for backward compatibility; Copilot candidate chain does not truncate verified Gemini models.
     waterfall-max-attempts: ${AI_GEMINI_WATERFALL_MAX_ATTEMPTS:2}
+    # true: allow verified Gemini models in tool-enabled Copilot chains (does not mean Gemini-first).
     use-for-tools: ${AI_GEMINI_USE_FOR_TOOLS:true}
     timeout-seconds: ${AI_GEMINI_TIMEOUT_SECONDS:180}
     embedding-model: ${AI_GEMINI_EMBEDDING_MODEL:gemini-embedding-2}
@@ -177,6 +191,10 @@ ai:
 
   assignment:
     explanation-timeout-ms: ${AI_ASSIGNMENT_EXPLANATION_TIMEOUT_MS:5000}
+
+  adaptive:
+    telemetry-enabled: ${AI_ADAPTIVE_TELEMETRY_ENABLED:true}
+    minimum-samples: ${AI_ADAPTIVE_MINIMUM_SAMPLES:20}
 
   groq:
     enabled: ${AI_GROQ_ENABLED:true}
@@ -188,21 +206,48 @@ ai:
     gatekeeper-model: ${AI_GROQ_GATEKEEPER_MODEL:openai/gpt-oss-20b}
 
   openrouter:
+    # Enabled because nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free passed both tool-call and tool-output probe.
     enabled: ${AI_OPENROUTER_ENABLED:true}
+    allow-paid-models: ${AI_OPENROUTER_ALLOW_PAID_MODELS:false}
     api-key: ${OPENROUTER_API_KEY:}
     api-keys: ${OPENROUTER_API_KEYS:}
     base-url: ${AI_OPENROUTER_BASE_URL:https://openrouter.ai/api/v1}
-    reasoning-model: ${AI_OPENROUTER_REASONING_MODEL:nvidia/nemotron-3-super-120b-a12b:free}
-    reasoning-fallback1-model: ${AI_OPENROUTER_REASONING_FALLBACK1_MODEL:nex-agi/nex-n2-pro:free}
-    reasoning-fallback2-model: ${AI_OPENROUTER_REASONING_FALLBACK2_MODEL:openai/gpt-oss-120b:free}
-    reasoning-fallback3-model: ${AI_OPENROUTER_REASONING_FALLBACK3_MODEL:z-ai/glm-4.5-air:free}
-    reasoning-fallback4-model: ${AI_OPENROUTER_REASONING_FALLBACK4_MODEL:poolside/laguna-m.1:free}
-    reasoning-fallback5-model: ${AI_OPENROUTER_REASONING_FALLBACK5_MODEL:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free}
-    reasoning-fallback6-model: ${AI_OPENROUTER_REASONING_FALLBACK6_MODEL:google/gemma-4-26b-a4b-it:free}
-    reasoning-fallback7-model: ${AI_OPENROUTER_REASONING_FALLBACK7_MODEL:openai/gpt-oss-20b:free}
-    reasoning-fallback8-model: ${AI_OPENROUTER_REASONING_FALLBACK8_MODEL:poolside/laguna-xs.2:free}
+    reasoning-model: ${AI_OPENROUTER_REASONING_MODEL:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free}
+    reasoning-fallback1-model: ${AI_OPENROUTER_REASONING_FALLBACK1_MODEL:}
+    reasoning-fallback2-model: ${AI_OPENROUTER_REASONING_FALLBACK2_MODEL:}
+    reasoning-fallback3-model: ${AI_OPENROUTER_REASONING_FALLBACK3_MODEL:}
+    reasoning-fallback4-model: ${AI_OPENROUTER_REASONING_FALLBACK4_MODEL:}
+    reasoning-fallback5-model: ${AI_OPENROUTER_REASONING_FALLBACK5_MODEL:}
+    reasoning-fallback6-model: ${AI_OPENROUTER_REASONING_FALLBACK6_MODEL:}
+    reasoning-fallback7-model: ${AI_OPENROUTER_REASONING_FALLBACK7_MODEL:}
+    reasoning-fallback8-model: ${AI_OPENROUTER_REASONING_FALLBACK8_MODEL:}
     reasoning-fallback9-model: ${AI_OPENROUTER_REASONING_FALLBACK9_MODEL:}
     reasoning-fallback10-model: ${AI_OPENROUTER_REASONING_FALLBACK10_MODEL:}
+
+  copilot:
+    turn:
+      # Shared turn deadline in seconds across all tool rounds and model failovers.
+      deadline-seconds: ${AI_COPILOT_TURN_DEADLINE_SECONDS:60}
+      # 0 = uncapped (equals eligible chain length).
+      max-model-attempts-cap: ${AI_COPILOT_TURN_MAX_MODEL_ATTEMPTS_CAP:0}
+    verified-models:
+      # Verified via CopilotModelProbeTest against TaskPilot's OpenAI-compatible adapter (step1 tool call + step2 flattened tool output).
+      - { provider: GROQ,       model: openai/gpt-oss-120b,                                  tools: true, verified-by: copilot-model-probe }
+      - { provider: GEMINI,     model: gemini-3.5-flash,                                     tools: true, verified-by: copilot-model-probe }
+      - { provider: GEMINI,     model: gemini-2.5-flash,                                     tools: true, verified-by: copilot-model-probe }
+      - { provider: GEMINI,     model: gemini-3.1-flash-lite,                                tools: true, verified-by: copilot-model-probe }
+      - { provider: GEMINI,     model: gemini-3.5-flash-lite,                                tools: true, verified-by: copilot-model-probe }
+      - { provider: OPENROUTER, model: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free,   tools: true, verified-by: copilot-model-probe }
+    blocked-models:
+      # OpenRouter slugs confirmed 404 in UAT / absent from public catalog.
+      - { provider: OPENROUTER, model: nvidia/nemotron-3-super-120b-a12b:free, reason: uat-404-not-in-catalog }
+      - { provider: OPENROUTER, model: nex-agi/nex-n2-pro:free,                reason: uat-404-not-in-catalog }
+      - { provider: OPENROUTER, model: openai/gpt-oss-120b:free,               reason: uat-404-not-in-catalog }
+      - { provider: OPENROUTER, model: z-ai/glm-4.5-air:free,                  reason: uat-404-not-in-catalog }
+      - { provider: OPENROUTER, model: poolside/laguna-m.1:free,               reason: uat-404-not-in-catalog }
+      - { provider: OPENROUTER, model: openai/gpt-oss-20b:free,                reason: uat-404-not-in-catalog }
+      - { provider: OPENROUTER, model: poolside/laguna-xs.2:free,              reason: uat-404-not-in-catalog }
+      - { provider: OPENROUTER, model: moonshotai/kimi-k2.6:free,              reason: not-in-catalog }
 
   model:
     timeout-seconds: ${AI_MODEL_TIMEOUT:60}
@@ -309,8 +354,8 @@ egress:
 decorator:
   datasource:
     p6spy:
-      enable-logging: ${P6SPY_LOGGING_ENABLED:true}
-      multiline: true
+      enable-logging: ${P6SPY_LOGGING_ENABLED:false}
+      multiline: false
       logging: slf4j
-      custom-format: vn.elca.training.util.P6SpySqlFormatter
+      custom-format: com.taskpilot.infrastructure.util.P6SpySqlFormatter
 

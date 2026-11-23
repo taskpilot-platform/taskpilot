@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
 import com.taskpilot.infrastructure.dto.ApiResponse;
 import com.taskpilot.projects.timeline.dto.TimelineResponse;
 import com.taskpilot.projects.timeline.service.TimelineService;
@@ -24,6 +25,6 @@ public class TimelineController {
             @PathVariable Long projectId,
             Authentication authentication) {
         return ApiResponse.ok("Timeline retrieved successfully",
-                timelineService.getTimeline(projectId, authentication.getName()));
+                timelineService.getTimeline(projectId, CurrentActorResolver.userId(authentication)));
     }
 }

@@ -1,19 +1,27 @@
 package com.taskpilot.projects.projects.controller;
 
 import com.taskpilot.infrastructure.dto.ApiResponse;
+import com.taskpilot.infrastructure.config.security.CurrentActorResolver;
+import com.taskpilot.infrastructure.exception.BusinessException;
 import com.taskpilot.projects.projects.dto.CreateProjectRequest;
+import com.taskpilot.projects.projects.dto.DeleteProjectRequest;
 import com.taskpilot.projects.projects.dto.JoinProjectRequest;
 import com.taskpilot.projects.projects.dto.MyProjectResponse;
+import com.taskpilot.projects.projects.dto.ProjectDeletionAuditDto;
 import com.taskpilot.projects.projects.dto.ProjectMemberResponse;
 import com.taskpilot.projects.projects.dto.ProjectResponse;
 import com.taskpilot.projects.projects.dto.ProjectSummaryResponse;
 import com.taskpilot.projects.projects.dto.UpdateMemberRoleRequest;
 import com.taskpilot.projects.projects.dto.UpdateProjectRequest;
 import com.taskpilot.projects.projects.service.ProjectServiceImpl;
+import com.taskpilot.projects.tasks.dto.TaskWorkflowHistoryDto;
+import com.taskpilot.projects.tasks.dto.TombstonedTaskAuditDto;
+import com.taskpilot.projects.tasks.service.TaskService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
@@ -22,6 +30,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.UUID;
 
 @Tag(name = "07. Projects", description = "APIs for managing projects")
 @RestController
@@ -30,6 +39,16 @@ import java.util.List;
 public class ProjectController {
 
         private final ProjectServiceImpl projectService;
+        private com.taskpilot.projects.tasks.service.TaskService taskService;
+        private com.taskpilot.projects.tasks.service.TaskWorkflowService taskWorkflowService;
+
+        @Autowired(required = false)
+        void setAuditServices(
+                        TaskService taskService,
+                        com.taskpilot.projects.tasks.service.TaskWorkflowService taskWorkflowService) {
+                this.taskService = taskService;
+                this.taskWorkflowService = taskWorkflowService;
+        }
 
         @Operation(summary = "Get my projects", description = "Get list of projects the current user has joined")
         @GetMapping("/my")
@@ -38,7 +57,7 @@ public class ProjectController {
                         @RequestParam(required = false) String keyword,
                         @PageableDefault(size = 10) Pageable pageable) {
                 return ApiResponse.ok("Projects retrieved successfully",
-                                projectService.getMyProjects(authentication.getName(), keyword, pageable));
+                                projectService.getMyProjects(CurrentActorResolver.userId(authentication), keyword, pageable));
         }
 
         @Operation(summary = "Get project detail", description = "Get detailed information of a specific project")
@@ -47,7 +66,7 @@ public class ProjectController {
                         @PathVariable Long projectId,
                         Authentication authentication) {
                 return ApiResponse.ok("Project retrieved successfully",
-                                projectService.getProjectDetail(projectId, authentication.getName()));
+                                projectService.getProjectDetail(projectId, CurrentActorResolver.userId(authentication)));
         }
 
         @Operation(summary = "Create project", description = "Create a new project. Creator becomes Project Manager.")
@@ -57,7 +76,7 @@ public class ProjectController {
                         @Valid @RequestBody CreateProjectRequest request,
                         Authentication authentication) {
                 return ApiResponse.created("Project created successfully",
-                                projectService.createProject(request, authentication.getName()));
+                                projectService.createProject(request, CurrentActorResolver.userId(authentication)));
         }
 
         @Operation(summary = "Update project", description = "Update project information. Only Project Manager can update.")
@@ -67,7 +86,7 @@ public class ProjectController {
                         @Valid @RequestBody UpdateProjectRequest request,
                         Authentication authentication) {
                 return ApiResponse.ok("Project updated successfully",
-                                projectService.updateProject(projectId, request, authentication.getName()));
+                                projectService.updateProject(projectId, request, CurrentActorResolver.userId(authentication)));
         }
 
         @Operation(summary = "Join project", description = "Join a project using invitation code")
@@ -76,7 +95,7 @@ public class ProjectController {
                         @Valid @RequestBody JoinProjectRequest request,
                         Authentication authentication) {
                 return ApiResponse.ok("Joined project successfully",
-                                projectService.joinProject(request, authentication.getName()));
+                                projectService.joinProject(request, CurrentActorResolver.userId(authentication)));
         }
 
         @Operation(summary = "Leave project", description = "Leave a project (remove membership)")
@@ -84,7 +103,7 @@ public class ProjectController {
         public ApiResponse<Void> leaveProject(
                         @PathVariable Long projectId,
                         Authentication authentication) {
-                projectService.leaveProject(projectId, authentication.getName());
+                projectService.leaveProject(projectId, CurrentActorResolver.userId(authentication));
                 return ApiResponse.ok("Left project successfully", null);
         }
 
@@ -94,7 +113,7 @@ public class ProjectController {
                         @PathVariable Long projectId,
                         Authentication authentication) {
                 return ApiResponse.ok("Project summary retrieved successfully",
-                                projectService.getProjectSummary(projectId, authentication.getName()));
+                                projectService.getProjectSummary(projectId, CurrentActorResolver.userId(authentication)));
         }
 
         @Operation(summary = "Get project members", description = "Get all active members of a project")
@@ -103,7 +122,7 @@ public class ProjectController {
                         @PathVariable Long projectId,
                         Authentication authentication) {
                 return ApiResponse.ok("Project members retrieved successfully",
-                                projectService.getProjectMembers(projectId, authentication.getName()));
+                                projectService.getProjectMembers(projectId, CurrentActorResolver.userId(authentication)));
         }
 
         @Operation(summary = "Update member role", description = "Update the role of a project member (Manager only)")
@@ -113,7 +132,7 @@ public class ProjectController {
                         @PathVariable Long userId,
                         @Valid @RequestBody UpdateMemberRoleRequest request,
                         Authentication authentication) {
-                projectService.updateMemberRole(projectId, userId, request.role(), authentication.getName());
+                projectService.updateMemberRole(projectId, userId, request.role(), CurrentActorResolver.userId(authentication));
                 return ApiResponse.ok("Member role updated successfully", null);
         }
 
@@ -123,7 +142,7 @@ public class ProjectController {
                         @PathVariable Long projectId,
                         @PathVariable Long userId,
                         Authentication authentication) {
-                projectService.removeMember(projectId, userId, authentication.getName());
+                projectService.removeMember(projectId, userId, CurrentActorResolver.userId(authentication));
                 return ApiResponse.ok("Member removed successfully", null);
         }
 
@@ -132,7 +151,7 @@ public class ProjectController {
         public ApiResponse<Void> archiveProject(
                         @PathVariable Long projectId,
                         Authentication authentication) {
-                projectService.archiveProject(projectId, authentication.getName());
+                projectService.archiveProject(projectId, CurrentActorResolver.userId(authentication));
                 return ApiResponse.ok("Project archived successfully", null);
         }
 
@@ -141,16 +160,62 @@ public class ProjectController {
         public ApiResponse<Void> restoreProject(
                         @PathVariable Long projectId,
                         Authentication authentication) {
-                projectService.restoreProject(projectId, authentication.getName());
+                projectService.restoreProject(projectId, CurrentActorResolver.userId(authentication));
                 return ApiResponse.ok("Project restored successfully", null);
         }
 
-        @Operation(summary = "Delete project", description = "Permanently delete a project and all its data (Manager only)")
+        @Operation(summary = "Delete project", description = "Permanently delete a project and all its data with explicit confirmation and idempotency (Manager only)")
         @DeleteMapping("/{projectId}")
-        public ApiResponse<Void> deleteProject(
+        public ApiResponse<ProjectDeletionAuditDto> deleteProject(
+                        @PathVariable Long projectId,
+                        @RequestBody(required = false) DeleteProjectRequest request,
+                        @RequestParam(required = false) String confirmationText,
+                        @RequestParam(required = false) UUID requestId,
+                        @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+                        Authentication authentication) {
+                String resolvedConfirmation = request != null && request.confirmationText() != null
+                                ? request.confirmationText()
+                                : confirmationText;
+                UUID resolvedRequestId = request != null && request.requestId() != null
+                                ? request.requestId()
+                                : (requestId != null ? requestId : parseOptionalUuid(idempotencyKey));
+                ProjectDeletionAuditDto audit = projectService.deleteProject(
+                                projectId,
+                                CurrentActorResolver.userId(authentication),
+                                resolvedConfirmation,
+                                resolvedRequestId);
+                return ApiResponse.ok("Project deleted successfully", audit);
+        }
+
+        @Operation(summary = "List tombstoned tasks audit", description = "Restricted manager audit list of tombstoned tasks with preserved history")
+        @GetMapping("/{projectId}/audit/deleted-tasks")
+        public ApiResponse<List<TombstonedTaskAuditDto>> getDeletedTasksAudit(
                         @PathVariable Long projectId,
                         Authentication authentication) {
-                projectService.deleteProject(projectId, authentication.getName());
-                return ApiResponse.ok("Project deleted successfully", null);
+                return ApiResponse.ok("Deleted tasks audit retrieved",
+                                taskService.getTombstonedTasksAudit(projectId, CurrentActorResolver.userId(authentication)));
+        }
+
+        @Operation(summary = "Inspect tombstoned task workflow audit", description = "Restricted manager audit detail of preserved workflow history for a tombstoned task")
+        @GetMapping("/{projectId}/audit/deleted-tasks/{taskId}/workflow")
+        public ApiResponse<TaskWorkflowHistoryDto> getDeletedTaskWorkflowAudit(
+                        @PathVariable Long projectId,
+                        @PathVariable Long taskId,
+                        Authentication authentication) {
+                return ApiResponse.ok("Deleted task workflow audit retrieved",
+                                taskWorkflowService.getDeletedTaskWorkflowAudit(
+                                                projectId, taskId, CurrentActorResolver.userId(authentication)));
+        }
+
+        private UUID parseOptionalUuid(String raw) {
+                if (raw == null || raw.isBlank()) {
+                        return null;
+                }
+                try {
+                        return UUID.fromString(raw.trim());
+                } catch (IllegalArgumentException ex) {
+                        throw new BusinessException(HttpStatus.BAD_REQUEST.value(),
+                                        "Idempotency-Key must be a valid UUID");
+                }
         }
 }

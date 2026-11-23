@@ -33,29 +33,12 @@ public class SystemAiTools {
 
     @Tool("Confirm and execute a pending write action by its unique action ID.")
     public Object confirmPendingAction(@P("Pending action ID returned by a confirmationRequired tool result") String actionId) {
-        Long userId = ToolExecutionContext.requireUserId();
-        Long sessionId = ToolExecutionContext.requireSessionId();
-        if (!hasText(actionId) && isCurrentUserConfirming()) {
-            return pendingAiActionService.confirmLatest(userId, sessionId);
-        }
-        if (!isCurrentUserConfirming(actionId) && !isCurrentUserConfirming()) {
-            return "Confirmation not accepted. Ask the user to confirm this exact action ID before executing: "
-                    + actionId;
-        }
-        return pendingAiActionService.confirm(actionId, userId, sessionId);
+        return "Confirmation requires the application's explicit action button; chat text cannot execute writes.";
     }
 
-
-    @Tool("Confirm and execute the most recent pending write action in this session.")
     public Object confirmLatestPendingAction() {
-        Long userId = ToolExecutionContext.requireUserId();
-        Long sessionId = ToolExecutionContext.requireSessionId();
-        if (!isCurrentUserConfirming()) {
-            return "Confirmation not accepted. Ask the user to clearly confirm before executing.";
-        }
-        return pendingAiActionService.confirmLatest(userId, sessionId);
+        return "Confirm one explicit action through the application.";
     }
-
 
     @Tool("Cancel a pending write action by its unique action ID.")
     public Object cancelPendingAction(@P("Pending action ID to cancel") String actionId) {

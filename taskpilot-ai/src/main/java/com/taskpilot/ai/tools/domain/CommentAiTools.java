@@ -95,15 +95,16 @@ public class CommentAiTools {
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
         Long resolvedParentCommentId = (parentCommentId != null && parentCommentId > 0) ? parentCommentId : null;
+        final List<Long> mentionedUserIdsAtPreview0 = mentionedUserIds == null ? null : List.copyOf(mentionedUserIds);
         return pendingAiActionService.create(
                 userId,
                 sessionId,
                 "createTaskComment",
                 "Create comment on task " + taskId,
                 args("taskId", taskId, "content", content, "parentCommentId", resolvedParentCommentId,
-                        "mentionedUserIds", mentionedUserIds),
+                        "mentionedUserIds", mentionedUserIdsAtPreview0),
                 null,
-                () -> taskCommentQueryPort.createTaskComment(taskId, content, resolvedParentCommentId, mentionedUserIds,
+                () -> taskCommentQueryPort.createTaskComment(taskId, content, resolvedParentCommentId, mentionedUserIdsAtPreview0,
                         userId));
     }
 
@@ -117,15 +118,16 @@ public class CommentAiTools {
         log.info("[AiTool] updateTaskComment called for task {} comment {}", taskId, commentId);
         Long userId = ToolExecutionContext.requireUserId();
         Long sessionId = ToolExecutionContext.requireSessionId();
+        final List<Long> mentionedUserIdsAtPreview1 = mentionedUserIds == null ? null : List.copyOf(mentionedUserIds);
         return pendingAiActionService.create(
                 userId,
                 sessionId,
                 "updateTaskComment",
                 "Update comment " + commentId + " on task " + taskId,
                 args("taskId", taskId, "commentId", commentId, "content", content,
-                        "mentionedUserIds", mentionedUserIds),
+                        "mentionedUserIds", mentionedUserIdsAtPreview1),
                 null,
-                () -> taskCommentQueryPort.updateTaskComment(taskId, commentId, content, mentionedUserIds,
+                () -> taskCommentQueryPort.updateTaskComment(taskId, commentId, content, mentionedUserIdsAtPreview1,
                         userId));
     }
 
@@ -174,6 +176,7 @@ public class CommentAiTools {
             throw new IllegalArgumentException("patchTaskComment requires content, or the existing comment must be readable.");
         }
 
+        final List<Long> mentionedUserIdsAtPreview2 = mentionedUserIds == null ? null : List.copyOf(mentionedUserIds);
         return pendingAiActionService.create(
                 userId,
                 sessionId,
@@ -181,7 +184,7 @@ public class CommentAiTools {
                 "Patch comment " + commentId + " on task " + resolvedTaskId,
                 args("taskId", resolvedTaskId, "commentId", commentId, "patch", patch, "reason", reason),
                 args("taskId", resolvedTaskId, "commentId", commentId, "patch", patch, "reason", reason),
-                () -> taskCommentQueryPort.updateTaskComment(resolvedTaskId, commentId, content, mentionedUserIds,
+                () -> taskCommentQueryPort.updateTaskComment(resolvedTaskId, commentId, content, mentionedUserIdsAtPreview2,
                         userId));
     }
 
