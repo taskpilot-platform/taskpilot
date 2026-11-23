@@ -11,6 +11,8 @@ public record PresignRecordingUploadResponse(
         String contentType,
         String fileName,
         long maxFileSizeBytes,
-        Instant expiresAt
+        Instant expiresAt,
+        boolean alreadyCompleted,
+        Long existingFileId
 ) {
 }

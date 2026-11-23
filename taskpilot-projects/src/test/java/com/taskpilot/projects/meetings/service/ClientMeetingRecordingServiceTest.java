@@ -121,6 +121,15 @@ class ClientMeetingRecordingServiceTest {
         assertEquals(List.of(ready), service.list(2L, 4L, 8L));
     }
 
+    @Test
+    void clientBeginRejectsCloudEgressOriginOrCloudCompositeCoverage() {
+        assertEquals(400, assertThrows(BusinessException.class,
+                () -> service.begin(2L, 4L, 7L, id, Origin.CLOUD_EGRESS, Coverage.CLOUD_COMPOSITE)).getStatus());
+        assertEquals(400, assertThrows(BusinessException.class,
+                () -> service.begin(2L, 4L, 7L, id, Origin.BROWSER, Coverage.CLOUD_COMPOSITE)).getStatus());
+        verify(recordings, never()).saveAndFlush(any());
+    }
+
     private MeetingRecordingEntity recording(State state) {
         return MeetingRecordingEntity.builder().id(id).projectId(2L).meetingId(4L).recorderId(7L)
                 .state(state).version(4L).origin(Origin.BROWSER).coverage(Coverage.SCREEN_ONLY).createdAt(Instant.now()).build();

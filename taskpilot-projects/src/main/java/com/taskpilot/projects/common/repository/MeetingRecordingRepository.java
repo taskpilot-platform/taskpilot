@@ -8,10 +8,13 @@ import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface MeetingRecordingRepository extends JpaRepository<MeetingRecordingEntity, UUID> {
     List<MeetingRecordingEntity> findByMeetingIdAndProjectIdOrderByCreatedAtDesc(Long meetingId, Long projectId);
+
+    Optional<MeetingRecordingEntity> findByProjectFileId(Long projectFileId);
 
     @Modifying
     @Query("""

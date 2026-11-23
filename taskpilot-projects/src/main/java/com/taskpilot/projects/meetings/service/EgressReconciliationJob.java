@@ -2,6 +2,7 @@ package com.taskpilot.projects.meetings.service;
 
 import com.taskpilot.projects.common.entity.ProjectMeetingEntity;
 import com.taskpilot.projects.common.enums.MeetingRecordingStatus;
+import com.taskpilot.projects.common.enums.ProjectMeetingStatus;
 import com.taskpilot.projects.common.repository.ProjectMeetingRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -116,7 +117,13 @@ public class EgressReconciliationJob {
                     }
                     continue;
                 }
-                meetingRecordingService.applyEgressSnapshot(snapshots.get(0));
+                EgressSnapshot latest = snapshots.get(0);
+                meetingRecordingService.applyEgressSnapshot(latest);
+                if (!latest.isTerminal()
+                        && (meeting.getStatus() == ProjectMeetingStatus.ENDING
+                            || meeting.getStatus() == ProjectMeetingStatus.ENDED)) {
+                    meetingRecordingService.stopRecordingIfActive(meeting);
+                }
                 reconciled++;
             } catch (Exception e) {
                 log.warn("Failed to reconcile Egress {} for meeting {}: {}",

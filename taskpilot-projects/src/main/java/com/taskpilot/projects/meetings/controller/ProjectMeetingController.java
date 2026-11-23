@@ -167,9 +167,10 @@ public class ProjectMeetingController {
     public ApiResponse<MeetingRecordingPlaybackResponse> getRecordingPlaybackUrl(
             @PathVariable Long projectId,
             @PathVariable Long meetingId,
+            @RequestParam(value = "fileId", required = false) Long fileId,
             Authentication authentication) {
         return ApiResponse.ok("Recording playback URL retrieved successfully",
-                meetingRecordingService.getPlaybackUrl(projectId, meetingId, CurrentActorResolver.userId(authentication)));
+                meetingRecordingService.getPlaybackUrl(projectId, meetingId, CurrentActorResolver.userId(authentication), fileId));
     }
 
     @Operation(summary = "Request presigned B2 PUT URL for fallback browser recording",

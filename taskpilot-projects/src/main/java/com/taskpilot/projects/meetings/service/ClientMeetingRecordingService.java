@@ -79,6 +79,9 @@ public class ClientMeetingRecordingService {
             }
             return view(recording);
         }
+        if (origin == Origin.CLOUD_EGRESS || coverage == Coverage.CLOUD_COMPOSITE) {
+            throw new BusinessException(400, "Cloud recordings cannot be created through client recording endpoints");
+        }
         if ((origin == Origin.IMPORT) != (coverage == Coverage.IMPORTED_FILE)) {
             throw new BusinessException(400, "Recording source does not match the capture method");
         }
