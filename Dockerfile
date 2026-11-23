@@ -1,3 +1,6 @@
+# Stage 0: Prometheus agent binary
+FROM prom/prometheus:v3.5.0 AS prometheus
+
 # Stage 1: Build stage
 FROM eclipse-temurin:25-jdk-alpine AS build
 WORKDIR /app
@@ -25,17 +28,13 @@ RUN addgroup -g 1000 user && \
 
 WORKDIR /home/user/app
 
+COPY --from=prometheus /bin/prometheus /usr/local/bin/prometheus
+COPY --chown=user:user --chmod=755 deploy/observability/entrypoint.sh /home/user/app/observability/entrypoint.sh
+COPY --chown=user:user --chmod=644 deploy/observability/prometheus-agent.yml.tmpl /home/user/app/observability/prometheus-agent.yml.tmpl
 COPY --chown=user:user --from=build /app/taskpilot-app/target/*-SNAPSHOT.jar app.jar
 
 USER user
 
 EXPOSE 7860
 
-ENTRYPOINT ["java", \
-    "--enable-preview", \
-    "-XX:MaxRAMPercentage=75.0", \
-    "-XX:InitialRAMPercentage=50.0", \
-    "-XX:+ExitOnOutOfMemoryError", \
-    "-Djava.net.preferIPv4Stack=true", \
-    "-Djava.security.egd=file:/dev/./urandom", \
-    "-jar", "app.jar"]
+ENTRYPOINT ["/home/user/app/observability/entrypoint.sh"]

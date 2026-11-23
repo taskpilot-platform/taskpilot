@@ -116,6 +116,17 @@ management:
       enabled: false
     redis:
       enabled: false
+  metrics:
+    tags:
+      application: taskpilot
+    distribution:
+      slo:
+        "[http.server.requests]": 50ms,100ms,250ms,500ms,1s,2s,5s
+
+taskpilot:
+  monitoring:
+    scrape-username: ${PROMETHEUS_SCRAPE_USERNAME:prometheus}
+    scrape-password: ${PROMETHEUS_SCRAPE_PASSWORD:}
 
 ai:
   gemini:
